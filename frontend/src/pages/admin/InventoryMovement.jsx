@@ -40,6 +40,11 @@ const importSelectClass = `${importFieldClass} pr-8`;
 const importFieldLabelClass = 'mb-1 text-[12px] font-black uppercase tracking-[0.1em] text-primary/50';
 const inventorySearchCache = new Map();
 const COPY_FEEDBACK_RESET_MS = 1800;
+const isCanceledRequest = (error) => (
+    error?.name === 'CanceledError'
+    || error?.code === 'ERR_CANCELED'
+    || error?.message === 'canceled'
+);
 
 const copyTextToClipboard = async (value) => {
     const text = String(value ?? '').trim();
@@ -77,6 +82,8 @@ const IMPORT_PRINT_SETTINGS_KEY = 'inventory_import_print_templates';
 const IMPORT_PRINT_DEFAULT_TEMPLATE_ID = 'inventory_import_default_template';
 const IMPORT_PRINT_DEFAULT_TEMPLATE_NAME = 'Bản chính';
 const IMPORT_MODAL_DRAFT_STORAGE_KEY = 'inventory_import_modal_draft_v1';
+const IMPORT_PRINT_MODE_PUTAWAY = 'putaway';
+const IMPORT_PRINT_MODE_STANDARD = 'standard';
 
 const documentTabs = [
     ['imports', 'Phiếu nhập'],
@@ -100,6 +107,7 @@ const trashSlipTypeLabels = {
 
 const INVENTORY_TRACKING_WINDOW_DAYS = 15;
 const PRODUCT_FILTER_PRESETS_STORAGE_KEY = 'inventory_product_filter_presets_v1';
+const PRODUCT_SEARCH_HISTORY_STORAGE_KEY = 'inventory_product_search_history_v1';
 const productMultiFilterKeys = ['status', 'cost_source', 'stock_alert', 'type', 'category_id', 'variant_scope'];
 const normalizeStringFilterList = (value) => {
     const rawValues = Array.isArray(value)
@@ -119,6 +127,7 @@ const createDefaultProductFilters = () => ({
     type: [],
     category_id: [],
     variant_scope: [],
+    import_starred: '',
     tracking_mode: '',
     tracking_daily_min: '1',
     date_from: '',
@@ -154,6 +163,7 @@ const normalizeProductFilters = (filters = {}) => {
         ...defaults,
         ...filters,
         search: String(filters?.search ?? '').trimStart(),
+        import_starred: ['1', 'true', 'yes', 'on'].includes(String(filters?.import_starred ?? filters?.inventory_import_starred ?? '').trim().toLowerCase()) ? '1' : '',
         tracking_mode: String(filters?.tracking_mode ?? '').trim(),
         tracking_daily_min: String(filters?.tracking_daily_min ?? defaults.tracking_daily_min).trim() || defaults.tracking_daily_min,
         date_from: String(filters?.date_from ?? '').trim(),
@@ -204,6 +214,41 @@ const readProductFilterPresets = () => {
 const writeProductFilterPresets = (presets) => {
     if (typeof window === 'undefined') return;
     window.localStorage.setItem(getProductFilterPresetStorageKey(), JSON.stringify(presets));
+};
+const getProductSearchHistoryStorageKey = () => {
+    if (typeof window === 'undefined') return PRODUCT_SEARCH_HISTORY_STORAGE_KEY;
+    const accountId = Number(window.localStorage.getItem('activeAccountId') || 0);
+    return accountId > 0
+        ? `${PRODUCT_SEARCH_HISTORY_STORAGE_KEY}_account_${accountId}`
+        : PRODUCT_SEARCH_HISTORY_STORAGE_KEY;
+};
+const normalizeProductSearchHistoryItem = (value) => String(value ?? '').trim();
+const normalizeProductSearchHistoryItems = (items = []) => {
+    const seen = new Set();
+    return (Array.isArray(items) ? items : [])
+        .map(normalizeProductSearchHistoryItem)
+        .filter((item) => {
+            const key = normalizeSearchText(item);
+            if (!key || seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        })
+        .slice(0, 12);
+};
+const readProductSearchHistory = () => {
+    if (typeof window === 'undefined') return [];
+
+    try {
+        const parsed = JSON.parse(window.localStorage.getItem(getProductSearchHistoryStorageKey()) || '[]');
+        return normalizeProductSearchHistoryItems(parsed);
+    } catch (error) {
+        window.localStorage.removeItem(getProductSearchHistoryStorageKey());
+        return [];
+    }
+};
+const writeProductSearchHistory = (items) => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(getProductSearchHistoryStorageKey(), JSON.stringify(normalizeProductSearchHistoryItems(items)));
 };
 const IMPORT_QUICK_FILTER_PRESETS_STORAGE_KEY = 'inventory_import_quick_filter_presets_v1';
 const supportedImportQuickFilterTypes = new Set(['select', 'multiselect']);
@@ -1110,6 +1155,94 @@ const buildInventorySearchMeta = (row) => [
 ]
     .filter(Boolean)
     .join(' • ');
+const normalizeImportStorageLocation = (source = {}) => {
+    const location = source?.storage_location
+        || source?.shelf_location
+        || source?.product?.storage_location
+        || source?.product?.shelf_location
+        || null;
+    const shelf = location?.shelf || null;
+    const warehouse = shelf?.warehouse || null;
+    const shelfName = String(location?.shelf_name ?? shelf?.name ?? source?.shelf_name ?? '').trim();
+    const shelfCode = String(location?.shelf_code ?? shelf?.code ?? source?.shelf_code ?? '').trim();
+    const warehouseName = String(location?.warehouse_name ?? warehouse?.name ?? source?.warehouse_name ?? '').trim();
+    const warehouseCode = String(location?.warehouse_code ?? warehouse?.code ?? source?.warehouse_code ?? '').trim();
+    const floorNumber = location?.floor_number ?? source?.floor_number ?? source?.storage_floor ?? '';
+    const positionNote = String(location?.position_note ?? source?.position_note ?? '').trim();
+    const locationLabel = String(
+        source?.storage_location_label
+        ?? source?.location_label
+        ?? location?.location_label
+        ?? location?.location_code
+        ?? ''
+    ).trim();
+    const warehouseSequence = source?.warehouse_sequence
+        ?? source?.product_warehouse_sequence
+        ?? location?.warehouse_sequence
+        ?? location?.product_warehouse_sequence
+        ?? '';
+
+    if (!locationLabel && !shelfName && !shelfCode && !floorNumber && !positionNote && !warehouseSequence) {
+        return null;
+    }
+
+    return {
+        id: location?.id || source?.storage_location_id || null,
+        shelf_name: shelfName,
+        shelf_code: shelfCode,
+        warehouse_name: warehouseName,
+        warehouse_code: warehouseCode,
+        floor_number: floorNumber,
+        position_note: positionNote,
+        location_label: locationLabel,
+        warehouse_sequence: warehouseSequence,
+    };
+};
+const formatImportStorageShelf = (location = null) => {
+    const shelfName = String(location?.shelf_name || '').trim();
+    const shelfCode = String(location?.shelf_code || '').trim();
+    return shelfName || shelfCode || 'Chưa gán kệ';
+};
+const formatImportStorageFloor = (location = null) => {
+    const value = location?.floor_number;
+    if (value === null || value === undefined || value === '') {
+        return 'Chưa có tầng';
+    }
+
+    return `Tầng ${value}`;
+};
+const formatImportPutawayLocationLine = (location = null) => {
+    if (!location) {
+        return 'Chưa gán vị trí';
+    }
+
+    const shelf = formatImportStorageShelf(location);
+    const floor = formatImportStorageFloor(location);
+    const sequence = location?.warehouse_sequence;
+    const note = String(location?.position_note || '').trim();
+    const slot = sequence
+        ? `Số ${sequence}`
+        : note.replace(/^STT\s*kho\s*/i, 'Số ').replace(/^STT\s*/i, 'Số ');
+    const parts = [shelf, floor, slot]
+        .map((item) => String(item || '').trim())
+        .filter(Boolean);
+
+    return parts.length ? parts.join(' - ') : 'Chưa gán vị trí';
+};
+const buildImportStorageLocationSortKey = (location = null, item = {}) => {
+    const shelf = String(location?.shelf_code || location?.shelf_name || '').toLocaleLowerCase('vi-VN');
+    const floor = Number(location?.floor_number || 9999);
+    const sequence = Number(location?.warehouse_sequence || 999999);
+    const sku = String(item?.product_sku || '').toLocaleLowerCase('vi-VN');
+    return `${shelf || 'zzzz'}|${String(floor).padStart(4, '0')}|${String(sequence).padStart(6, '0')}|${sku}`;
+};
+const sortImportPutawayItems = (items = []) => [...items].sort((left, right) => (
+    String(left.putaway_sort_key || '').localeCompare(String(right.putaway_sort_key || ''), 'vi')
+));
+const resolveImportPutawayQuantity = (item = {}) => {
+    const receivedQuantity = Number(item.received_quantity ?? 0);
+    return receivedQuantity > 0 ? receivedQuantity : Number(item.quantity || 0);
+};
 const findExactInventorySearchMatch = (rows = [], query = '') => {
     const normalizedQuery = normalizeSearchText(query);
     if (!normalizedQuery) return null;
@@ -1472,20 +1605,27 @@ const resolveImportSourceSnapshot = (item = {}) => {
         source_notes: '',
     };
 };
-const applyImportProductData = (item, product) => ({
-    ...item,
-    ...resolveImportSourceSnapshot(item),
-    product_id: product.id,
-    product_name: product.name,
-    product_sku: product.sku,
-    supplier_product_code: product.supplier_product_code || item.supplier_product_code || '',
-    unit_name: product.unit_name || product.unit?.name || item.unit_name || '',
-    unit_cost: String(normalizeRoundedImportCostNumber(product.supplier_unit_cost ?? product.current_cost ?? product.expected_cost ?? 0) ?? 0),
-    received_quantity: item.received_quantity || '0',
-    mapping_status: 'matched',
-    mapping_label: item.mapping_status === 'unmatched' ? 'Đã map thủ công' : '',
-    inventory_import_starred: Boolean(product.inventory_import_starred),
-});
+const applyImportProductData = (item, product) => {
+    const storageLocation = normalizeImportStorageLocation(product);
+
+    return {
+        ...item,
+        ...resolveImportSourceSnapshot(item),
+        product_id: product.id,
+        product_name: product.name,
+        product_sku: product.sku,
+        supplier_product_code: product.supplier_product_code || item.supplier_product_code || '',
+        unit_name: product.unit_name || product.unit?.name || item.unit_name || '',
+        unit_cost: String(normalizeRoundedImportCostNumber(product.supplier_unit_cost ?? product.current_cost ?? product.expected_cost ?? 0) ?? 0),
+        received_quantity: item.received_quantity || '0',
+        storage_location: storageLocation,
+        storage_location_label: storageLocation?.location_label || '',
+        warehouse_sequence: product.warehouse_sequence ?? storageLocation?.warehouse_sequence ?? '',
+        mapping_status: 'matched',
+        mapping_label: item.mapping_status === 'unmatched' ? 'Đã map thủ công' : '',
+        inventory_import_starred: Boolean(product.inventory_import_starred),
+    };
+};
 const resetImportProductData = (item = {}) => {
     const sourceSnapshot = resolveImportSourceSnapshot(item);
     const hasSourceValues = Object.values(sourceSnapshot).some((value) => String(value ?? '').trim() !== '');
@@ -1500,6 +1640,9 @@ const resetImportProductData = (item = {}) => {
         unit_name: sourceSnapshot.source_unit_name || '',
         unit_cost: sourceSnapshot.source_unit_cost || '',
         notes: sourceSnapshot.source_notes || '',
+        storage_location: null,
+        storage_location_label: '',
+        warehouse_sequence: '',
         mapping_status: hasSourceValues ? 'unmatched' : 'manual',
         mapping_label: '',
         inventory_import_starred: false,
@@ -1517,6 +1660,9 @@ const createLine = (overrides = {}) => ({
     unit_name: '',
     unit_cost: '',
     notes: '',
+    storage_location: null,
+    storage_location_label: '',
+    warehouse_sequence: '',
     update_supplier_price: true,
     inventory_import_starred: false,
     mapping_status: 'manual',
@@ -1567,6 +1713,9 @@ const mapSupplierCatalogEntry = (item) => ({
     price: item.price ?? null,
     unit_cost: normalizeRoundedImportCostNumber(item.supplier_unit_cost),
     inventory_import_starred: Boolean(item.inventory_import_starred),
+    warehouse_sequence: item.warehouse_sequence ?? '',
+    storage_location: normalizeImportStorageLocation(item),
+    storage_location_label: item.storage_location_label || item.storage_location?.location_label || '',
     current_cost: item.current_cost ?? item.expected_cost ?? null,
     notes: item.supplier_notes || '',
     updated_at: item.supplier_price_updated_at || null,
@@ -1584,21 +1733,28 @@ const mapSupplierCatalogEntry = (item) => ({
 const createImportForm = (data = null) => {
     const chargeInputs = buildImportChargeInputsFromData(data);
     const mappedItems = (data?.items || []).length
-        ? data.items.map((item) => createLine({
-            product_id: item.product_id,
-            product_name: item.product?.name || item.product_name_snapshot || '',
-            product_sku: item.product?.sku || item.product_sku_snapshot || '',
-            supplier_product_code: item.supplier_product_code_snapshot || item.supplierPrice?.supplier_product_code || '',
-            quantity: String(item.quantity || 1),
-            received_quantity: String(item.received_quantity ?? 0),
-            unit_name: item.unit_name_snapshot || item.product?.unit?.name || item.product?.unit_name || '',
-            unit_cost: String(Math.round(Number(item.unit_cost || 0))),
-            notes: item.notes || '',
-            update_supplier_price: data?.update_supplier_prices ?? true,
-            inventory_import_starred: Boolean(item.product?.inventory_import_starred ?? item.inventory_import_starred),
-            mapping_status: item.product_id ? 'matched' : 'manual',
-            mapping_label: item.product_id ? 'Đã map sản phẩm' : '',
-        }))
+        ? data.items.map((item) => {
+            const storageLocation = normalizeImportStorageLocation(item);
+
+            return createLine({
+                product_id: item.product_id,
+                product_name: item.product?.name || item.product_name_snapshot || '',
+                product_sku: item.product?.sku || item.product_sku_snapshot || '',
+                supplier_product_code: item.supplier_product_code_snapshot || item.supplierPrice?.supplier_product_code || '',
+                quantity: String(item.quantity || 1),
+                received_quantity: String(item.received_quantity ?? 0),
+                unit_name: item.unit_name_snapshot || item.product?.unit?.name || item.product?.unit_name || '',
+                unit_cost: String(Math.round(Number(item.unit_cost || 0))),
+                notes: item.notes || '',
+                storage_location: storageLocation,
+                storage_location_label: storageLocation?.location_label || '',
+                warehouse_sequence: item.product?.warehouse_sequence ?? storageLocation?.warehouse_sequence ?? '',
+                update_supplier_price: data?.update_supplier_prices ?? true,
+                inventory_import_starred: Boolean(item.product?.inventory_import_starred ?? item.inventory_import_starred),
+                mapping_status: item.product_id ? 'matched' : 'manual',
+                mapping_label: item.product_id ? 'Đã map sản phẩm' : '',
+            });
+        })
         : [];
     const allMappedItemsCompleted = mappedItems.length > 0 && mappedItems.every((item) => (
         parseLineQuantity(item.received_quantity, 0) >= parseLineQuantity(item.quantity, 0)
@@ -1813,6 +1969,21 @@ const importPrintColumns = [
     { id: 'notes', label: 'Ghi chú', align: 'left', widthWeight: 2.1, render: (item) => item.notes || '' },
     { id: 'unit_cost', label: 'Giá nhập', align: 'right', widthWeight: 1.4, render: (item) => formatCurrency(item.unit_cost || 0) },
     { id: 'line_total', label: 'Thành tiền', align: 'right', widthWeight: 1.5, render: (item) => formatCurrency(Number(item.quantity || 0) * Number(item.unit_cost || 0)) },
+];
+const importPutawayPrintColumns = [
+    { id: 'stt', label: 'STT', align: 'center', widthWeight: 0.55, render: (_item, index) => String(index + 1) },
+    {
+        id: 'product_name',
+        label: 'Tên sản phẩm',
+        align: 'left',
+        widthWeight: 4.35,
+        renderHtml: (item) => `
+            <div class="product-name">${escapePrintHtml(item.product_name || '-')}</div>
+            <div class="product-sku">${escapePrintHtml(item.product_sku || '-')}</div>
+        `,
+    },
+    { id: 'quantity', label: 'Số lượng', align: 'center', widthWeight: 0.9, render: (item) => formatNumber(item.quantity_to_putaway ?? item.quantity ?? 0) },
+    { id: 'storage_location', label: 'Vị trí', align: 'center', widthWeight: 2.4, render: (item) => formatImportPutawayLocationLine(item.storage_location) },
 ];
 const importPrintColumnMap = new Map(importPrintColumns.map((column) => [column.id, column]));
 const importPrintColumnOrder = importPrintColumns.map((column) => column.id);
@@ -2187,6 +2358,220 @@ const buildImportPrintHtml = ({
 </html>`;
 };
 
+const buildImportPutawayPrintHtml = ({
+    printedAt = '',
+    documents = [],
+} = {}) => {
+    const normalizedDocuments = (Array.isArray(documents) ? documents : []).map((document) => ({
+        supplierName: document?.supplierName || 'Tất cả sản phẩm',
+        importNumber: document?.importNumber || '',
+        importDate: document?.importDate || '',
+        items: sortImportPutawayItems(Array.isArray(document?.items) ? document.items : []),
+        notes: document?.notes || '',
+    }));
+    const normalizedColumns = importPutawayPrintColumns;
+    const totalWeight = normalizedColumns.reduce((sum, column) => sum + Number(column.widthWeight || 1), 0) || 1;
+    const printedAtLabel = formatDateTime(printedAt || new Date().toISOString());
+    const headerCells = normalizedColumns.map((column) => {
+        const width = ((Number(column.widthWeight || 1) / totalWeight) * 100).toFixed(2);
+        return `<th class="col-${column.id} align-${column.align || 'left'}" style="width:${width}%">${escapePrintHtml(column.label)}</th>`;
+    }).join('');
+
+    const renderBodyRows = (documentItems) => (documentItems.length
+        ? documentItems.map((item, index) => `
+            <tr class="${item.storage_location ? '' : 'missing-location'}">
+                ${normalizedColumns.map((column) => {
+                    if (typeof column.renderHtml === 'function') {
+                        return `<td class="col-${column.id} align-${column.align || 'left'}">${column.renderHtml(item, index)}</td>`;
+                    }
+
+                    const cellValue = typeof column.render === 'function' ? column.render(item, index) : item?.[column.id];
+                    const normalizedCellValue = cellValue === null || cellValue === undefined || cellValue === '' ? '-' : cellValue;
+                    return `<td class="col-${column.id} align-${column.align || 'left'}">${escapePrintHtml(normalizedCellValue)}</td>`;
+                }).join('')}
+            </tr>
+        `).join('')
+        : `<tr><td colspan="${normalizedColumns.length}" class="empty">Chưa có dòng sản phẩm.</td></tr>`);
+
+    const sheetsHtml = (normalizedDocuments.length ? normalizedDocuments : [{
+        supplierName: 'Tất cả sản phẩm',
+        importNumber: '',
+        importDate: '',
+        items: [],
+        notes: '',
+    }]).map((document, index) => {
+        const sheetLabel = normalizedDocuments.length > 1
+            ? `Phiếu ${index + 1}/${normalizedDocuments.length}`
+            : 'Bảng xếp hàng';
+
+        return `
+            <section class="sheet">
+                <div class="header">
+                    <div class="title-block">
+                        <h1>In xếp hàng</h1>
+                        <p>${escapePrintHtml(sheetLabel)}</p>
+                    </div>
+                    <div class="meta-card">
+                        <div class="meta-item">
+                            <span class="meta-label">Mã phiếu</span>
+                            <strong class="meta-value">${escapePrintHtml(document.importNumber || '-')}</strong>
+                        </div>
+                        <div class="meta-item">
+                            <span class="meta-label">Ngày nhập</span>
+                            <strong class="meta-value">${escapePrintHtml(document.importDate ? formatPrintDate(document.importDate) : '-')}</strong>
+                        </div>
+                        <div class="meta-item">
+                            <span class="meta-label">Nhà cung cấp</span>
+                            <strong class="meta-value">${escapePrintHtml(document.supplierName)}</strong>
+                        </div>
+                        <div class="meta-item">
+                            <span class="meta-label">Ngày giờ in</span>
+                            <strong class="meta-value">${escapePrintHtml(printedAtLabel)}</strong>
+                        </div>
+                    </div>
+                </div>
+
+                <table>
+                    <thead>
+                        <tr>${headerCells}</tr>
+                    </thead>
+                    <tbody>${renderBodyRows(document.items)}</tbody>
+                </table>
+            </section>
+        `;
+    }).join('');
+
+    return `<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8" />
+    <title>In xếp hàng phiếu nhập</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,100..900;1,100..900&display=swap&subset=vietnamese" rel="stylesheet" />
+    <style>
+        @page { size: A4 portrait; margin: 10mm; }
+        * { box-sizing: border-box; }
+        html, body { margin: 0; padding: 0; }
+        body {
+            font-family: 'Roboto', sans-serif;
+            color: #16324f;
+            background: #ffffff;
+        }
+        .sheet {
+            width: 100%;
+        }
+        .sheet + .sheet {
+            break-before: page;
+            page-break-before: always;
+            margin-top: 8mm;
+        }
+        .header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 16px;
+            margin-bottom: 12px;
+        }
+        .title-block h1 {
+            margin: 0 0 6px;
+            font-size: 24px;
+            font-weight: 700;
+            color: #17324d;
+        }
+        .title-block p {
+            margin: 0;
+            font-size: 12px;
+            color: #5f7288;
+        }
+        .meta-card {
+            width: 390px;
+            border: 1px solid #d8e3ef;
+            border-radius: 8px;
+            padding: 10px 12px;
+            background: #f7fafc;
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px 12px;
+        }
+        .meta-item {
+            min-width: 0;
+            font-size: 11px;
+            line-height: 1.35;
+        }
+        .meta-label {
+            display: block;
+            margin-bottom: 2px;
+            font-weight: 700;
+            color: #5f7288;
+        }
+        .meta-value {
+            display: block;
+            min-width: 0;
+            color: #17324d;
+            overflow-wrap: anywhere;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+        }
+        th, td {
+            border: 1px solid #d8e3ef;
+            padding: 7px 8px;
+            font-size: 11px;
+            line-height: 1.42;
+            vertical-align: middle;
+            word-break: break-word;
+        }
+        thead th {
+            background: #eff5fb;
+            font-weight: 700;
+            color: #17324d;
+        }
+        tbody tr:nth-child(even) td {
+            background: #fbfdff;
+        }
+        tbody tr.missing-location td {
+            background: #fff7ed;
+        }
+        .align-left { text-align: left; }
+        .align-center { text-align: center; }
+        .align-right { text-align: right; }
+        .col-stt,
+        .col-quantity {
+            font-weight: 700;
+        }
+        .product-name {
+            font-weight: 500;
+            color: #16324f;
+        }
+        .product-sku {
+            margin-top: 3px;
+            font-size: 9.5px;
+            font-weight: 600;
+            line-height: 1.25;
+            color: #7b8da3;
+        }
+        .empty {
+            padding: 16px 10px;
+            text-align: center;
+            color: #6b7d92;
+        }
+        @media print {
+            body {
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
+        }
+    </style>
+</head>
+<body>
+    ${sheetsHtml}
+</body>
+</html>`;
+};
+
 const parseLineQuantity = (value, fallback = 0) => {
     return parseQuantityDraft(value, fallback);
 };
@@ -2252,7 +2637,7 @@ const productColumns = [
     { id: 'expected_cost', label: 'Giá nhập dự kiến', minWidth: 108, align: 'right', headerRender: () => renderTwoLineHeader('Giá nhập', 'dự kiến') },
     { id: 'current_cost', label: 'Giá nhập thực tế', minWidth: 108, align: 'right', headerTooltip: 'Tổng tiền nhập hợp lệ / Tổng SL nhập hợp lệ', headerRender: () => renderTwoLineHeader('Giá nhập', 'thực tế') },
     { id: 'inventory_value', label: 'Thành tiền', minWidth: 104, align: 'right', headerTooltip: 'Có thể bán x giá đang dùng; thiếu giá thực tế thì lấy giá dự kiến', headerRender: () => renderTwoLineHeader('Thành', 'tiền') },
-    { id: 'actions', label: 'Thao tác', minWidth: 96, align: 'center' },
+    { id: 'actions', label: 'Thao tác', minWidth: 190, align: 'center' },
 ];
 
 const supplierColumns = [
@@ -4554,6 +4939,7 @@ const InventoryTable = ({
     wrapperClassName = '',
     viewportClassName = tableViewportClass,
     headerTextClassName = 'text-[12px]',
+    summaryCells = null,
 }) => {
     const tableColumns = useMemo(() => {
         const baseColumns = columns.filter((column) => column.id !== 'stt');
@@ -4638,6 +5024,38 @@ const InventoryTable = ({
                                 </th>
                             ))}
                         </tr>
+                        {summaryCells ? (
+                            <tr className="bg-[#fffdf7]">
+                                {renderedColumns.map((column) => {
+                                    const summaryCell = summaryCells[column.id];
+                                    const cellConfig = summaryCell && typeof summaryCell === 'object'
+                                        ? summaryCell
+                                        : { value: summaryCell };
+                                    const hasValue = cellConfig.value !== undefined && cellConfig.value !== null && cellConfig.value !== '';
+
+                                    return (
+                                        <th
+                                            key={`summary_${column.id}`}
+                                            className={`border-b border-r border-amber-200/70 px-2 py-1.5 text-[12px] ${column.align === 'right' ? 'text-right' : column.align === 'center' ? 'text-center' : 'text-left'}`}
+                                            style={{ width: columnWidths[column.id] || column.minWidth }}
+                                            title={cellConfig.title}
+                                        >
+                                            {hasValue ? (
+                                                <span className={`inline-flex max-w-full items-center rounded-sm px-2 py-0.5 font-black ${
+                                                    cellConfig.strong
+                                                        ? 'bg-amber-100 text-amber-900 ring-1 ring-amber-300'
+                                                        : 'text-primary'
+                                                }`}>
+                                                    <span className="truncate">{cellConfig.value}</span>
+                                                </span>
+                                            ) : (
+                                                null
+                                            )}
+                                        </th>
+                                    );
+                                })}
+                            </tr>
+                        ) : null}
                     </thead>
                     <tbody>
                         {loading ? <tr><td colSpan={renderedColumns.length} className="px-4 py-10 text-center text-[13px] text-primary/55">Đang tải dữ liệu...</td></tr> : null}
@@ -4707,6 +5125,10 @@ const InventoryMovement = () => {
     const productCopyFeedbackTimeoutRef = useRef(null);
     const skipSupplierSearchResetRef = useRef(false);
     const savingSupplierPriceRowsRef = useRef(new Set());
+    const productRequestControllerRef = useRef(null);
+    const productRequestSequenceRef = useRef(0);
+    const productSearchSyncRef = useRef('');
+    const productSearchContainerRef = useRef(null);
     const supplierSearchSyncRef = useRef('');
     const supplierCatalogSearchSyncRef = useRef({ search: '', sku: '', name: '' });
     const simpleSearchSyncRef = useRef({
@@ -4758,7 +5180,7 @@ const InventoryMovement = () => {
     });
 
     const [openPanels, setOpenPanels] = useState({
-        products: { filters: false, stats: false, columns: false },
+        products: { filters: true, stats: false, columns: false },
         suppliers: { filters: false, stats: false, columns: false },
         supplierPrices: { filters: false, stats: false, columns: false },
         imports: { filters: false, stats: false, columns: false },
@@ -4773,6 +5195,9 @@ const InventoryMovement = () => {
     const [productFilters, setProductFilters] = useState(() => createDefaultProductFilters());
     const [productFilterPresets, setProductFilterPresets] = useState(() => readProductFilterPresets());
     const [selectedProductFilterPresetId, setSelectedProductFilterPresetId] = useState('');
+    const [productSearchHistory, setProductSearchHistory] = useState(() => readProductSearchHistory());
+    const [productSearchHistoryOpen, setProductSearchHistoryOpen] = useState(false);
+    const [productDeclarationModeActive, setProductDeclarationModeActive] = useState(false);
     const [supplierFilters, setSupplierFilters] = useState(defaultSupplierFilters);
     const [supplierCatalogFilters, setSupplierCatalogFilters] = useState(defaultSupplierCatalogFilters);
     const [supplierQuickSearch, setSupplierQuickSearch] = useState('');
@@ -4829,7 +5254,7 @@ const InventoryMovement = () => {
     const [pasteText, setPasteText] = useState('');
     const [pasteMode, setPasteMode] = useState('sku_price');
     const [showPasteBox, setShowPasteBox] = useState(false);
-    const [supplierModal, setSupplierModal] = useState({ open: false, form: createSupplierForm() });
+    const [supplierModal, setSupplierModal] = useState({ open: false, form: createSupplierForm(), source: null });
     const [supplierPriceModal, setSupplierPriceModal] = useState({ open: false, form: createSupplierPriceForm() });
     const [importModal, setImportModal] = useState({ open: false, form: createImportForm() });
     const [importAttachmentManagerOpen, setImportAttachmentManagerOpen] = useState(false);
@@ -4845,6 +5270,7 @@ const InventoryMovement = () => {
     const [importPrintModalOpen, setImportPrintModalOpen] = useState(false);
     const [importPrintLoading, setImportPrintLoading] = useState(false);
     const [importPrintSource, setImportPrintSource] = useState({ mode: 'modal', forms: [] });
+    const [importPrintMode, setImportPrintMode] = useState(IMPORT_PRINT_MODE_PUTAWAY);
     const [importPrintTemplates, setImportPrintTemplates] = useState(() => ensureDefaultImportPrintTemplates([]));
     const [importPrintTemplateId, setImportPrintTemplateId] = useState(IMPORT_PRINT_DEFAULT_TEMPLATE_ID);
     const [importPrintTemplateName, setImportPrintTemplateName] = useState(IMPORT_PRINT_DEFAULT_TEMPLATE_NAME);
@@ -5243,10 +5669,12 @@ const InventoryMovement = () => {
         setImportPrintModalOpen(false);
         setImportPrintLoading(false);
         setImportPrintSource({ mode: 'modal', forms: [] });
+        setImportPrintMode(IMPORT_PRINT_MODE_PUTAWAY);
     };
 
     const openImportPrintModalWithForms = async (forms = [], mode = 'selected') => {
         setImportPrintSource({ mode, forms });
+        setImportPrintMode(IMPORT_PRINT_MODE_PUTAWAY);
         setImportPrintModalOpen(true);
         setImportPrintPreviewPrintedAt(new Date().toISOString());
 
@@ -5332,8 +5760,9 @@ const InventoryMovement = () => {
 
     const printImportSheet = () => {
         const selectedColumns = importPrintSelectedColumns;
+        const isPutawayPrint = importPrintMode === IMPORT_PRINT_MODE_PUTAWAY;
 
-        if (!selectedColumns.length) {
+        if (!isPutawayPrint && !selectedColumns.length) {
             showToast({ type: 'warning', message: 'Vui lòng chọn ít nhất một cột để in.' });
             return;
         }
@@ -5344,11 +5773,16 @@ const InventoryMovement = () => {
         }
 
         const printedAt = new Date().toISOString();
-        const printHtml = buildImportPrintHtml({
-            printedAt,
-            columns: selectedColumns,
-            documents: importPrintDocuments,
-        });
+        const printHtml = isPutawayPrint
+            ? buildImportPutawayPrintHtml({
+                printedAt,
+                documents: importPrintDocuments,
+            })
+            : buildImportPrintHtml({
+                printedAt,
+                columns: selectedColumns,
+                documents: importPrintDocuments,
+            });
 
         const printWindow = window.open('', '_blank', 'width=1024,height=720');
         if (!printWindow) {
@@ -5993,11 +6427,15 @@ const InventoryMovement = () => {
                         const product = productMap.get(Number(item.product_id || 0));
                         if (!product) return item;
                         const nextCost = product.supplier_unit_cost ?? product.current_cost ?? product.expected_cost;
-                        if (nextCost == null) return item;
+                        const storageLocation = normalizeImportStorageLocation(product) || item.storage_location || null;
+                        if (nextCost == null && !storageLocation) return item;
 
                         return {
                             ...item,
-                            unit_cost: String(Math.round(Number(nextCost || 0))),
+                            unit_cost: nextCost == null ? item.unit_cost : String(Math.round(Number(nextCost || 0))),
+                            storage_location: storageLocation,
+                            storage_location_label: storageLocation?.location_label || item.storage_location_label || '',
+                            warehouse_sequence: product.warehouse_sequence ?? storageLocation?.warehouse_sequence ?? item.warehouse_sequence ?? '',
                         };
                     }),
                 }),
@@ -6219,6 +6657,28 @@ const InventoryMovement = () => {
         setDailyOutboundDrawer({ open: false, product: null });
     };
 
+    const persistProductSearchHistory = (items) => {
+        const normalizedItems = normalizeProductSearchHistoryItems(items);
+        setProductSearchHistory(normalizedItems);
+        writeProductSearchHistory(normalizedItems);
+        return normalizedItems;
+    };
+    const rememberProductSearch = (value) => {
+        const normalizedValue = normalizeProductSearchHistoryItem(value);
+        if (normalizedValue.length < 2) return [];
+
+        let normalizedItems = [];
+        setProductSearchHistory((prev) => {
+            normalizedItems = normalizeProductSearchHistoryItems([
+                normalizedValue,
+                ...prev.filter((item) => normalizeSearchText(item) !== normalizeSearchText(normalizedValue)),
+            ]);
+            writeProductSearchHistory(normalizedItems);
+            return normalizedItems;
+        });
+        return normalizedItems;
+    };
+
     const fetchProducts = async (
         page = 1,
         perPage = pageSizes.products,
@@ -6226,7 +6686,14 @@ const InventoryMovement = () => {
         filtersOverride = productFilters,
         options = {},
     ) => {
-        const includeSummary = options.includeSummary ?? openPanels.products.stats;
+        const includeSummary = options.includeSummary ?? true;
+        const requestSequence = productRequestSequenceRef.current + 1;
+        productRequestSequenceRef.current = requestSequence;
+        if (productRequestControllerRef.current) {
+            productRequestControllerRef.current.abort();
+        }
+        const controller = new AbortController();
+        productRequestControllerRef.current = controller;
         setFlag('products', true);
         try {
             const response = await inventoryApi.getProducts({
@@ -6235,14 +6702,24 @@ const InventoryMovement = () => {
                 per_page: perPage,
                 without_summary: includeSummary ? undefined : 1,
                 ...buildSortParams('products', sortOverride),
-            });
+            }, controller.signal);
+            if (controller.signal.aborted || productRequestSequenceRef.current !== requestSequence) {
+                return;
+            }
             setProducts(response.data.data || []);
             setProductSummary(includeSummary ? (response.data.summary || null) : null);
+            rememberProductSearch(filtersOverride?.search);
             pageState(setProductPagination, response);
         } catch (error) {
+            if (isCanceledRequest(error)) return;
             fail(error, 'Không thể tải sản phẩm kho.');
         } finally {
-            setFlag('products', false);
+            if (productRequestSequenceRef.current === requestSequence) {
+                if (productRequestControllerRef.current === controller) {
+                    productRequestControllerRef.current = null;
+                }
+                setFlag('products', false);
+            }
         }
     };
 
@@ -6413,9 +6890,15 @@ const InventoryMovement = () => {
         if (currentSort?.key === productTrackingSortConfig.key) return emptySortConfig;
         return currentSort || emptySortConfig;
     };
-    const updateProductFilterValue = (key, value) => {
+    const updateProductFilterValue = (key, value, options = {}) => {
+        const autoApply = options.autoApply ?? true;
+        const nextFilters = normalizeProductFilters({ ...productFilters, [key]: value });
         setSelectedProductFilterPresetId('');
-        setProductFilters((prev) => normalizeProductFilters({ ...prev, [key]: value }));
+        if (key === 'search' || !autoApply) {
+            setProductFilters(nextFilters);
+            return;
+        }
+        applyProductFilters(nextFilters);
     };
     const persistProductFilterPresets = (nextPresets) => {
         const normalizedPresets = nextPresets.map(normalizeProductFilterPreset).filter(Boolean);
@@ -6427,11 +6910,46 @@ const InventoryMovement = () => {
         const normalizedFilters = normalizeProductFilters(nextFilters);
         const nextSort = resolveProductSortForFilters(normalizedFilters, sortOverride);
         setProductFilters(normalizedFilters);
+        productSearchSyncRef.current = normalizedFilters.search || '';
         if (!options.keepPresetSelection) {
             setSelectedProductFilterPresetId('');
         }
         setSortConfigs((prev) => ({ ...prev, products: nextSort }));
         fetchProducts(1, pageSizes.products, nextSort, normalizedFilters);
+    };
+    const applyProductSearchHistoryItem = (value) => {
+        const normalizedValue = normalizeProductSearchHistoryItem(value);
+        if (!normalizedValue) return;
+
+        setProductSearchHistoryOpen(false);
+        rememberProductSearch(normalizedValue);
+        applyProductFilters({
+            ...productFilters,
+            search: normalizedValue,
+        });
+    };
+    const removeProductSearchHistoryItem = (value, event = null) => {
+        event?.preventDefault();
+        event?.stopPropagation();
+        persistProductSearchHistory(productSearchHistory.filter((item) => normalizeSearchText(item) !== normalizeSearchText(value)));
+    };
+    const clearProductSearchHistory = () => {
+        persistProductSearchHistory([]);
+        setProductSearchHistoryOpen(false);
+    };
+    const clearProductQuickSearch = () => {
+        setProductSearchHistoryOpen(false);
+        applyProductFilters({
+            ...productFilters,
+            search: '',
+        });
+    };
+    const productQuickFilterActive = productFilters.import_starred === '1';
+    const toggleProductImportQuickFilter = () => {
+        applyProductFilters({
+            ...productFilters,
+            import_starred: productQuickFilterActive ? '' : '1',
+        });
     };
     const toggleProductTrackingMode = () => {
         const enabled = String(productFilters.tracking_mode || '') === '1';
@@ -6440,6 +6958,34 @@ const InventoryMovement = () => {
             tracking_mode: enabled ? '' : '1',
             tracking_daily_min: productFilters.tracking_daily_min || defaultProductFilters.tracking_daily_min,
         }, enabled ? sortConfigs.products : productTrackingSortConfig);
+    };
+    const toggleProductDeclarationMode = () => {
+        setProductDeclarationModeActive((currentValue) => {
+            const nextValue = !currentValue;
+            if (nextValue) {
+                showToast({ type: 'info', message: 'Bấm dòng sản phẩm hoặc nút sao để lưu/bỏ lọc nhanh.' });
+            }
+            return nextValue;
+        });
+    };
+    const toggleInventoryProductImportStar = async (row) => {
+        const productId = Number(row?.id || 0);
+        if (!productId) return null;
+
+        const nextStarred = !Boolean(row?.inventory_import_starred);
+        const updatedProduct = await toggleImportProductStar(row, nextStarred);
+        const resolvedStarred = Boolean(updatedProduct?.inventory_import_starred ?? nextStarred);
+
+        if (productQuickFilterActive && !resolvedStarred) {
+            await fetchProducts(
+                productPagination.current_page || 1,
+                pageSizes.products,
+                sortConfigs.products,
+                productFilters
+            );
+        }
+
+        return updatedProduct;
     };
     const clearProductFilter = (key) => {
         const nextFilters = normalizeProductFilters({ ...productFilters, [key]: createDefaultProductFilters()[key] ?? '' });
@@ -6615,6 +7161,7 @@ const InventoryMovement = () => {
         buildFilterChip('products_type', 'Loại sản phẩm', summarizeOptionLabels(productTypeFilterOptions, productFilters.type), () => clearProductFilter('type')),
         buildFilterChip('products_category', 'Danh mục', summarizeOptionLabels(productCategoryFilterOptions, productFilters.category_id), () => clearProductFilter('category_id')),
         buildFilterChip('products_variant_scope', 'Biến thể', summarizeOptionLabels(productVariantScopeFilterOptions, productFilters.variant_scope), () => clearProductFilter('variant_scope')),
+        buildFilterChip('products_import_starred', 'Lọc nhanh', productFilters.import_starred === '1' ? 'Đã khai báo' : '', () => clearProductFilter('import_starred')),
         buildFilterChip('products_tracking_mode', 'Theo dõi nhập', productFilters.tracking_mode === '1' ? `Mã đi ${INVENTORY_TRACKING_WINDOW_DAYS} ngày` : '', () => clearProductFilter('tracking_mode')),
         buildFilterChip('products_tracking_daily_min', 'TB/ngày từ', productFilters.tracking_mode === '1' ? (productFilters.tracking_daily_min || defaultProductFilters.tracking_daily_min) : '', () => clearProductFilter('tracking_daily_min')),
         buildFilterChip('products_date_from', 'Từ ngày', productFilters.date_from ? formatPrintDate(productFilters.date_from) : '', () => clearProductFilter('date_from')),
@@ -6843,6 +7390,24 @@ const InventoryMovement = () => {
         if (activeTab === 'trash') fetchTrash(trashPagination.current_page || 1);
     }, [activeTab]);
 
+    useEffect(() => () => {
+        productRequestControllerRef.current?.abort();
+        productRequestControllerRef.current = null;
+    }, []);
+
+    useEffect(() => {
+        if (!productSearchHistoryOpen) return undefined;
+
+        const handleOutsideClick = (event) => {
+            if (!productSearchContainerRef.current?.contains(event.target)) {
+                setProductSearchHistoryOpen(false);
+            }
+        };
+
+        document.addEventListener('mousedown', handleOutsideClick);
+        return () => document.removeEventListener('mousedown', handleOutsideClick);
+    }, [productSearchHistoryOpen]);
+
     useEffect(() => {
         if (activeTab !== 'supplierPrices') return;
         fetchSupplierCatalog(supplierCatalogPagination.current_page || 1);
@@ -6916,6 +7481,19 @@ const InventoryMovement = () => {
         setBulkNote('');
         setPasteText('');
     }, [supplierCatalogSelectionKey]);
+
+    useEffect(() => {
+        if (activeTab !== 'products') return undefined;
+        const currentSearch = productFilters.search ?? '';
+        const previousSearch = productSearchSyncRef.current ?? '';
+        if (currentSearch === previousSearch) return undefined;
+        productSearchSyncRef.current = currentSearch;
+        const timer = setTimeout(() => {
+            const nextSort = resolveProductSortForFilters(productFilters, sortConfigs.products);
+            fetchProducts(1, pageSizes.products, nextSort, productFilters);
+        }, 250);
+        return () => clearTimeout(timer);
+    }, [activeTab, productFilters.search]);
 
     useEffect(() => {
         if (activeTab !== 'suppliers') return undefined;
@@ -7543,34 +8121,75 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         }
     };
 
+    const closeSupplierModal = () => {
+        setSupplierModal({ open: false, form: createSupplierForm(), source: null });
+    };
+
+    const upsertSupplierInList = (supplier) => {
+        if (!supplier?.id) return;
+        setSuppliers((prev) => {
+            const supplierId = Number(supplier.id);
+            const existingSupplier = prev.find((item) => Number(item.id) === supplierId) || {};
+            return [
+                { ...existingSupplier, ...supplier },
+                ...prev.filter((item) => Number(item.id) !== supplierId),
+            ];
+        });
+    };
+
     const openCreateSupplier = async () => {
         await ensureSuppliersLoaded();
-        setSupplierModal({ open: true, form: createSupplierForm() });
+        setSupplierModal({ open: true, form: createSupplierForm(), source: null });
     };
-    const openEditSupplier = (supplier) => setSupplierModal({ open: true, form: createSupplierForm(supplier) });
+
+    const openCreateSupplierFromImport = async () => {
+        await ensureSuppliersLoaded();
+        setSupplierModal({ open: true, form: createSupplierForm(), source: 'import' });
+    };
+
+    const openEditSupplier = (supplier) => setSupplierModal({ open: true, form: createSupplierForm(supplier), source: null });
 
     const saveSupplier = async () => {
         const form = supplierModal.form;
         if (!form.name.trim()) return showToast({ type: 'warning', message: 'Vui lòng nhập tên nhà cung cấp.' });
+        const source = supplierModal.source;
         setFlag('supplierModal', true);
         try {
             const payload = { code: form.code || null, name: form.name.trim(), phone: form.phone || null, email: form.email || null, address: form.address || null, notes: form.notes || null, status: form.status ? 1 : 0 };
             let savedSupplierId = form.id;
+            let savedSupplier = null;
             if (form.id) {
                 const response = await inventoryApi.updateSupplier(form.id, payload);
-                savedSupplierId = response.data?.id || form.id;
+                savedSupplier = response.data || null;
+                savedSupplierId = savedSupplier?.id || form.id;
                 showToast({ type: 'success', message: 'Đã cập nhật nhà cung cấp.' });
             } else {
                 const response = await inventoryApi.createSupplier(payload);
-                savedSupplierId = response.data?.id || null;
+                savedSupplier = response.data || null;
+                savedSupplierId = savedSupplier?.id || null;
                 showToast({ type: 'success', message: 'Đã tạo nhà cung cấp.' });
             }
-            setSupplierModal({ open: false, form: createSupplierForm() });
+            closeSupplierModal();
+            upsertSupplierInList(savedSupplier);
             if (savedSupplierId) {
                 setSelectedSupplierId(savedSupplierId);
                 setSupplierDetailOpen((prev) => ({ ...prev, [savedSupplierId]: true }));
             }
-            fetchSuppliers(supplierPagination.current_page || 1);
+            if (source === 'import' && savedSupplierId) {
+                setImportModal((prev) => ({
+                    ...prev,
+                    form: {
+                        ...prev.form,
+                        supplier_id: String(savedSupplierId),
+                        supplier_name: savedSupplier?.name || prev.form.supplier_name,
+                    },
+                }));
+                await syncImportItemsFromSupplier(savedSupplierId);
+            }
+            await fetchSuppliers(supplierPagination.current_page || 1);
+            if (source === 'import') {
+                upsertSupplierInList(savedSupplier);
+            }
         } catch (error) {
             fail(error, 'Không thể lưu nhà cung cấp.');
         } finally {
@@ -8466,6 +9085,27 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             { label: 'Điều chỉnh tồn độc lập', value: formatNumber(productSummary.total_adjusted) },
         ];
     }, [productSummary, showProductTrackingColumns]);
+    const productTableSummaryCells = useMemo(() => {
+        if (!productSummary) return null;
+
+        const totalProducts = productSummary.total_products || productPagination.total || 0;
+        return {
+            stt: { value: 'Tổng', title: 'Tổng theo bộ lọc hiện tại' },
+            product: { value: `${formatNumber(totalProducts)} mã`, title: 'Tổng số mã sản phẩm khớp bộ lọc' },
+            total_imported: { value: formatNumber(productSummary.total_imported || 0), title: 'Tổng nhập theo bộ lọc' },
+            total_exported: { value: formatNumber(productSummary.total_exported || 0), title: 'Tổng xuất theo bộ lọc' },
+            recent_outbound_quantity: { value: showProductTrackingColumns ? formatNumber(productSummary.total_recent_outbound_quantity || 0) : '', title: `Tổng đã đi ${productSummary.tracking_window_days || INVENTORY_TRACKING_WINDOW_DAYS} ngày` },
+            total_returned: { value: formatNumber(productSummary.total_returned || 0), title: 'Tổng hoàn theo bộ lọc' },
+            total_damaged: { value: formatNumber(productSummary.total_damaged || 0), title: 'Tổng hỏng theo bộ lọc' },
+            total_adjusted: { value: formatNumber(productSummary.total_adjusted || 0), title: 'Tổng điều chỉnh tồn theo bộ lọc' },
+            computed_stock: { value: formatNumber(productSummary.total_stock ?? 0), title: 'Tổng tồn kho theo bộ lọc', strong: true },
+            pending_export_quantity: { value: formatNumber(productSummary.total_pending_export || 0), title: 'Tổng số lượng chờ xuất theo bộ lọc' },
+            pending_return_quantity: { value: formatNumber(productSummary.total_pending_return || 0), title: 'Tổng số lượng hoàn chờ về theo bộ lọc' },
+            actual_stock: { value: formatNumber(productSummary.total_actual_stock ?? productSummary.total_sellable_stock ?? 0), title: 'Tổng có thể bán theo bộ lọc', strong: true },
+            tracking_status: { value: showProductTrackingColumns ? `${formatNumber(productSummary.tracking_needs_restock_products || 0)} cần nhập` : '', title: 'Số mã cần nhập theo bộ lọc' },
+            inventory_value: { value: formatCurrency(productSummary.total_inventory_value || 0), title: 'Tổng giá trị tồn kho theo bộ lọc', strong: true },
+        };
+    }, [productPagination.total, productSummary, showProductTrackingColumns]);
 
     const supplierSummaryItems = useMemo(() => !supplierSummary ? [] : [
         { label: 'Tổng nhà cung cấp', value: formatNumber(supplierSummary.total_suppliers) },
@@ -8564,20 +9204,38 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             const skuValue = String(row.sku || '').trim();
             const nameValue = String(row.name || '').trim();
             const copyBaseId = String(row.product_id || row.id || row.sku || row.name || 'product');
+            const productId = Number(row?.id || 0);
+            const starLoading = importStarLoadingProductIds.includes(productId);
+            const productImportStarred = Boolean(row.inventory_import_starred);
+            const handleProductStarClick = (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (starLoading) return;
+                void toggleInventoryProductImportStar(row);
+            };
+            const handleProductCellActivation = () => {
+                if (starLoading) return;
+                if (productDeclarationModeActive) {
+                    void toggleInventoryProductImportStar(row);
+                    return;
+                }
+
+                openProductDailyOutboundDrawer(row);
+            };
 
             return (
                 <div
                     role="button"
                     tabIndex={0}
-                    onClick={() => openProductDailyOutboundDrawer(row)}
+                    onClick={handleProductCellActivation}
                     onKeyDown={(event) => {
                         if (event.key === 'Enter' || event.key === ' ') {
                             event.preventDefault();
-                            openProductDailyOutboundDrawer(row);
+                            handleProductCellActivation();
                         }
                     }}
-                    className="group/productcell w-full rounded-sm text-left transition hover:bg-primary/[0.03] focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
-                    title="Bấm để xem hàng đi hàng ngày"
+                    className={`group/productcell w-full rounded-sm text-left transition hover:bg-primary/[0.03] focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 ${productDeclarationModeActive ? 'bg-amber-50/70 ring-1 ring-amber-200' : ''}`}
+                    title={productDeclarationModeActive ? 'Bấm để khai báo hoặc bỏ khỏi lọc nhanh' : 'Bấm để xem hàng đi hàng ngày'}
                 >
                     <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0 flex-1">
@@ -8585,6 +9243,24 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                                 <div className="min-w-0 flex flex-1 flex-wrap items-center gap-2">
                                     <span className="truncate font-mono text-[12px] font-black text-primary">{row.sku || 'Chưa có mã'}</span>
                                     <span className={`rounded-sm border px-2 py-0.5 text-[10px] font-black ${stockMeta.badgeClass}`}>{stockMeta.label}</span>
+                                    {productDeclarationModeActive ? (
+                                        <button
+                                            type="button"
+                                            onClick={handleProductStarClick}
+                                            disabled={starLoading}
+                                            className={`inline-flex h-6 items-center gap-1 rounded-sm border px-2 text-[10px] font-black transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                                                productImportStarred
+                                                    ? 'border-amber-300 bg-amber-100 text-amber-800'
+                                                    : 'border-primary/15 bg-white text-primary/65 hover:border-amber-300 hover:bg-amber-50 hover:text-amber-700'
+                                            }`}
+                                            title={productImportStarred ? 'Bỏ khỏi lọc nhanh phiếu nhập' : 'Khai báo sản phẩm vào lọc nhanh phiếu nhập'}
+                                        >
+                                            <span className="material-symbols-outlined text-[15px]">{productImportStarred ? 'star' : 'star_outline'}</span>
+                                            <span>{productImportStarred ? 'Đã lưu' : 'Khai báo'}</span>
+                                        </button>
+                                    ) : productImportStarred ? (
+                                        <span className="material-symbols-outlined text-[16px] text-amber-500" title="Đã khai báo lọc nhanh phiếu nhập">star</span>
+                                    ) : null}
                                     {showProductTrackingColumns && trackingDemandQuantity > 0 ? (
                                         <span
                                             className={`rounded-sm border px-2 py-0.5 text-[10px] font-black ${trackingMeta.badgeClass}`}
@@ -8621,7 +9297,23 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                                 ) : null}
                             </div>
                         </div>
-                        <span className="material-symbols-outlined mt-0.5 shrink-0 text-[18px] text-primary/30 transition group-hover/productcell:text-primary/55">chevron_right</span>
+                        {productDeclarationModeActive ? (
+                            <button
+                                type="button"
+                                onClick={handleProductStarClick}
+                                disabled={starLoading}
+                                className={`mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-sm border transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                                    productImportStarred
+                                        ? 'border-amber-300 bg-amber-100 text-amber-800'
+                                        : 'border-primary/15 bg-white text-primary/55 hover:border-amber-300 hover:bg-amber-50 hover:text-amber-700'
+                                }`}
+                                title={productImportStarred ? 'Bỏ khỏi lọc nhanh phiếu nhập' : 'Khai báo sản phẩm vào lọc nhanh phiếu nhập'}
+                            >
+                                <span className="material-symbols-outlined text-[20px]">{productImportStarred ? 'star' : 'star_outline'}</span>
+                            </button>
+                        ) : (
+                            <span className="material-symbols-outlined mt-0.5 shrink-0 text-[18px] text-primary/30 transition group-hover/productcell:text-primary/55">chevron_right</span>
+                        )}
                     </div>
                 </div>
             );
@@ -8713,11 +9405,30 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             if (row.current_cost == null && row.expected_cost == null) return '-';
             return formatCurrency(row.inventory_value);
         }
-        if (columnId === 'actions') return (
-            <div className="flex items-center justify-center gap-2">
+        if (columnId === 'actions') {
+            const productId = Number(row?.id || 0);
+            const starLoading = importStarLoadingProductIds.includes(productId);
+
+            return (
+            <div className="flex items-center justify-center gap-1.5">
+                <button
+                    type="button"
+                    onClick={() => { void toggleInventoryProductImportStar(row); }}
+                    disabled={starLoading}
+                    className={`inline-flex h-8 items-center justify-center gap-1 rounded-sm border px-2 text-[12px] font-bold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                        row.inventory_import_starred
+                            ? 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100'
+                            : 'border-primary/15 bg-white text-primary hover:border-amber-200 hover:bg-amber-50 hover:text-amber-700'
+                    }`}
+                    title={row.inventory_import_starred ? 'Bỏ khỏi lọc nhanh phiếu nhập' : 'Khai báo sản phẩm vào lọc nhanh phiếu nhập'}
+                >
+                    <span className="material-symbols-outlined text-[17px]">{row.inventory_import_starred ? 'star' : 'star_outline'}</span>
+                    <span>{row.inventory_import_starred ? 'Đã lưu' : 'Khai báo'}</span>
+                </button>
                 <button type="button" onClick={() => openStockAdjustmentModal([row])} className={ghostButton}>Điều chỉnh</button>
             </div>
-        );
+            );
+        }
         return typeof row[columnId] === 'number' ? formatNumber(row[columnId]) : (row[columnId] || '-');
     };
 
@@ -9488,21 +10199,104 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
     };
 
     const productQuickSearchControl = (
-        <div className="relative w-[220px] min-w-[220px]">
-            <span className="material-symbols-outlined pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[18px] text-primary/35">search</span>
-            <input
-                value={productFilters.search}
-                onChange={(event) => updateProductFilterValue('search', event.target.value)}
-                onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                        event.preventDefault();
-                        applyProductFilters(productFilters);
-                    }
-                }}
-                placeholder="Tìm nhanh mã hoặc tên"
-                className={`w-full pl-8 ${inputClass}`}
-            />
-        </div>
+        <>
+            <div ref={productSearchContainerRef} className="relative w-[250px] min-w-[250px]">
+                <span className="material-symbols-outlined pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[18px] text-primary/35">search</span>
+                <input
+                    value={productFilters.search}
+                    onChange={(event) => {
+                        updateProductFilterValue('search', event.target.value);
+                        setProductSearchHistoryOpen(false);
+                    }}
+                    onKeyDown={(event) => {
+                        if (event.key === 'Escape') {
+                            setProductSearchHistoryOpen(false);
+                            return;
+                        }
+                        if (event.key === 'Enter') {
+                            event.preventDefault();
+                            rememberProductSearch(productFilters.search);
+                            applyProductFilters(productFilters);
+                        }
+                    }}
+                    placeholder="Tìm nhanh mã hoặc tên"
+                    className={`w-full pl-8 pr-16 ${inputClass}`}
+                />
+                <button
+                    type="button"
+                    onClick={() => setProductSearchHistoryOpen((prev) => !prev)}
+                    className={`absolute right-8 top-1/2 inline-flex size-7 -translate-y-1/2 items-center justify-center rounded-sm transition ${
+                        productSearchHistoryOpen
+                            ? 'bg-primary/[0.08] text-primary'
+                            : 'text-primary/35 hover:bg-primary/[0.05] hover:text-primary'
+                    }`}
+                    title="Lịch sử tìm kiếm"
+                >
+                    <span className="material-symbols-outlined text-[18px]">history</span>
+                </button>
+                <button
+                    type="button"
+                    onClick={clearProductQuickSearch}
+                    disabled={!productFilters.search}
+                    className="absolute right-1 top-1/2 inline-flex size-7 -translate-y-1/2 items-center justify-center rounded-sm text-primary/35 transition hover:bg-primary/[0.05] hover:text-brick disabled:cursor-not-allowed disabled:opacity-30"
+                    title="Xóa từ khóa"
+                >
+                    <span className="material-symbols-outlined text-[18px]">close</span>
+                </button>
+                {productSearchHistoryOpen ? (
+                    <div className="absolute right-0 top-[calc(100%+6px)] z-[120] w-[320px] overflow-hidden rounded-sm border border-primary/15 bg-white shadow-2xl">
+                        <div className="flex items-center justify-between border-b border-primary/10 bg-[#f8fbff] px-3 py-2">
+                            <div className="text-[11px] font-black uppercase tracking-[0.12em] text-primary/45">Lịch sử tìm kiếm</div>
+                            {productSearchHistory.length ? (
+                                <button type="button" onClick={clearProductSearchHistory} className="text-[11px] font-bold text-brick hover:underline">
+                                    Xóa hết
+                                </button>
+                            ) : null}
+                        </div>
+                        {productSearchHistory.length ? (
+                            <div className="max-h-[280px] overflow-auto p-1.5">
+                                {productSearchHistory.map((item) => (
+                                    <div key={`product_search_history_${item}`} className="group flex items-center gap-1 rounded-sm px-2 py-1.5 transition hover:bg-primary/[0.04]">
+                                        <button
+                                            type="button"
+                                            onClick={() => applyProductSearchHistoryItem(item)}
+                                            className="min-w-0 flex flex-1 items-center gap-2 text-left text-[12px] font-bold text-primary"
+                                            title={item}
+                                        >
+                                            <span className="material-symbols-outlined text-[16px] text-primary/35">history</span>
+                                            <span className="truncate">{item}</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={(event) => removeProductSearchHistoryItem(item, event)}
+                                            className="inline-flex size-7 shrink-0 items-center justify-center rounded-sm text-primary/35 opacity-0 transition hover:bg-brick/10 hover:text-brick group-hover:opacity-100"
+                                            title="Xóa khỏi lịch sử"
+                                        >
+                                            <span className="material-symbols-outlined text-[17px]">close</span>
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <div className="px-3 py-4 text-[12px] font-semibold text-primary/45">Chưa có lịch sử tìm kiếm.</div>
+                        )}
+                    </div>
+                ) : null}
+            </div>
+            <button
+                type="button"
+                onClick={toggleProductDeclarationMode}
+                className={`inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-sm border px-3 text-[12px] font-black transition ${
+                    productDeclarationModeActive
+                        ? 'border-amber-300 bg-amber-100 text-amber-800 shadow-sm'
+                        : 'border-amber-200 bg-amber-50 text-amber-700 hover:border-amber-300 hover:bg-amber-100'
+                }`}
+                title={productDeclarationModeActive ? 'Tắt chế độ khai báo lọc nhanh' : 'Bật chế độ khai báo sản phẩm lọc nhanh'}
+            >
+                <span className="material-symbols-outlined text-[17px]">star</span>
+                <span className="truncate">{productDeclarationModeActive ? 'Đang khai báo' : 'Khai báo'}</span>
+            </button>
+        </>
     );
 
     const productListColumns = useMemo(
@@ -9548,6 +10342,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                 onClearAllFilters={productFilterChips.length ? clearAllProductFilters : null}
                 toggles={[
                     { id: 'products_refresh', icon: 'refresh', label: 'Làm mới', active: loading.products, disabled: loading.products, disabledTitle: 'Đang làm mới dữ liệu', onClick: refreshProductsTable },
+                    { id: 'products_import_quick_filter', icon: productQuickFilterActive ? 'flash_on' : 'flash_off', label: productQuickFilterActive ? 'Tắt chỉ hiện sản phẩm lọc nhanh' : 'Chỉ hiện sản phẩm lọc nhanh', active: productQuickFilterActive, onClick: toggleProductImportQuickFilter },
                     { id: 'products_tracking', icon: 'trending_up', label: `Mã cần theo dõi ${INVENTORY_TRACKING_WINDOW_DAYS} ngày`, active: productFilters.tracking_mode === '1', onClick: toggleProductTrackingMode },
                     { id: 'products_filters', icon: 'filter_alt', label: 'Bộ lọc', active: openPanels.products.filters, onClick: () => togglePanel('products', 'filters') },
                     { id: 'products_stats', icon: 'monitoring', label: 'Thống kê', active: openPanels.products.stats, onClick: () => togglePanel('products', 'stats') },
@@ -9593,7 +10388,6 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                                     Lưu
                                 </button>
                             )}
-                            <button type="button" onClick={() => applyProductFilters(productFilters)} className={primaryButton}>Lọc</button>
                         </>
                     )}
                 >
@@ -9666,8 +10460,8 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                             type="text"
                             inputMode="decimal"
                             value={productFilters.tracking_daily_min}
-                            onChange={(event) => updateProductFilterValue('tracking_daily_min', normalizeDecimalFilterDraft(event.target.value))}
-                            onBlur={() => setProductFilters((prev) => normalizeProductFilters({ ...prev, tracking_daily_min: prev.tracking_daily_min || defaultProductFilters.tracking_daily_min }))}
+                            onChange={(event) => updateProductFilterValue('tracking_daily_min', normalizeDecimalFilterDraft(event.target.value), { autoApply: false })}
+                            onBlur={() => updateProductFilterValue('tracking_daily_min', productFilters.tracking_daily_min || defaultProductFilters.tracking_daily_min)}
                             placeholder="TB/ngày từ 1"
                             className={`w-[105px] shrink-0 ${inputClass}`}
                             title="Lọc mã có TB/ngày từ số này trở lên"
@@ -9694,6 +10488,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                 sortConfig={sortConfigs.products}
                 onSort={(columnId) => handleTableSort('products', columnId)}
                 sortColumnMap={inventorySortColumnMaps.products}
+                summaryCells={productTableSummaryCells}
                 wrapperClassName="flex min-h-0 flex-1 flex-col"
                 viewportClassName={stretchedTableViewportClass}
                 headerTextClassName="text-[14px]"
@@ -10013,22 +10808,39 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         [slipSelectionStates.trash]
     );
     const buildImportPrintDocument = (form) => {
+        const supplierName = form?.supplier_name
+            || suppliers.find((supplier) => String(supplier.id) === String(form?.supplier_id))?.name
+            || 'Tất cả sản phẩm';
         const printableItems = (form?.items || [])
             .filter((item) => Number(item.product_id || 0) > 0)
-            .map((item) => ({
-                ...item,
-                quantity: Number(item.quantity || 0),
-                received_quantity: Number(item.received_quantity ?? 0),
-                unit_cost: Number(item.unit_cost || 0),
-            }));
+            .map((item) => {
+                const storageLocation = normalizeImportStorageLocation(item);
+                const quantity = Number(item.quantity || 0);
+                const receivedQuantity = Number(item.received_quantity ?? 0);
+                const quantityToPutaway = resolveImportPutawayQuantity({
+                    ...item,
+                    quantity,
+                    received_quantity: receivedQuantity,
+                });
+
+                return {
+                    ...item,
+                    supplier_name: supplierName,
+                    quantity,
+                    received_quantity: receivedQuantity,
+                    quantity_to_putaway: quantityToPutaway,
+                    unit_cost: Number(item.unit_cost || 0),
+                    storage_location: storageLocation,
+                    storage_location_label: storageLocation?.location_label || item.storage_location_label || '',
+                    warehouse_sequence: item.warehouse_sequence ?? storageLocation?.warehouse_sequence ?? '',
+                    putaway_sort_key: buildImportStorageLocationSortKey(storageLocation, item),
+                };
+            });
         const subtotal = printableItems.reduce((sum, item) => sum + (Number(item.quantity || 0) * Number(item.unit_cost || 0)), 0);
         const surchargeState = parseImportSurchargeFields({
             amountInput: form?.extra_charge_amount_input,
             percentInput: form?.extra_charge_percent_input,
         }, subtotal);
-        const supplierName = form?.supplier_name
-            || suppliers.find((supplier) => String(supplier.id) === String(form?.supplier_id))?.name
-            || 'Tất cả sản phẩm';
 
         return {
             importNumber: form?.import_number || '',
@@ -10057,6 +10869,14 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         documentCount: importPrintDocuments.length,
         lineCount: importPrintDocuments.reduce((sum, document) => sum + Number(document.items.length || 0), 0),
         total: importPrintDocuments.reduce((sum, document) => sum + Number(document.total || 0), 0),
+    }), [importPrintDocuments]);
+    const importPutawaySummary = useMemo(() => ({
+        quantity: importPrintDocuments.reduce((sum, document) => (
+            sum + document.items.reduce((itemSum, item) => itemSum + Number(item.quantity_to_putaway ?? item.quantity ?? 0), 0)
+        ), 0),
+        missingLocationCount: importPrintDocuments.reduce((sum, document) => (
+            sum + document.items.filter((item) => !item.storage_location).length
+        ), 0),
     }), [importPrintDocuments]);
     const selectedImportPrintCount = importPrintSummary.documentCount || selectedImportRows.length;
     const importDetailDocument = useMemo(
@@ -10094,12 +10914,18 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         [importPrintColumnIds]
     );
     const importPrintPreviewHtml = useMemo(
-        () => buildImportPrintHtml({
-            printedAt: importPrintPreviewPrintedAt,
-            columns: importPrintSelectedColumns,
-            documents: importPrintDocuments,
-        }),
+        () => (importPrintMode === IMPORT_PRINT_MODE_PUTAWAY
+            ? buildImportPutawayPrintHtml({
+                printedAt: importPrintPreviewPrintedAt,
+                documents: importPrintDocuments,
+            })
+            : buildImportPrintHtml({
+                printedAt: importPrintPreviewPrintedAt,
+                columns: importPrintSelectedColumns,
+                documents: importPrintDocuments,
+            })),
         [
+            importPrintMode,
             importPrintPreviewPrintedAt,
             importPrintSelectedColumns,
             importPrintDocuments,
@@ -10648,7 +11474,69 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                     )}
                 </div>
             </ModalShell>
-            <ModalShell open={supplierModal.open} title={supplierModal.form.id ? 'Sửa nhà cung cấp' : 'Thêm nhà cung cấp'} onClose={() => setSupplierModal({ open: false, form: createSupplierForm() })} maxWidth="max-w-3xl" footer={<div className="flex justify-end gap-2"><button type="button" onClick={() => setSupplierModal({ open: false, form: createSupplierForm() })} className={ghostButton}>Hủy</button><button type="button" onClick={saveSupplier} className={primaryButton} disabled={loading.supplierModal}>{loading.supplierModal ? 'Đang lưu' : 'Lưu nhà cung cấp'}</button></div>}><div className="grid gap-3 md:grid-cols-2"><input value={supplierModal.form.code} onChange={(event) => setSupplierModal((prev) => ({ ...prev, form: { ...prev.form, code: event.target.value } }))} placeholder="Mã nhà cung cấp" className={inputClass} /><input value={supplierModal.form.name} onChange={(event) => setSupplierModal((prev) => ({ ...prev, form: { ...prev.form, name: event.target.value } }))} placeholder="Tên nhà cung cấp" className={inputClass} /><input value={supplierModal.form.phone} onChange={(event) => setSupplierModal((prev) => ({ ...prev, form: { ...prev.form, phone: event.target.value } }))} placeholder="Số điện thoại" className={inputClass} /><input value={supplierModal.form.email} onChange={(event) => setSupplierModal((prev) => ({ ...prev, form: { ...prev.form, email: event.target.value } }))} placeholder="Email" className={inputClass} /><input value={supplierModal.form.address} onChange={(event) => setSupplierModal((prev) => ({ ...prev, form: { ...prev.form, address: event.target.value } }))} placeholder="Địa chỉ" className={`md:col-span-2 ${inputClass}`} /><textarea value={supplierModal.form.notes} onChange={(event) => setSupplierModal((prev) => ({ ...prev, form: { ...prev.form, notes: event.target.value } }))} placeholder="Ghi chú" className="min-h-[120px] rounded-sm border border-primary/15 p-3 text-[13px] outline-none focus:border-primary md:col-span-2" /><label className="inline-flex items-center gap-2 text-[13px] font-semibold text-primary"><input type="checkbox" checked={supplierModal.form.status} onChange={(event) => setSupplierModal((prev) => ({ ...prev, form: { ...prev.form, status: event.target.checked } }))} className="size-4 accent-primary" />Đang sử dụng</label></div></ModalShell>
+            <ModalShell
+                open={supplierModal.open}
+                title={supplierModal.form.id ? 'Sửa nhà cung cấp' : 'Thêm nhà cung cấp'}
+                onClose={closeSupplierModal}
+                maxWidth="max-w-3xl"
+                backdropClassName="fixed inset-0 z-[140] flex items-center justify-center bg-black/35 p-4"
+                footer={(
+                    <div className="flex justify-end gap-2">
+                        <button type="button" onClick={closeSupplierModal} className={ghostButton}>Hủy</button>
+                        <button type="button" onClick={saveSupplier} className={primaryButton} disabled={loading.supplierModal}>
+                            {loading.supplierModal ? 'Đang lưu' : 'Lưu nhà cung cấp'}
+                        </button>
+                    </div>
+                )}
+            >
+                <div className="grid gap-3 md:grid-cols-2">
+                    <input
+                        value={supplierModal.form.code}
+                        onChange={(event) => setSupplierModal((prev) => ({ ...prev, form: { ...prev.form, code: event.target.value } }))}
+                        placeholder="Mã nhà cung cấp"
+                        className={inputClass}
+                    />
+                    <input
+                        value={supplierModal.form.name}
+                        onChange={(event) => setSupplierModal((prev) => ({ ...prev, form: { ...prev.form, name: event.target.value } }))}
+                        placeholder="Tên nhà cung cấp"
+                        className={inputClass}
+                    />
+                    <input
+                        value={supplierModal.form.phone}
+                        onChange={(event) => setSupplierModal((prev) => ({ ...prev, form: { ...prev.form, phone: event.target.value } }))}
+                        placeholder="Số điện thoại"
+                        className={inputClass}
+                    />
+                    <input
+                        value={supplierModal.form.email}
+                        onChange={(event) => setSupplierModal((prev) => ({ ...prev, form: { ...prev.form, email: event.target.value } }))}
+                        placeholder="Email"
+                        className={inputClass}
+                    />
+                    <input
+                        value={supplierModal.form.address}
+                        onChange={(event) => setSupplierModal((prev) => ({ ...prev, form: { ...prev.form, address: event.target.value } }))}
+                        placeholder="Địa chỉ"
+                        className={`md:col-span-2 ${inputClass}`}
+                    />
+                    <textarea
+                        value={supplierModal.form.notes}
+                        onChange={(event) => setSupplierModal((prev) => ({ ...prev, form: { ...prev.form, notes: event.target.value } }))}
+                        placeholder="Ghi chú"
+                        className="min-h-[120px] rounded-sm border border-primary/15 p-3 text-[13px] outline-none focus:border-primary md:col-span-2"
+                    />
+                    <label className="inline-flex items-center gap-2 text-[13px] font-semibold text-primary">
+                        <input
+                            type="checkbox"
+                            checked={supplierModal.form.status}
+                            onChange={(event) => setSupplierModal((prev) => ({ ...prev, form: { ...prev.form, status: event.target.checked } }))}
+                            className="size-4 accent-primary"
+                        />
+                        Đang sử dụng
+                    </label>
+                </div>
+            </ModalShell>
             <ModalShell
                 open={importModal.open}
                 title={importModal.form.id ? 'Sửa phiếu nhập' : 'Tạo phiếu nhập'}
@@ -10685,10 +11573,21 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                     <div className="grid items-end gap-3 md:grid-cols-2 xl:grid-cols-[repeat(4,minmax(0,1fr))_44px_44px_44px_repeat(2,minmax(0,1fr))]">
                         <div className="min-w-0">
                             <div className={importFieldLabelClass}>Nhà cung cấp</div>
-                            <select value={importModal.form.supplier_id} onChange={(event) => handleImportSupplierChange(event.target.value)} className={`w-full ${importSelectClass} h-11`}>
-                                <option value="">Tất cả sản phẩm</option>
-                                {suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}
-                            </select>
+                            <div className="flex min-w-0 gap-2">
+                                <select value={importModal.form.supplier_id} onChange={(event) => handleImportSupplierChange(event.target.value)} className={`min-w-0 flex-1 ${importSelectClass} h-11`}>
+                                    <option value="">Tất cả sản phẩm</option>
+                                    {suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}
+                                </select>
+                                <button
+                                    type="button"
+                                    onClick={openCreateSupplierFromImport}
+                                    className="inline-flex h-11 shrink-0 items-center justify-center gap-1.5 rounded-sm border border-primary/15 bg-white px-3 text-[12px] font-black text-primary transition hover:border-primary hover:bg-primary/5"
+                                    title="Thêm nhà cung cấp mới"
+                                >
+                                    <span className="material-symbols-outlined text-[18px]">add</span>
+                                    <span className="hidden sm:inline">Thêm NCC</span>
+                                </button>
+                            </div>
                         </div>
 
                         <div className="min-w-0">
@@ -11127,142 +12026,243 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                 footer={(
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                         <div className="text-[12px] font-semibold text-primary/65">
-                            {formatNumber(importPrintSummary.documentCount)} phiếu • {formatNumber(importPrintSummary.lineCount)} dòng sản phẩm • {formatNumber(importPrintSelectedColumns.length)} cột in
+                            {formatNumber(importPrintSummary.documentCount)} phiếu • {formatNumber(importPrintSummary.lineCount)} dòng sản phẩm
+                            {importPrintMode === IMPORT_PRINT_MODE_PUTAWAY
+                                ? ` • ${formatNumber(importPutawaySummary.quantity)} sản phẩm cần xếp`
+                                : ` • ${formatNumber(importPrintSelectedColumns.length)} cột in`}
                         </div>
                         <div className="flex flex-wrap gap-2">
                             <button type="button" onClick={closeImportPrintModal} className={ghostButton}>Đóng</button>
-                            <button type="button" onClick={() => saveImportPrintTemplate('update')} className={ghostButton} disabled={importPrintSettingsSaving || importPrintLoading}>
-                                {importPrintSettingsSaving ? 'Đang lưu' : 'Lưu mẫu hiện tại'}
-                            </button>
-                            <button type="button" onClick={() => saveImportPrintTemplate('new')} className={ghostButton} disabled={importPrintSettingsSaving || importPrintLoading}>
-                                Lưu thành mẫu mới
-                            </button>
+                            {importPrintMode === IMPORT_PRINT_MODE_STANDARD ? (
+                                <>
+                                    <button type="button" onClick={() => saveImportPrintTemplate('update')} className={ghostButton} disabled={importPrintSettingsSaving || importPrintLoading}>
+                                        {importPrintSettingsSaving ? 'Đang lưu' : 'Lưu mẫu hiện tại'}
+                                    </button>
+                                    <button type="button" onClick={() => saveImportPrintTemplate('new')} className={ghostButton} disabled={importPrintSettingsSaving || importPrintLoading}>
+                                        Lưu thành mẫu mới
+                                    </button>
+                                </>
+                            ) : null}
                             <button type="button" onClick={printImportSheet} className={primaryButton} disabled={importPrintLoading || !importPrintDocuments.length}>
                                 <span className="material-symbols-outlined text-[18px]">print</span>
-                                In theo mẫu đang chọn
+                                {importPrintMode === IMPORT_PRINT_MODE_PUTAWAY ? 'In bảng xếp hàng' : 'In theo mẫu đang chọn'}
                             </button>
                         </div>
                     </div>
                 )}
             >
-                <div className="grid gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
-                    <div className="space-y-4">
-                        <div className="rounded-sm border border-primary/10 bg-white p-4">
-                            <div className="space-y-3">
-                                <div>
-                                    <div className={importFieldLabelClass}>Mẫu in</div>
-                                    <select
-                                        value={importPrintTemplateId}
-                                        onChange={(event) => applyImportPrintTemplate(event.target.value)}
-                                        className={`w-full ${selectClass}`}
-                                    >
-                                        {importPrintTemplates.map((template) => (
-                                            <option key={template.id} value={template.id}>
-                                                {template.name}{template.locked ? ' (mặc định)' : ''}
-                                            </option>
-                                        ))}
-                                    </select>
-                                </div>
-
-                                <div>
-                                    <div className={importFieldLabelClass}>Tên mẫu</div>
-                                    <input
-                                        value={importPrintTemplateName}
-                                        onChange={(event) => setImportPrintTemplateName(event.target.value)}
-                                        className={`w-full ${inputClass}`}
-                                        placeholder="Ví dụ: Bản chính"
-                                    />
-                                </div>
-
-                                <button type="button" onClick={() => applyImportPrintTemplate(IMPORT_PRINT_DEFAULT_TEMPLATE_ID)} className={ghostButton}>
-                                    Trả về mẫu mặc định
-                                </button>
-
-                                <div className="rounded-sm border border-primary/10 bg-[#f8fafc] px-3 py-2.5 text-[12px] text-primary/70">
-                                    <div>Nguồn in: <span className="font-bold text-primary">{importPrintSource.mode === 'selected' ? (importPrintSummary.documentCount > 1 ? `${formatNumber(importPrintSummary.documentCount)} phiếu đã chọn` : 'Phiếu nhập đã chọn') : importPrintSource.mode === 'detail' ? 'Popup chi tiết phiếu nhập' : 'Popup tạo / sửa phiếu nhập'}</span></div>
-                                    <div className="mt-1">Nhà cung cấp: <span className="font-bold text-primary">{importPrintSummary.documentCount === 1 ? (importPrintDocuments[0]?.supplierName || '-') : 'Nhiều nhà cung cấp'}</span></div>
-                                    <div className="mt-1">Ngày giờ preview: <span className="font-bold text-primary">{formatDateTime(importPrintPreviewPrintedAt)}</span></div>
-                                    <div className="mt-1">Số phiếu / tổng tiền: <span className="font-bold text-primary">{formatNumber(importPrintSummary.documentCount)} / {formatCurrency(importPrintSummary.total)}</span></div>
-                                    {importPrintLoading ? <div className="mt-1 text-primary/55">Đang chuẩn bị dữ liệu in...</div> : null}
-                                    {importPrintSettingsLoading ? <div className="mt-1 text-primary/55">Đang tải mẫu in đã lưu...</div> : null}
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="rounded-sm border border-primary/10 bg-white p-4">
-                            <div className="flex items-center justify-between gap-3">
-                                <div>
-                                    <div className="text-[13px] font-black text-primary">Phiếu đang in</div>
-                                    <div className="text-[12px] text-primary/55">Mỗi phiếu sẽ in trên trang A4 riêng với đúng nhà cung cấp và dữ liệu sản phẩm.</div>
-                                </div>
-                                <div className="text-right text-[12px] font-semibold text-primary/60">
-                                    {formatNumber(importPrintSummary.documentCount)} phiếu
-                                </div>
-                            </div>
-
-                            <div className="mt-3 max-h-56 space-y-2 overflow-auto">
-                                {!importPrintDocuments.length ? (
-                                    <div className="rounded-sm border border-dashed border-primary/15 px-3 py-3 text-[12px] text-primary/55">Chưa có phiếu nhập để xem trước.</div>
-                                ) : importPrintDocuments.map((document, index) => (
-                                    <div key={`${document.importNumber || 'print'}_${index}`} className="rounded-sm border border-primary/10 bg-[#f8fafc] px-3 py-2.5 text-[12px] text-primary/70">
-                                        <div className="font-black text-primary">{document.importNumber || `Phiếu ${index + 1}`}</div>
-                                        <div className="mt-1 truncate">{document.supplierName}</div>
-                                        <div className="mt-1">{formatNumber(document.items.length)} dòng • {formatCurrency(document.total)}</div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-
-                        <div className="rounded-sm border border-primary/10 bg-white p-4">
-                            <div className="flex items-center justify-between gap-3">
-                                <div>
-                                    <div className="text-[13px] font-black text-primary">Cột cần in</div>
-                                    <div className="text-[12px] text-primary/55">Tick chọn các cột xuất hiện trên bản in A4.</div>
-                                </div>
-                                <div className="text-right text-[12px] font-semibold text-primary/60">
-                                    {formatNumber(importPrintSelectedColumns.length)} / {formatNumber(importPrintColumns.length)} cột
-                                </div>
-                            </div>
-
-                            <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                                {importPrintColumns.map((column) => (
-                                    <label key={column.id} className="flex items-center gap-2 rounded-sm border border-primary/10 px-3 py-2 text-[13px] font-semibold text-primary transition hover:border-primary/25 hover:bg-primary/[0.03]">
-                                        <input
-                                            type="checkbox"
-                                            checked={importPrintColumnIds.includes(column.id)}
-                                            onChange={() => toggleImportPrintColumn(column.id)}
-                                            className="size-4 accent-primary"
-                                        />
-                                        <span>{column.label}</span>
-                                    </label>
-                                ))}
-                            </div>
-                        </div>
+                <div className="space-y-4">
+                    <div className="flex flex-wrap items-center gap-2 rounded-sm border border-primary/10 bg-[#f8fafc] p-1.5">
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setImportPrintMode(IMPORT_PRINT_MODE_PUTAWAY);
+                                setImportPrintPreviewPrintedAt(new Date().toISOString());
+                            }}
+                            className={`inline-flex h-9 items-center justify-center gap-1.5 rounded-sm px-3 text-[12px] font-black transition ${
+                                importPrintMode === IMPORT_PRINT_MODE_PUTAWAY
+                                    ? 'bg-primary text-white shadow-sm'
+                                    : 'bg-white text-primary hover:bg-primary/5'
+                            }`}
+                        >
+                            <span className="material-symbols-outlined text-[18px]">shelves</span>
+                            Xếp hàng
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setImportPrintMode(IMPORT_PRINT_MODE_STANDARD);
+                                setImportPrintPreviewPrintedAt(new Date().toISOString());
+                            }}
+                            className={`inline-flex h-9 items-center justify-center gap-1.5 rounded-sm px-3 text-[12px] font-black transition ${
+                                importPrintMode === IMPORT_PRINT_MODE_STANDARD
+                                    ? 'bg-primary text-white shadow-sm'
+                                    : 'bg-white text-primary hover:bg-primary/5'
+                            }`}
+                        >
+                            <span className="material-symbols-outlined text-[18px]">receipt_long</span>
+                            Phiếu nhập
+                        </button>
                     </div>
 
-                    <div className="space-y-3">
-                        <div className="flex items-center justify-between gap-3 rounded-sm border border-primary/10 bg-[#f8fafc] px-4 py-3">
-                            <div>
-                                <div className="text-[13px] font-black text-primary">Xem trước bản in</div>
-                                <div className="text-[12px] text-primary/55">Tối ưu cho khổ giấy A4, tự chuyển ngang khi số cột quá nhiều.</div>
+                    <div className="grid gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
+                        <div className="space-y-4">
+                            {importPrintMode === IMPORT_PRINT_MODE_STANDARD ? (
+                                <div className="rounded-sm border border-primary/10 bg-white p-4">
+                                    <div className="space-y-3">
+                                        <div>
+                                            <div className={importFieldLabelClass}>Mẫu in</div>
+                                            <select
+                                                value={importPrintTemplateId}
+                                                onChange={(event) => applyImportPrintTemplate(event.target.value)}
+                                                className={`w-full ${selectClass}`}
+                                            >
+                                                {importPrintTemplates.map((template) => (
+                                                    <option key={template.id} value={template.id}>
+                                                        {template.name}{template.locked ? ' (mặc định)' : ''}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </div>
+
+                                        <div>
+                                            <div className={importFieldLabelClass}>Tên mẫu</div>
+                                            <input
+                                                value={importPrintTemplateName}
+                                                onChange={(event) => setImportPrintTemplateName(event.target.value)}
+                                                className={`w-full ${inputClass}`}
+                                                placeholder="Ví dụ: Bản chính"
+                                            />
+                                        </div>
+
+                                        <button type="button" onClick={() => applyImportPrintTemplate(IMPORT_PRINT_DEFAULT_TEMPLATE_ID)} className={ghostButton}>
+                                            Trả về mẫu mặc định
+                                        </button>
+
+                                        <div className="rounded-sm border border-primary/10 bg-[#f8fafc] px-3 py-2.5 text-[12px] text-primary/70">
+                                            <div>Nguồn in: <span className="font-bold text-primary">{importPrintSource.mode === 'selected' ? (importPrintSummary.documentCount > 1 ? `${formatNumber(importPrintSummary.documentCount)} phiếu đã chọn` : 'Phiếu nhập đã chọn') : importPrintSource.mode === 'detail' ? 'Popup chi tiết phiếu nhập' : 'Popup tạo / sửa phiếu nhập'}</span></div>
+                                            <div className="mt-1">Nhà cung cấp: <span className="font-bold text-primary">{importPrintSummary.documentCount === 1 ? (importPrintDocuments[0]?.supplierName || '-') : 'Nhiều nhà cung cấp'}</span></div>
+                                            <div className="mt-1">Ngày giờ preview: <span className="font-bold text-primary">{formatDateTime(importPrintPreviewPrintedAt)}</span></div>
+                                            <div className="mt-1">Số phiếu / tổng tiền: <span className="font-bold text-primary">{formatNumber(importPrintSummary.documentCount)} / {formatCurrency(importPrintSummary.total)}</span></div>
+                                            {importPrintLoading ? <div className="mt-1 text-primary/55">Đang chuẩn bị dữ liệu in...</div> : null}
+                                            {importPrintSettingsLoading ? <div className="mt-1 text-primary/55">Đang tải mẫu in đã lưu...</div> : null}
+                                        </div>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="rounded-sm border border-primary/10 bg-white p-4">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <div>
+                                            <div className="text-[13px] font-black text-primary">Bảng xếp hàng</div>
+                                            <div className="text-[12px] text-primary/55">Tên, mã, số lượng và vị trí xếp.</div>
+                                        </div>
+                                        <span className="material-symbols-outlined text-[24px] text-primary/35">shelves</span>
+                                    </div>
+
+                                    <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-[12px]">
+                                        <div>
+                                            <dt className="font-bold text-primary/45">Số lượng</dt>
+                                            <dd className="mt-0.5 text-[16px] font-black text-primary">{formatNumber(importPutawaySummary.quantity)}</dd>
+                                        </div>
+                                        <div>
+                                            <dt className="font-bold text-primary/45">Chưa vị trí</dt>
+                                            <dd className={`mt-0.5 text-[16px] font-black ${importPutawaySummary.missingLocationCount > 0 ? 'text-amber-600' : 'text-primary'}`}>
+                                                {formatNumber(importPutawaySummary.missingLocationCount)}
+                                            </dd>
+                                        </div>
+                                    </dl>
+
+                                    <div className="mt-3 flex flex-wrap gap-1.5">
+                                        {importPutawayPrintColumns.filter((column) => column.id !== 'stt').map((column) => (
+                                            <span key={column.id} className="rounded-sm border border-primary/10 bg-[#f8fafc] px-2 py-1 text-[11px] font-bold text-primary/65">
+                                                {column.label}
+                                            </span>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            <div className="rounded-sm border border-primary/10 bg-white p-4">
+                                <div className="flex items-center justify-between gap-3">
+                                    <div>
+                                        <div className="text-[13px] font-black text-primary">Phiếu đang in</div>
+                                        <div className="text-[12px] text-primary/55">
+                                            {importPrintMode === IMPORT_PRINT_MODE_PUTAWAY
+                                                ? 'Bảng xếp hàng in A4 dọc theo từng phiếu.'
+                                                : 'Mỗi phiếu sẽ in trên trang A4 riêng với đúng nhà cung cấp và dữ liệu sản phẩm.'}
+                                        </div>
+                                    </div>
+                                    <div className="text-right text-[12px] font-semibold text-primary/60">
+                                        {formatNumber(importPrintSummary.documentCount)} phiếu
+                                    </div>
+                                </div>
+
+                                <div className="mt-3 max-h-56 space-y-2 overflow-auto">
+                                    {!importPrintDocuments.length ? (
+                                        <div className="rounded-sm border border-dashed border-primary/15 px-3 py-3 text-[12px] text-primary/55">Chưa có phiếu nhập để xem trước.</div>
+                                    ) : importPrintDocuments.map((document, index) => (
+                                        <div key={`${document.importNumber || 'print'}_${index}`} className="rounded-sm border border-primary/10 bg-[#f8fafc] px-3 py-2.5 text-[12px] text-primary/70">
+                                            <div className="font-black text-primary">{document.importNumber || `Phiếu ${index + 1}`}</div>
+                                            <div className="mt-1 truncate">{document.supplierName}</div>
+                                            <div className="mt-1">
+                                                {formatNumber(document.items.length)} dòng
+                                                {importPrintMode === IMPORT_PRINT_MODE_PUTAWAY
+                                                    ? ` • ${formatNumber(document.items.reduce((sum, item) => sum + Number(item.quantity_to_putaway ?? item.quantity ?? 0), 0))} sản phẩm`
+                                                    : ` • ${formatCurrency(document.total)}`}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
                             </div>
-                            <div className="text-right text-[12px] text-primary/60">
-                                <div>{formatNumber(importPrintSummary.documentCount)} phiếu • {formatNumber(importPrintSummary.lineCount)} dòng</div>
-                                <div>{formatCurrency(importPrintSummary.total)} tổng tiền in</div>
-                            </div>
+
+                            {importPrintMode === IMPORT_PRINT_MODE_STANDARD ? (
+                                <div className="rounded-sm border border-primary/10 bg-white p-4">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <div>
+                                            <div className="text-[13px] font-black text-primary">Cột cần in</div>
+                                            <div className="text-[12px] text-primary/55">Tick chọn các cột xuất hiện trên bản in A4.</div>
+                                        </div>
+                                        <div className="text-right text-[12px] font-semibold text-primary/60">
+                                            {formatNumber(importPrintSelectedColumns.length)} / {formatNumber(importPrintColumns.length)} cột
+                                        </div>
+                                    </div>
+
+                                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                                        {importPrintColumns.map((column) => (
+                                            <label key={column.id} className="flex items-center gap-2 rounded-sm border border-primary/10 px-3 py-2 text-[13px] font-semibold text-primary transition hover:border-primary/25 hover:bg-primary/[0.03]">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={importPrintColumnIds.includes(column.id)}
+                                                    onChange={() => toggleImportPrintColumn(column.id)}
+                                                    className="size-4 accent-primary"
+                                                />
+                                                <span>{column.label}</span>
+                                            </label>
+                                        ))}
+                                    </div>
+                                </div>
+                            ) : null}
                         </div>
 
-                        {importPrintLoading ? (
-                            <div className="flex h-[62vh] items-center justify-center rounded-sm border border-primary/10 bg-white text-[13px] font-semibold text-primary/60">
-                                Đang chuẩn bị bản xem trước...
+                        <div className="space-y-3">
+                            <div className="flex items-center justify-between gap-3 rounded-sm border border-primary/10 bg-[#f8fafc] px-4 py-3">
+                                <div>
+                                    <div className="text-[13px] font-black text-primary">
+                                        {importPrintMode === IMPORT_PRINT_MODE_PUTAWAY ? 'Xem trước bảng xếp hàng' : 'Xem trước bản in'}
+                                    </div>
+                                    <div className="text-[12px] text-primary/55">
+                                        {importPrintMode === IMPORT_PRINT_MODE_PUTAWAY
+                                            ? 'A4 dọc, sắp theo kệ và tầng.'
+                                            : 'Tối ưu cho khổ giấy A4, tự chuyển ngang khi số cột quá nhiều.'}
+                                    </div>
+                                </div>
+                                <div className="text-right text-[12px] text-primary/60">
+                                    <div>{formatNumber(importPrintSummary.documentCount)} phiếu • {formatNumber(importPrintSummary.lineCount)} dòng</div>
+                                    {importPrintMode === IMPORT_PRINT_MODE_PUTAWAY ? (
+                                        <>
+                                            <div>{formatNumber(importPutawaySummary.quantity)} sản phẩm cần xếp</div>
+                                            {importPutawaySummary.missingLocationCount > 0 ? (
+                                                <div className="font-bold text-amber-600">{formatNumber(importPutawaySummary.missingLocationCount)} dòng chưa có vị trí</div>
+                                            ) : null}
+                                        </>
+                                    ) : (
+                                        <div>{formatCurrency(importPrintSummary.total)} tổng tiền in</div>
+                                    )}
+                                </div>
                             </div>
-                        ) : (
-                            <iframe
-                                title="Xem trước in phiếu nhập"
-                                srcDoc={importPrintPreviewHtml}
-                                className="h-[62vh] w-full rounded-sm border border-primary/10 bg-white"
-                            />
-                        )}
+
+                            {importPrintLoading ? (
+                                <div className="flex h-[62vh] items-center justify-center rounded-sm border border-primary/10 bg-white text-[13px] font-semibold text-primary/60">
+                                    Đang chuẩn bị bản xem trước...
+                                </div>
+                            ) : (
+                                <iframe
+                                    title={importPrintMode === IMPORT_PRINT_MODE_PUTAWAY ? 'Xem trước in bảng xếp hàng' : 'Xem trước in phiếu nhập'}
+                                    srcDoc={importPrintPreviewHtml}
+                                    className="h-[62vh] w-full rounded-sm border border-primary/10 bg-white"
+                                />
+                            )}
+                        </div>
                     </div>
                 </div>
             </ModalShell>

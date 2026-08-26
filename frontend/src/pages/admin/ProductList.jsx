@@ -562,6 +562,170 @@ function isConfigurableVariantChildProduct(product) {
     return Boolean(getConfigurableParentProduct(product));
 }
 
+function normalizeProductListSearchText(value) {
+    return String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[đĐ]/g, 'd')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim()
+        .replace(/\s+/g, ' ');
+}
+
+function productDirectlyMatchesAdminSearch(product, rawSearch) {
+    const normalizedSearch = normalizeProductListSearchText(rawSearch);
+    if (!normalizedSearch) {
+        return false;
+    }
+
+    const searchIndex = normalizeProductListSearchText([
+        product?.name,
+        product?.sku,
+        product?.slug,
+        product?.id,
+        ...(Array.isArray(product?.attribute_values)
+            ? product.attribute_values.map((item) => item?.value)
+            : []),
+    ].filter(Boolean).join(' '));
+
+    if (searchIndex.includes(normalizedSearch)) {
+        return true;
+    }
+
+    const tokens = normalizedSearch.split(' ').filter((token) => token.length >= 2);
+    return tokens.length > 0 && tokens.every((token) => searchIndex.includes(token));
+}
+
+function collapseDirectSearchParentChildren(product, rawSearch) {
+    if (
+        normalizeQuickEditProductType(product?.type) !== 'configurable'
+        || !productDirectlyMatchesAdminSearch(product, rawSearch)
+    ) {
+        return product;
+    }
+
+    return {
+        ...product,
+        variations: undefined,
+        _children_loaded: false,
+    };
+}
+
+function normalizeAdminProductSearchRows(rows = [], rawSearch = '') {
+    const normalizedSearch = normalizeProductListSearchText(rawSearch);
+    const sourceRows = Array.isArray(rows) ? rows : [];
+
+    if (!normalizedSearch) {
+        return sourceRows;
+    }
+
+    const rowById = new Map();
+    sourceRows.forEach((row) => {
+        if (row?.id !== undefined && row?.id !== null) {
+            rowById.set(String(row.id), row);
+        }
+    });
+
+    const childGroups = new Map();
+    sourceRows.forEach((row, index) => {
+        const parentProduct = getConfigurableParentProduct(row);
+        if (!parentProduct?.id || !row?.id) {
+            return;
+        }
+
+        const parentKey = String(parentProduct.id);
+        const group = childGroups.get(parentKey) || {
+            parent: rowById.get(parentKey) || parentProduct,
+            children: [],
+            firstIndex: index,
+        };
+
+        group.parent = rowById.get(parentKey) || group.parent || parentProduct;
+        group.firstIndex = Math.min(group.firstIndex, index);
+
+        if (!group.children.some((child) => String(child?.id) === String(row.id))) {
+            group.children.push(row);
+        }
+
+        childGroups.set(parentKey, group);
+    });
+
+    if (childGroups.size === 0) {
+        return sourceRows.map((row) => collapseDirectSearchParentChildren(row, rawSearch));
+    }
+
+    const outputRows = [];
+    const insertedGroupKeys = new Set();
+
+    const pushParentGroup = (parentKey, fallbackParent = null) => {
+        if (insertedGroupKeys.has(parentKey)) {
+            return;
+        }
+
+        const group = childGroups.get(parentKey);
+        if (!group) {
+            return;
+        }
+
+        insertedGroupKeys.add(parentKey);
+        const parentRow = rowById.get(parentKey) || fallbackParent || group.parent;
+        if (!parentRow?.id) {
+            group.children.forEach((child) => outputRows.push(child));
+            return;
+        }
+
+        const parentMatches = productDirectlyMatchesAdminSearch(parentRow, rawSearch);
+        outputRows.push(collapseDirectSearchParentChildren(parentRow, rawSearch));
+
+        if (!parentMatches) {
+            group.children.forEach((child) => outputRows.push(child));
+        }
+    };
+
+    sourceRows.forEach((row) => {
+        if (!row?.id) {
+            outputRows.push(row);
+            return;
+        }
+
+        const parentProduct = getConfigurableParentProduct(row);
+        if (parentProduct?.id) {
+            const parentKey = String(parentProduct.id);
+            if (!rowById.has(parentKey)) {
+                pushParentGroup(parentKey, {
+                    ...parentProduct,
+                    type: parentProduct.type || 'configurable',
+                    variations: undefined,
+                    _children_loaded: false,
+                });
+            }
+            return;
+        }
+
+        const rowKey = String(row.id);
+        if (childGroups.has(rowKey)) {
+            pushParentGroup(rowKey, row);
+            return;
+        }
+
+        outputRows.push(collapseDirectSearchParentChildren(row, rawSearch));
+    });
+
+    childGroups.forEach((group, parentKey) => {
+        if (!insertedGroupKeys.has(parentKey)) {
+            pushParentGroup(parentKey, {
+                ...group.parent,
+                type: group.parent?.type || 'configurable',
+                variations: undefined,
+                _children_loaded: false,
+            });
+        }
+    });
+
+    return outputRows;
+}
+
 function getProductEditTargetId(product) {
     return getVariantParentProduct(product)?.id || product?.id || null;
 }
@@ -3123,13 +3287,22 @@ const ProductList = () => {
             const params = buildQueryParams(page, normalizedFilters, currentSort, limit, attributeCatalog);
             params.summary = 1;
             const response = await productApi.getAll(params);
-            setProducts(response.data.data);
+            const rawProducts = Array.isArray(response.data?.data) ? response.data.data : [];
+            const normalizedProducts = normalizeAdminProductSearchRows(rawProducts, normalizedFilters.search);
+            const responseTotal = Number(response.data?.total || 0);
+            const normalizedTotal = normalizedFilters.search
+                && responseTotal > normalizedProducts.length
+                && responseTotal <= rawProducts.length
+                ? normalizedProducts.length
+                : responseTotal;
+
+            setProducts(normalizedProducts);
             setExpandedRows([]);
             setLoadingExpandedIds([]);
             setPagination({
                 current_page: response.data.current_page,
                 last_page: response.data.last_page,
-                total: response.data.total,
+                total: normalizedTotal,
                 per_page: parseInt(response.data.per_page)
             });
         } catch (error) { console.error("Error fetching products", error); } finally { setLoading(false); }

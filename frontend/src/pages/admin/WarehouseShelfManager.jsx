@@ -1,5 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { categoryApi, orderApi, productApi, warehouseApi, warehouseShelfApi } from '../../services/api';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { categoryApi, inventoryApi, orderApi, productApi, warehouseApi, warehouseShelfApi } from '../../services/api';
 import { ACTIVE_PRODUCT_TYPE_OPTIONS, PRODUCT_TYPE_LABELS } from '../../config/productTypes';
 
 const panelClass = 'rounded-sm border border-primary/10 bg-white shadow-sm';
@@ -142,6 +143,100 @@ const splitSkuTokens = (value) => normalizeText(value)
     .filter(Boolean);
 
 const normalizeSkuKey = (value) => normalizeText(value).toLowerCase();
+
+const isShelfProductImportStarred = (product) => Boolean(product?.inventory_import_starred);
+
+const normalizeShelfProductSearchText = (value) => String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'd')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+
+const compactShelfProductSearchText = (value) => normalizeShelfProductSearchText(value).replace(/[^a-z0-9]+/g, '');
+
+const splitCompactShelfProductSearchTokens = (value) => Array.from(new Set(
+    (compactShelfProductSearchText(value).match(/[a-z]+|\d+/g) || [])
+        .map((token) => token.trim())
+        .filter((token) => token.length >= 2)
+));
+
+const tokenizeShelfProductSearch = (value) => {
+    const normalizedTokens = normalizeShelfProductSearchText(value)
+        .split(' ')
+        .map((token) => token.trim())
+        .filter((token) => token.length >= 2);
+    const compactTokens = normalizedTokens.length <= 1 ? splitCompactShelfProductSearchTokens(value) : [];
+
+    return Array.from(new Set(
+        compactTokens.length > 1
+            ? compactTokens
+            : [...normalizedTokens, ...compactTokens]
+    )).slice(0, 6);
+};
+
+const flattenSearchTextValue = (value) => {
+    if (value === null || value === undefined) return [];
+    if (Array.isArray(value)) return value.flatMap(flattenSearchTextValue);
+    if (typeof value === 'object') {
+        return [
+            value.value,
+            value.label,
+            value.name,
+            value.title,
+            value.option_title,
+            value.attribute?.name,
+        ].flatMap(flattenSearchTextValue);
+    }
+
+    return [String(value)];
+};
+
+const shelfProductSearchHaystack = (product) => {
+    const values = [
+        product?.display_sku,
+        product?.sku,
+        product?.product_sku,
+        product?.display_name,
+        product?.name,
+        product?.product_name,
+        product?.parent_product_name,
+        product?.parent_product_sku,
+        product?.variant_name,
+        product?.option_label,
+        product?.bundle_option_title,
+        product?.bundle_title,
+        product?.search_keywords,
+        product?.attribute_values,
+        product?.attributeValues,
+    ].flatMap(flattenSearchTextValue);
+
+    return normalizeShelfProductSearchText(values.filter(Boolean).join(' '));
+};
+
+const shelfProductMatchesSearch = (product, rawTerm) => {
+    const query = normalizeShelfProductSearchText(rawTerm);
+    if (!query) return true;
+
+    const haystack = shelfProductSearchHaystack(product);
+    if (!haystack) return false;
+
+    const compactQuery = compactShelfProductSearchText(rawTerm);
+    const compactHaystack = compactShelfProductSearchText(haystack);
+    if (haystack.includes(query) || (compactQuery && compactHaystack.includes(compactQuery))) {
+        return true;
+    }
+
+    const tokens = tokenizeShelfProductSearch(rawTerm);
+    if (tokens.length === 0) return true;
+
+    return tokens.every((token) => {
+        const compactToken = compactShelfProductSearchText(token);
+        return haystack.includes(token) || (compactToken && compactHaystack.includes(compactToken));
+    });
+};
 
 const parseQuantityNumber = (...values) => {
     for (const value of values) {
@@ -499,27 +594,28 @@ const SequenceManagerModal = ({
     open,
     search,
     rows,
-    drafts,
     loading,
-    savingKey,
     error,
     rowErrors,
     selectedKeys,
+    quickFilterActive,
+    declarationModeActive,
+    starLoadingProductIds = [],
     categoryOptions = [],
     filterAttributes,
     filters,
     filterPills,
     filterCount,
     activeFilterAttribute,
+    activeFilterAttribute2,
     activeFilterAttribute2Options,
-    quickSetupOpen,
     onSearchChange,
-    onDraftChange,
-    onSave,
     onReload,
     onFilterChange,
     onResetFilters,
-    onToggleQuickSetup,
+    onToggleQuickFilter,
+    onBeginDeclaration,
+    onToggleImportStar,
     onToggleRow,
     onToggleAllRows,
     onPrintSelected,
@@ -533,14 +629,13 @@ const SequenceManagerModal = ({
     const visibleKeys = rows.map((row) => row.sequence_key || buildSequenceRowKey(row)).filter(Boolean);
     const allVisibleSelected = visibleKeys.length > 0 && visibleKeys.every((key) => selectedKeySet.has(key));
     const selectedCount = Number.isFinite(selectedPrintCount) ? selectedPrintCount : selectedKeySet.size;
-    const activeFilterBadge = filterCount > 0 ? `${filterCount} lọc` : 'Chưa lọc';
 
     return (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm">
-            <div className="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-sm border border-gold/25 bg-[#fcfcfa] shadow-2xl">
-                <div className="flex items-center justify-between bg-primary px-6 py-4 text-white">
+        <div className="fixed inset-0 z-[110] flex items-stretch justify-center bg-slate-950/55 p-0 backdrop-blur-sm lg:items-center lg:p-4">
+            <div className="flex h-full w-full flex-col overflow-hidden rounded-none border-0 border-gold/25 bg-[#fcfcfa] shadow-2xl lg:h-auto lg:max-h-[92vh] lg:max-w-6xl lg:rounded-sm lg:border">
+                <div className="flex items-center justify-between bg-primary px-4 py-3 text-white lg:px-6 lg:py-4">
                     <div className="min-w-0">
-                        <h2 className="truncate text-lg font-black uppercase tracking-[0.08em]">Quản lý số thứ tự</h2>
+                        <h2 className="truncate text-[16px] font-black uppercase tracking-[0.08em] lg:text-lg">Quản lý số thứ tự</h2>
                         <p className="mt-1 text-[10px] font-bold uppercase tracking-[0.2em] text-white/45">{rows.length} dòng sản phẩm</p>
                     </div>
                     <button type="button" onClick={onClose} className="inline-flex size-10 items-center justify-center rounded-sm text-white/70 transition hover:bg-white/10 hover:text-white" title="Đóng">
@@ -548,7 +643,7 @@ const SequenceManagerModal = ({
                     </button>
                 </div>
 
-                <div className="border-b border-primary/10 bg-[#fbfaf6] px-4 py-3">
+                <div className="border-b border-primary/10 bg-[#fbfaf6] px-3 py-3 lg:px-4">
                     <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
                         <div className="relative min-w-0 xl:w-[460px]">
                             <span className="material-symbols-outlined pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-primary/35">search</span>
@@ -556,7 +651,7 @@ const SequenceManagerModal = ({
                                 value={search}
                                 onChange={(event) => onSearchChange(event.target.value)}
                                 className={`${inputClass} w-full pl-10 pr-10`}
-                                placeholder="Tìm STT, SKU, tên sản phẩm..."
+                                placeholder="Gõ mã hoặc tên sản phẩm..."
                             />
                             {search ? (
                                 <button
@@ -570,24 +665,33 @@ const SequenceManagerModal = ({
                             ) : null}
                         </div>
 
-                        <div className="flex flex-wrap items-center gap-2">
-                            <span className={`inline-flex h-9 items-center gap-1.5 rounded-full border px-3 text-[11px] font-black uppercase tracking-[0.12em] ${filterCount > 0 ? 'border-green-200 bg-green-50 text-green-700' : 'border-primary/10 bg-white text-primary/45'}`}>
-                                <span className="material-symbols-outlined text-[14px]">{filterCount > 0 ? 'flash_on' : 'flash_off'}</span>
-                                {filterCount > 0 ? 'Đang bật' : activeFilterBadge}
-                            </span>
+                        <div className="custom-scrollbar -mx-1 flex items-center gap-2 overflow-x-auto px-1 pb-1 lg:mx-0 lg:flex-wrap lg:overflow-visible lg:px-0 lg:pb-0">
                             <button
                                 type="button"
-                                onClick={onToggleQuickSetup}
-                                className="inline-flex h-9 items-center justify-center gap-1.5 rounded-sm border border-primary/10 bg-white px-3 text-[11px] font-black uppercase tracking-[0.12em] text-primary/55 shadow-sm transition hover:border-primary/25 hover:text-primary"
+                                onClick={onToggleQuickFilter}
+                                className={`relative inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-sm border px-3 text-[11px] font-black uppercase tracking-[0.12em] shadow-sm transition ${quickFilterActive ? 'border-green-200 bg-green-50 text-green-700 hover:bg-green-100' : 'border-primary/10 bg-white text-primary/45 hover:border-primary/25 hover:text-primary'}`}
+                                title={quickFilterActive ? 'Tắt lọc sản phẩm đã khai báo' : 'Chỉ hiện sản phẩm đã khai báo lọc nhanh'}
                             >
-                                <span className="material-symbols-outlined text-[15px]">playlist_add</span>
-                                {quickSetupOpen ? 'Đóng' : 'Khai báo DS'}
+                                <span className="material-symbols-outlined text-[15px]">{quickFilterActive ? 'flash_on' : 'flash_off'}</span>
+                                {quickFilterActive ? 'Đang bật' : 'Lọc nhanh'}
+                                <span className={`ml-0.5 rounded-full px-1.5 text-[8px] leading-4 ${quickFilterActive ? 'bg-white text-green-700' : 'bg-primary/10 text-primary/45'}`}>
+                                    {quickFilterActive ? 'ON' : 'OFF'}
+                                </span>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={onBeginDeclaration}
+                                className={`inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-sm border px-3 text-[11px] font-black uppercase tracking-[0.12em] shadow-sm transition ${declarationModeActive ? 'border-amber-300 bg-amber-100 text-amber-800' : 'border-amber-200 bg-amber-50 text-amber-700 hover:border-amber-300 hover:bg-amber-100'}`}
+                                title="Tìm toàn bộ sản phẩm để khai báo vào lọc nhanh"
+                            >
+                                <span className="material-symbols-outlined text-[15px]">star</span>
+                                {declarationModeActive ? 'Đang khai báo' : 'Khai báo'}
                             </button>
                             <button
                                 type="button"
                                 onClick={onPrintSelected}
                                 disabled={selectedCount === 0}
-                                className="inline-flex h-9 items-center justify-center gap-1.5 rounded-sm border border-gold/25 bg-white px-3 text-[11px] font-black uppercase tracking-[0.12em] text-primary shadow-sm transition hover:border-gold hover:bg-gold/5 disabled:cursor-not-allowed disabled:opacity-45"
+                                className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-sm border border-gold/25 bg-white px-3 text-[11px] font-black uppercase tracking-[0.12em] text-primary shadow-sm transition hover:border-gold hover:bg-gold/5 disabled:cursor-not-allowed disabled:opacity-45"
                             >
                                 <span className="material-symbols-outlined text-[15px]">print</span>
                                 In DS {selectedCount > 0 ? selectedCount : ''}
@@ -596,12 +700,12 @@ const SequenceManagerModal = ({
                                 type="button"
                                 onClick={onPrintLabelsSelected}
                                 disabled={selectedCount === 0}
-                                className="inline-flex h-9 items-center justify-center gap-1.5 rounded-sm border border-primary/15 bg-white px-3 text-[11px] font-black uppercase tracking-[0.12em] text-primary shadow-sm transition hover:border-primary/35 hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-45"
+                                className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-sm border border-primary/15 bg-white px-3 text-[11px] font-black uppercase tracking-[0.12em] text-primary shadow-sm transition hover:border-primary/35 hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-45"
                             >
                                 <span className="material-symbols-outlined text-[15px]">label</span>
                                 In tem {selectedCount > 0 ? selectedCount : ''}
                             </button>
-                            <button type="button" onClick={onReload} disabled={loading} className={ghostButton}>
+                            <button type="button" onClick={onReload} disabled={loading} className={`${ghostButton} shrink-0`}>
                                 <span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-spin' : ''}`}>{loading ? 'progress_activity' : 'refresh'}</span>
                                 Tải lại
                             </button>
@@ -609,28 +713,6 @@ const SequenceManagerModal = ({
                     </div>
 
                     <div className="mt-3 flex flex-wrap items-center gap-2">
-                        <select
-                            value={filters.type}
-                            onChange={(event) => onFilterChange('type', event.target.value)}
-                            className={`${inputClass} min-w-[150px] flex-1 xl:flex-none`}
-                        >
-                            {shelfProductTypeOptions.map((option) => (
-                                <option key={option.value || 'all-sequence-type'} value={option.value}>
-                                    {option.label}
-                                </option>
-                            ))}
-                        </select>
-                        <select
-                            value={filters.stock}
-                            onChange={(event) => onFilterChange('stock', event.target.value)}
-                            className={`${inputClass} min-w-[130px] flex-1 xl:flex-none`}
-                        >
-                            {shelfStockFilterOptions.map((option) => (
-                                <option key={option.value || 'all-sequence-stock'} value={option.value}>
-                                    {option.label}
-                                </option>
-                            ))}
-                        </select>
                         <label className="inline-flex h-10 min-w-[150px] flex-1 cursor-pointer select-none items-center gap-2 rounded-sm border border-primary/15 bg-white px-3 text-[12px] font-bold text-primary/70 transition hover:border-primary/30 xl:flex-none">
                             <input
                                 type="checkbox"
@@ -682,7 +764,7 @@ const SequenceManagerModal = ({
                                     ))}
                             </select>
                         ) : null}
-                        {(search || filterCount > 0) ? (
+                        {(search || filterCount > 0 || quickFilterActive || declarationModeActive) ? (
                             <button
                                 type="button"
                                 onClick={onResetFilters}
@@ -743,55 +825,6 @@ const SequenceManagerModal = ({
                             ))}
                         </div>
                     ) : null}
-
-                    {quickSetupOpen ? (
-                        <div className="mt-3 overflow-hidden rounded-sm border border-primary/10 bg-white shadow-sm">
-                            <div className="grid grid-cols-[minmax(180px,1fr)_110px_120px_180px] bg-primary/[0.025] px-3 py-2 text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">
-                                <span>Thuộc tính</span>
-                                <span>Kiểu</span>
-                                <span>Giá trị</span>
-                                <span className="text-right">Khai báo</span>
-                            </div>
-                            <div className="max-h-56 overflow-auto divide-y divide-primary/10">
-                                {filterAttributes.length > 0 ? filterAttributes.map((attribute) => {
-                                    const isPrimary = String(attribute.id) === String(filters.attributeId);
-                                    const isSecondary = String(attribute.id) === String(filters.attributeId2);
-
-                                    return (
-                                        <div key={`sequence-quick-setup-${attribute.id}`} className="grid grid-cols-[minmax(180px,1fr)_110px_120px_180px] items-center gap-2 px-3 py-2 text-[12px]">
-                                            <div className="min-w-0">
-                                                <p className="truncate font-bold text-primary">{attribute.name}</p>
-                                                <p className="mt-0.5 truncate text-[10px] font-semibold text-primary/35">{attribute.code || 'product_attribute'}</p>
-                                            </div>
-                                            <span className="text-[11px] font-bold text-primary/45">{attribute.frontend_type || 'select'}</span>
-                                            <span className="text-[11px] font-bold text-primary/45">{attribute.options?.length || 0} mục</span>
-                                            <div className="flex justify-end gap-1.5">
-                                                <button
-                                                    type="button"
-                                                    onClick={() => onFilterChange('attributeId', attribute.id)}
-                                                    className={`inline-flex h-8 items-center rounded-sm border px-2 text-[10px] font-black uppercase tracking-[0.1em] transition ${isPrimary ? 'border-primary bg-primary text-white' : 'border-primary/10 bg-white text-primary/45 hover:border-primary/25 hover:text-primary'}`}
-                                                >
-                                                    Lọc chính
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => onFilterChange('attributeId2', isSecondary ? '' : attribute.id)}
-                                                    disabled={isPrimary}
-                                                    className={`inline-flex h-8 items-center rounded-sm border px-2 text-[10px] font-black uppercase tracking-[0.1em] transition disabled:cursor-not-allowed disabled:opacity-35 ${isSecondary ? 'border-brick bg-brick text-white' : 'border-primary/10 bg-white text-primary/45 hover:border-brick/20 hover:text-brick'}`}
-                                                >
-                                                    Lọc phụ
-                                                </button>
-                                            </div>
-                                        </div>
-                                    );
-                                }) : (
-                                    <div className="px-3 py-6 text-center text-[12px] font-bold text-primary/35">
-                                        Chưa có thuộc tính lọc nhanh
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    ) : null}
                 </div>
 
                 {error ? (
@@ -800,15 +833,106 @@ const SequenceManagerModal = ({
                     </div>
                 ) : null}
 
-                <div className="min-h-0 flex-1 overflow-auto p-4">
+                <div className="min-h-0 flex-1 overflow-auto p-3 lg:p-4">
                     {loading ? (
                         <div className="flex h-64 items-center justify-center gap-2 text-[13px] font-bold text-primary/45">
                             <span className="material-symbols-outlined animate-spin text-[22px]">progress_activity</span>
                             Đang tải danh sách...
                         </div>
                     ) : rows.length > 0 ? (
-                        <div className="overflow-x-auto rounded-sm border border-primary/10 bg-white">
-                            <table className="min-w-[980px] w-full table-fixed text-left">
+                        <>
+                        <div className="space-y-3 lg:hidden">
+                            {rows.map((product) => {
+                                const key = product.sequence_key || buildSequenceRowKey(product);
+                                const sequence = resolveProductWarehouseSequence(product);
+                                const rowError = rowErrors[key] || '';
+                                const sku = resolveProductSku(product);
+                                const name = resolveProductName(product);
+                                const productId = resolveProductRecordId(product);
+                                const isSelected = selectedKeySet.has(key);
+                                const locationLabel = resolveProductLocationLabel(product);
+                                const importStarred = isShelfProductImportStarred(product);
+                                const starLoading = starLoadingProductIds.includes(productId);
+
+                                return (
+                                    <div
+                                        key={`mobile-${key}`}
+                                        onClick={(event) => {
+                                            if (!declarationModeActive || !productId) return;
+                                            if (event.target?.closest?.('button,input,select,textarea,a')) return;
+                                            onToggleImportStar(product, !importStarred);
+                                        }}
+                                        className={`rounded-[18px] border bg-white p-3 shadow-sm transition ${isSelected ? 'border-gold/35 bg-gold/[0.04]' : 'border-primary/10'} ${declarationModeActive ? 'cursor-pointer' : ''} ${importStarred ? 'shadow-[inset_3px_0_0_0_rgba(245,158,11,0.9),0_16px_34px_-28px_rgba(15,23,42,0.45)]' : ''}`}
+                                    >
+                                        <div className="flex items-start gap-3">
+                                            <input
+                                                type="checkbox"
+                                                checked={isSelected}
+                                                onChange={() => onToggleRow(key, product)}
+                                                className="mt-2 size-4 shrink-0 accent-primary"
+                                                title="Chọn để in"
+                                            />
+                                            <div className="min-w-0 flex-1">
+                                                <div className="flex items-start gap-2">
+                                                    <div
+                                                        className="inline-flex h-10 w-[72px] shrink-0 items-center justify-center rounded-sm border border-gold/25 bg-[#fffaf0] px-2 text-center text-[14px] font-black text-gold"
+                                                        title="STT do phần mềm tự tạo"
+                                                    >
+                                                        {sequence || '-'}
+                                                    </div>
+                                                    <div className="min-w-0 flex-1 pt-0.5">
+                                                        <p className="break-words font-mono text-[11px] font-black leading-snug text-primary">{sku || 'Chưa có SKU'}</p>
+                                                        <p className="mt-1 line-clamp-2 text-[13px] font-black leading-[1.35] text-primary">{name || 'Sản phẩm chưa đặt tên'}</p>
+                                                    </div>
+                                                </div>
+
+                                                {rowError ? (
+                                                    <p className="mt-2 rounded-sm border border-brick/15 bg-brick/5 px-2 py-1.5 text-[11px] font-bold leading-snug text-brick">{rowError}</p>
+                                                ) : null}
+
+                                                <div className="mt-2 flex flex-wrap gap-1.5">
+                                                    <span className="rounded-full border border-primary/10 bg-primary/[0.03] px-2 py-0.5 text-[10px] font-bold text-primary/45">{getProductTypeLabel(product)}</span>
+                                                    {importStarred ? (
+                                                        <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-700">
+                                                            <span className="material-symbols-outlined text-[12px]">star</span>
+                                                            Lọc nhanh
+                                                        </span>
+                                                    ) : null}
+                                                    {product.parent_product_name ? (
+                                                        <span className="rounded-full border border-primary/10 bg-white px-2 py-0.5 text-[10px] font-bold text-primary/45">{product.parent_product_name}</span>
+                                                    ) : null}
+                                                </div>
+
+                                                <div className="mt-3 flex items-center justify-between gap-2">
+                                                    <span className={`inline-flex min-w-0 items-center gap-1.5 rounded-sm border px-2 py-1 text-[11px] font-black ${locationLabel ? 'border-gold/20 bg-gold/5 text-primary' : 'border-primary/10 bg-primary/[0.03] text-primary/35'}`}>
+                                                        <span className="material-symbols-outlined shrink-0 text-[14px] text-gold">shelves</span>
+                                                        <span className="truncate">{locationLabel || 'Chưa gán kệ'}</span>
+                                                    </span>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => onToggleImportStar(product, !importStarred)}
+                                                        disabled={starLoading || !productId}
+                                                        className={`inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-sm border px-2 text-[11px] font-black transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                                                            importStarred
+                                                                ? 'border-amber-200 bg-amber-50 text-amber-700'
+                                                                : 'border-primary/10 bg-white text-primary/45 hover:border-amber-200 hover:bg-amber-50 hover:text-amber-700'
+                                                        }`}
+                                                        title={importStarred ? 'Bỏ khỏi lọc nhanh' : 'Khai báo sản phẩm vào lọc nhanh'}
+                                                    >
+                                                        <span className={`material-symbols-outlined text-[17px] ${starLoading ? 'animate-spin' : ''}`}>{starLoading ? 'progress_activity' : (importStarred ? 'star' : 'star_outline')}</span>
+                                                        {importStarred ? 'Đã lưu' : 'Khai báo'}
+                                                    </button>
+                                                </div>
+
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+
+                        <div className="hidden overflow-x-auto rounded-sm border border-primary/10 bg-white lg:block">
+                            <table className="min-w-[1010px] w-full table-fixed text-left">
                                 <thead className="sticky top-0 z-10 bg-[#fbfaf6] text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">
                                     <tr>
                                         <th className="w-[54px] px-3 py-2 text-center">
@@ -825,26 +949,32 @@ const SequenceManagerModal = ({
                                         <th className="w-[24%] px-3 py-2">SKU</th>
                                         <th className="px-3 py-2">Sản phẩm</th>
                                         <th className="w-[180px] px-3 py-2">Vị trí</th>
-                                        <th className="w-[110px] px-3 py-2 text-right">Lưu</th>
+                                        <th className="w-[120px] px-3 py-2 text-right">Lọc nhanh</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-primary/10 text-[13px]">
                                     {rows.map((product) => {
                                         const key = product.sequence_key || buildSequenceRowKey(product);
                                         const sequence = resolveProductWarehouseSequence(product);
-                                        const draft = drafts[key] ?? '';
-                                        const normalizedDraft = normalizeWarehouseSequenceDraft(draft);
-                                        const changed = normalizedDraft !== String(sequence || '');
-                                        const saving = savingKey === key;
                                         const rowError = rowErrors[key] || '';
                                         const sku = resolveProductSku(product);
                                         const name = resolveProductName(product);
                                         const productId = resolveProductRecordId(product);
                                         const isSelected = selectedKeySet.has(key);
                                         const locationLabel = resolveProductLocationLabel(product);
+                                        const importStarred = isShelfProductImportStarred(product);
+                                        const starLoading = starLoadingProductIds.includes(productId);
 
                                         return (
-                                            <tr key={key} className={`align-top hover:bg-primary/[0.025] ${isSelected ? 'bg-gold/[0.04]' : ''}`}>
+                                            <tr
+                                                key={key}
+                                                onClick={(event) => {
+                                                    if (!declarationModeActive || !productId) return;
+                                                    if (event.target?.closest?.('button,input,select,textarea,a')) return;
+                                                    onToggleImportStar(product, !importStarred);
+                                                }}
+                                                className={`align-top hover:bg-primary/[0.025] ${isSelected ? 'bg-gold/[0.04]' : ''} ${declarationModeActive ? 'cursor-pointer' : ''} ${importStarred ? 'shadow-[inset_3px_0_0_0_rgba(245,158,11,0.9)]' : ''}`}
+                                            >
                                                 <td className="px-3 py-3 text-center">
                                                     <input
                                                         type="checkbox"
@@ -855,19 +985,12 @@ const SequenceManagerModal = ({
                                                     />
                                                 </td>
                                                 <td className="px-3 py-3 text-center">
-                                                    <input
-                                                        value={draft}
-                                                        onChange={(event) => onDraftChange(key, event.target.value)}
-                                                        onKeyDown={(event) => {
-                                                            if (event.key === 'Enter') {
-                                                                event.preventDefault();
-                                                                onSave(product);
-                                                            }
-                                                        }}
-                                                        inputMode="numeric"
-                                                        className="h-9 w-20 rounded-sm border border-gold/30 bg-[#fffaf0] px-2 text-center text-[13px] font-black text-gold outline-none transition placeholder:text-gold/35 focus:border-gold"
-                                                        placeholder="-"
-                                                    />
+                                                    <div
+                                                        className="inline-flex h-9 min-w-20 items-center justify-center rounded-sm border border-gold/25 bg-[#fffaf0] px-3 text-[13px] font-black text-gold"
+                                                        title="STT do phần mềm tự tạo"
+                                                    >
+                                                        {sequence || '-'}
+                                                    </div>
                                                     {rowError ? (
                                                         <p className="mt-1 text-[11px] font-bold leading-snug text-brick">{rowError}</p>
                                                     ) : null}
@@ -880,6 +1003,12 @@ const SequenceManagerModal = ({
                                                         <p className="line-clamp-2 font-bold text-primary">{name || 'Sản phẩm chưa đặt tên'}</p>
                                                         <div className="mt-1 flex flex-wrap gap-1.5">
                                                             <span className="rounded-full border border-primary/10 bg-primary/[0.03] px-2 py-0.5 text-[10px] font-bold text-primary/45">{getProductTypeLabel(product)}</span>
+                                                            {importStarred ? (
+                                                                <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-700">
+                                                                    <span className="material-symbols-outlined text-[12px]">star</span>
+                                                                    Lọc nhanh
+                                                                </span>
+                                                            ) : null}
                                                             {product.parent_product_name ? (
                                                                 <span className="rounded-full border border-primary/10 bg-white px-2 py-0.5 text-[10px] font-bold text-primary/45">{product.parent_product_name}</span>
                                                             ) : null}
@@ -895,12 +1024,17 @@ const SequenceManagerModal = ({
                                                 <td className="px-3 py-3 text-right">
                                                     <button
                                                         type="button"
-                                                        onClick={() => onSave(product)}
-                                                        disabled={saving || !productId || !changed}
-                                                        className={primaryButton}
+                                                        onClick={() => onToggleImportStar(product, !importStarred)}
+                                                        disabled={starLoading || !productId}
+                                                        className={`inline-flex h-9 items-center justify-center gap-1.5 rounded-sm border px-2 text-[11px] font-black transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                                                            importStarred
+                                                                ? 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100'
+                                                                : 'border-primary/10 bg-white text-primary/45 hover:border-amber-200 hover:bg-amber-50 hover:text-amber-700'
+                                                        }`}
+                                                        title={importStarred ? 'Bỏ khỏi lọc nhanh' : 'Khai báo sản phẩm vào lọc nhanh'}
                                                     >
-                                                        <span className={`material-symbols-outlined text-[17px] ${saving ? 'animate-spin' : ''}`}>{saving ? 'progress_activity' : 'save'}</span>
-                                                        Lưu
+                                                        <span className={`material-symbols-outlined text-[17px] ${starLoading ? 'animate-spin' : ''}`}>{starLoading ? 'progress_activity' : (importStarred ? 'star' : 'star_outline')}</span>
+                                                        <span>{importStarred ? 'Đã lưu' : 'Khai báo'}</span>
                                                     </button>
                                                 </td>
                                             </tr>
@@ -909,6 +1043,7 @@ const SequenceManagerModal = ({
                                 </tbody>
                             </table>
                         </div>
+                        </>
                     ) : (
                         <div className="flex h-64 items-center justify-center px-4 text-center text-[13px] font-bold text-primary/40">
                             Không có sản phẩm phù hợp
@@ -1039,6 +1174,9 @@ const ShelfFormModal = ({
 };
 
 const WarehouseShelfManager = () => {
+    const location = useLocation();
+    const navigate = useNavigate();
+    const sequenceRouteAutoOpenedRef = useRef(false);
     const [warehouses, setWarehouses] = useState([]);
     const [categories, setCategories] = useState([]);
     const [shelves, setShelves] = useState([]);
@@ -1067,15 +1205,26 @@ const WarehouseShelfManager = () => {
     const [sequenceManagerOpen, setSequenceManagerOpen] = useState(false);
     const [sequenceSearch, setSequenceSearch] = useState('');
     const [sequenceRows, setSequenceRows] = useState([]);
-    const [sequenceDrafts, setSequenceDrafts] = useState({});
     const [sequenceLoading, setSequenceLoading] = useState(false);
-    const [sequenceSavingKey, setSequenceSavingKey] = useState('');
     const [sequenceError, setSequenceError] = useState('');
     const [sequenceRowErrors, setSequenceRowErrors] = useState({});
     const [sequenceFilters, setSequenceFilters] = useState(sequenceProductSearchDefaultFilters);
     const [sequenceSelectedKeys, setSequenceSelectedKeys] = useState([]);
     const [sequenceSelectedRowsByKey, setSequenceSelectedRowsByKey] = useState({});
-    const [sequenceQuickSetupOpen, setSequenceQuickSetupOpen] = useState(false);
+    const [sequenceQuickFilterActive, setSequenceQuickFilterActive] = useState(false);
+    const [sequenceDeclarationModeActive, setSequenceDeclarationModeActive] = useState(false);
+    const [sequenceStarLoadingProductIds, setSequenceStarLoadingProductIds] = useState([]);
+    const sequenceRouteOpenRequested = useMemo(() => {
+        const params = new URLSearchParams(location.search);
+        const requested = String(
+            params.get('sequence')
+            || params.get('sequence_manager')
+            || params.get('open_sequence')
+            || ''
+        ).trim().toLowerCase();
+
+        return ['1', 'true', 'yes', 'open'].includes(requested);
+    }, [location.search]);
 
     const loadShelves = useCallback(async (params = {}, signal) => {
         setLoadingShelves(true);
@@ -1305,8 +1454,6 @@ const WarehouseShelfManager = () => {
     }, [activeSequenceFilterAttribute2, sequenceFilters.attributeValue]);
 
     const activeSequenceFilterCount = useMemo(() => ([
-        sequenceFilters.type,
-        sequenceFilters.stock,
         sequenceFilters.categoryId,
         sequenceFilters.positiveStockOnly,
         sequenceFilters.attributeValue,
@@ -1319,20 +1466,6 @@ const WarehouseShelfManager = () => {
 
         if (searchValue) {
             pills.push({ key: 'search', label: `Tìm: ${searchValue}` });
-        }
-
-        if (sequenceFilters.type) {
-            const label = sequenceFilters.type === 'variation'
-                ? 'Biến thể con'
-                : (PRODUCT_TYPE_LABELS[sequenceFilters.type] || sequenceFilters.type);
-            pills.push({ key: 'type', label });
-        }
-
-        if (sequenceFilters.stock) {
-            pills.push({
-                key: 'stock',
-                label: sequenceFilters.stock === 'in_stock' ? 'Còn hàng' : 'Hết hàng',
-            });
         }
 
         if (sequenceFilters.positiveStockOnly) {
@@ -1381,7 +1514,7 @@ const WarehouseShelfManager = () => {
                 fast_picker: 1,
                 per_page: 200,
                 allow_variants: 1,
-                quick_filter_enabled: 1,
+                quick_filter_enabled: sequenceFilters.attributeValue || sequenceFilters.attributeValue2 ? 1 : 0,
             };
 
             if (searchValue) {
@@ -1389,18 +1522,14 @@ const WarehouseShelfManager = () => {
                 productParams.filter_bundle_options_by_search = 1;
             }
 
-            if (sequenceFilters.type && sequenceFilters.type !== 'variation') {
-                productParams.type = sequenceFilters.type;
+            if (sequenceQuickFilterActive && !sequenceDeclarationModeActive) {
+                productParams.import_starred = 1;
             }
 
             const positiveStockOnly = Boolean(sequenceFilters.positiveStockOnly);
 
-            if (sequenceFilters.stock === 'in_stock' || positiveStockOnly) {
+            if (positiveStockOnly) {
                 productParams.min_stock = 1;
-            }
-
-            if (sequenceFilters.stock === 'out_of_stock' && !positiveStockOnly) {
-                productParams.max_stock = 0;
             }
 
             if (sequenceFilters.categoryId) {
@@ -1430,8 +1559,12 @@ const WarehouseShelfManager = () => {
 
             let productEntries = flattenProductPickerRows(extractProductRows(productResponse));
 
-            if (sequenceFilters.type === 'variation') {
-                productEntries = productEntries.filter((entry) => entry.entry_kind === 'variation' || entry.parent_product_id);
+            if (searchValue && exactSequenceSearch === null) {
+                productEntries = productEntries.filter((entry) => shelfProductMatchesSearch(entry, searchValue));
+            }
+
+            if (sequenceQuickFilterActive && !sequenceDeclarationModeActive) {
+                productEntries = productEntries.filter(isShelfProductImportStarred);
             }
 
             if (sequenceFilters.positiveStockOnly) {
@@ -1439,23 +1572,15 @@ const WarehouseShelfManager = () => {
                     const stock = resolveProductStock(entry);
                     return stock !== null && stock > 0;
                 });
-            } else if (sequenceFilters.stock === 'in_stock') {
-                productEntries = productEntries.filter((entry) => {
-                    const stock = resolveProductStock(entry);
-                    return stock === null || stock > 0;
-                });
-            }
-
-            if (sequenceFilters.stock === 'out_of_stock') {
-                productEntries = productEntries.filter((entry) => {
-                    const stock = resolveProductStock(entry);
-                    return stock !== null && stock <= 0;
-                });
             }
 
             const locationData = extractPayload(locationResponse) || {};
             const locations = Array.isArray(locationData.locations) ? locationData.locations : [];
-            let rows = buildSequenceManagerRows(productEntries, locations, activeSequenceFilterCount === 0);
+            let rows = buildSequenceManagerRows(
+                productEntries,
+                locations,
+                activeSequenceFilterCount === 0 && !sequenceQuickFilterActive
+            );
             if (exactSequenceSearch !== null) {
                 rows = rows.filter((row) => resolveProductWarehouseSequence(row) === exactSequenceSearch);
             }
@@ -1469,13 +1594,6 @@ const WarehouseShelfManager = () => {
             }, {});
 
             setSequenceRows(rows);
-            setSequenceDrafts((previous) => rows.reduce((drafts, row) => {
-                const key = row.sequence_key || buildSequenceRowKey(row);
-                if (key) {
-                    drafts[key] = String(resolveProductWarehouseSequence(row) || '');
-                }
-                return drafts;
-            }, { ...previous }));
             setSequenceSelectedRowsByKey((previous) => {
                 const next = { ...previous };
                 let changed = false;
@@ -1495,7 +1613,6 @@ const WarehouseShelfManager = () => {
 
             console.error('Error loading sequence manager products', error);
             setSequenceRows([]);
-            setSequenceDrafts({});
             setSequenceError(error.response?.data?.message || 'Không tải được bảng số thứ tự.');
         } finally {
             if (!signal?.aborted) {
@@ -1506,7 +1623,9 @@ const WarehouseShelfManager = () => {
         activeSequenceFilterAttribute,
         activeSequenceFilterAttribute2,
         activeSequenceFilterCount,
+        sequenceDeclarationModeActive,
         sequenceFilters,
+        sequenceQuickFilterActive,
     ]);
 
     useEffect(() => {
@@ -1529,9 +1648,37 @@ const WarehouseShelfManager = () => {
         setSequenceRowErrors({});
         setSequenceSelectedKeys([]);
         setSequenceSelectedRowsByKey({});
-        setSequenceQuickSetupOpen(false);
+        setSequenceQuickFilterActive(false);
+        setSequenceDeclarationModeActive(false);
+        setSequenceStarLoadingProductIds([]);
         setSequenceManagerOpen(true);
     }, [search]);
+
+    useEffect(() => {
+        if (!sequenceRouteOpenRequested) {
+            sequenceRouteAutoOpenedRef.current = false;
+            return;
+        }
+
+        if (sequenceRouteAutoOpenedRef.current) return;
+
+        sequenceRouteAutoOpenedRef.current = true;
+        openSequenceManager();
+    }, [openSequenceManager, sequenceRouteOpenRequested]);
+
+    const closeSequenceManager = useCallback(() => {
+        setSequenceManagerOpen(false);
+
+        if (!sequenceRouteOpenRequested) return;
+
+        const params = new URLSearchParams(location.search);
+        params.delete('sequence');
+        params.delete('sequence_manager');
+        params.delete('open_sequence');
+        const nextSearch = params.toString();
+
+        navigate(`${location.pathname}${nextSearch ? `?${nextSearch}` : ''}`, { replace: true });
+    }, [location.pathname, location.search, navigate, sequenceRouteOpenRequested]);
 
     const updateSequenceFilter = useCallback((field, value) => {
         setSequenceFilters((previous) => {
@@ -1567,6 +1714,8 @@ const WarehouseShelfManager = () => {
 
     const resetSequenceFilters = useCallback(() => {
         setSequenceSearch('');
+        setSequenceQuickFilterActive(false);
+        setSequenceDeclarationModeActive(false);
         setSequenceFilters((previous) => ({
             ...sequenceProductSearchDefaultFilters,
             attributeId: previous.attributeId || String(productQuickFilterAttributes[0]?.id || ''),
@@ -1574,6 +1723,103 @@ const WarehouseShelfManager = () => {
         setSequenceSelectedKeys([]);
         setSequenceSelectedRowsByKey({});
     }, [productQuickFilterAttributes]);
+
+    const toggleSequenceQuickFilter = useCallback(() => {
+        setSequenceQuickFilterActive((previous) => !previous);
+        setSequenceDeclarationModeActive(false);
+        setSequenceSelectedKeys([]);
+        setSequenceSelectedRowsByKey({});
+    }, []);
+
+    const beginSequenceQuickFilterDeclaration = useCallback(() => {
+        setSequenceQuickFilterActive(false);
+        setSequenceDeclarationModeActive((previous) => !previous);
+        setSequenceSelectedKeys([]);
+        setSequenceSelectedRowsByKey({});
+        setSequenceError('');
+    }, []);
+
+    const toggleSequenceImportStar = useCallback(async (product, nextStarred) => {
+        const key = product?.sequence_key || buildSequenceRowKey(product);
+        const productId = resolveProductRecordId(product);
+        const resolvedNextStarred = Boolean(nextStarred);
+
+        if (!productId) {
+            setSequenceRowErrors((previous) => ({
+                ...previous,
+                [key]: 'Không xác định được sản phẩm cần khai báo.',
+            }));
+            return null;
+        }
+
+        setSequenceStarLoadingProductIds((previous) => (
+            previous.includes(productId) ? previous : [...previous, productId]
+        ));
+        setSequenceRowErrors((previous) => {
+            if (!previous[key]) return previous;
+
+            const next = { ...previous };
+            delete next[key];
+            return next;
+        });
+
+        try {
+            const response = await inventoryApi.setImportStar(productId, {
+                inventory_import_starred: resolvedNextStarred,
+            });
+            const resolvedStarred = Boolean(response.data?.product?.inventory_import_starred ?? resolvedNextStarred);
+            const patchRow = (row) => (
+                resolveProductRecordId(row) === productId
+                    ? { ...row, inventory_import_starred: resolvedStarred }
+                    : row
+            );
+            const shouldRemoveFromQuickFilter = sequenceQuickFilterActive && !resolvedStarred;
+
+            setSequenceRows((previous) => {
+                const updatedRows = previous.map(patchRow);
+                return shouldRemoveFromQuickFilter
+                    ? updatedRows.filter((row) => resolveProductRecordId(row) !== productId)
+                    : updatedRows;
+            });
+            setSequenceSelectedRowsByKey((previous) => {
+                const next = { ...previous };
+                Object.keys(next).forEach((rowKey) => {
+                    if (resolveProductRecordId(next[rowKey]) !== productId) return;
+
+                    if (shouldRemoveFromQuickFilter) {
+                        delete next[rowKey];
+                        return;
+                    }
+
+                    next[rowKey] = patchRow(next[rowKey]);
+                });
+
+                return next;
+            });
+            if (shouldRemoveFromQuickFilter) {
+                setSequenceSelectedKeys((previous) => previous.filter((rowKey) => rowKey !== key));
+            }
+
+            return {
+                id: productId,
+                inventory_import_starred: resolvedStarred,
+            };
+        } catch (error) {
+            console.error('Error toggling sequence import quick filter product', error);
+            setSequenceRowErrors((previous) => ({
+                ...previous,
+                [key]: extractFirstApiError(
+                    error,
+                    resolvedNextStarred
+                        ? 'Không thể lưu sản phẩm này vào lọc nhanh.'
+                        : 'Không thể bỏ sản phẩm này khỏi lọc nhanh.'
+                ),
+            }));
+            return null;
+        } finally {
+            setSequenceStarLoadingProductIds((previous) => previous.filter((id) => id !== productId));
+        }
+    }, [sequenceQuickFilterActive]);
 
     const toggleSequenceRowSelection = useCallback((key, row) => {
         if (!key) return;
@@ -1672,9 +1918,7 @@ const WarehouseShelfManager = () => {
 
         const printedAt = new Date().toLocaleString('vi-VN');
         const tableRows = rowsToPrint.map((row, index) => {
-            const key = row.sequence_key || buildSequenceRowKey(row);
-            const draftSequence = normalizeWarehouseSequenceDraft(sequenceDrafts[key]);
-            const sequence = draftSequence || String(resolveProductWarehouseSequence(row) || '');
+            const sequence = String(resolveProductWarehouseSequence(row) || '');
             const locationLabel = resolveProductLocationLabel(row) || 'Chưa gán kệ';
             const sku = resolveProductSku(row) || 'Chưa có SKU';
             const name = resolveProductName(row) || 'Sản phẩm chưa đặt tên';
@@ -1739,7 +1983,7 @@ const WarehouseShelfManager = () => {
         window.setTimeout(() => {
             printWindow.print();
         }, 250);
-    }, [getSelectedSequenceRows, sequenceDrafts]);
+    }, [getSelectedSequenceRows]);
 
     const printSelectedSequenceLabels = useCallback(() => {
         const rowsToPrint = getSelectedSequenceRows();
@@ -1751,9 +1995,7 @@ const WarehouseShelfManager = () => {
 
         const printedAt = new Date().toLocaleString('vi-VN');
         const labelRows = rowsToPrint.map((row) => {
-            const key = row.sequence_key || buildSequenceRowKey(row);
-            const draftSequence = normalizeWarehouseSequenceDraft(sequenceDrafts[key]);
-            const sequence = draftSequence || String(resolveProductWarehouseSequence(row) || '');
+            const sequence = String(resolveProductWarehouseSequence(row) || '');
             const name = resolveProductName(row) || 'Sản phẩm chưa đặt tên';
             const sequenceClass = sequence.length >= 4
                 ? 'many'
@@ -1883,149 +2125,7 @@ const WarehouseShelfManager = () => {
         window.setTimeout(() => {
             printWindow.print();
         }, 250);
-    }, [getSelectedSequenceRows, sequenceDrafts]);
-
-    const updateSequenceDraft = useCallback((key, value) => {
-        setSequenceDrafts((previous) => ({
-            ...previous,
-            [key]: normalizeWarehouseSequenceDraft(value),
-        }));
-        setSequenceRowErrors((previous) => {
-            if (!previous[key]) return previous;
-
-            const next = { ...previous };
-            delete next[key];
-            return next;
-        });
-    }, []);
-
-    const saveSequenceRow = useCallback(async (product) => {
-        const key = product.sequence_key || buildSequenceRowKey(product);
-        const productId = resolveProductRecordId(product);
-        const nextDraft = normalizeWarehouseSequenceDraft(sequenceDrafts[key]);
-        const nextSequence = Number(nextDraft);
-        const currentSequence = resolveProductWarehouseSequence(product);
-
-        if (!productUsesWarehouseSequence(product)) {
-            setSequenceRowErrors((previous) => ({
-                ...previous,
-                [key]: 'Dòng này không dùng STT kho.',
-            }));
-            return;
-        }
-
-        if (!productId) {
-            setSequenceRowErrors((previous) => ({
-                ...previous,
-                [key]: 'Không xác định được sản phẩm cần sửa.',
-            }));
-            return;
-        }
-
-        if (!nextDraft || !Number.isFinite(nextSequence) || nextSequence <= 0) {
-            setSequenceRowErrors((previous) => ({
-                ...previous,
-                [key]: 'Nhập STT lớn hơn 0.',
-            }));
-            return;
-        }
-
-        if (currentSequence === nextSequence) return;
-
-        setSequenceSavingKey(key);
-        setSequenceRowErrors((previous) => {
-            if (!previous[key]) return previous;
-
-            const next = { ...previous };
-            delete next[key];
-            return next;
-        });
-
-        try {
-            const response = await productApi.update(productId, { warehouse_sequence: nextSequence });
-            const savedProduct = extractPayload(response);
-            const savedSequence = resolveProductWarehouseSequence(savedProduct) || nextSequence;
-            const skuKey = normalizeSkuKey(resolveProductSku(product));
-
-            setSequenceRows((previous) => previous
-                .map((row) => {
-                    const rowKey = row.sequence_key || buildSequenceRowKey(row);
-                    if (rowKey !== key) return row;
-
-                    return {
-                        ...row,
-                        warehouse_sequence: savedSequence,
-                        product_warehouse_sequence: savedSequence,
-                        warehouse_pick_label: `${savedSequence} - ${resolveProductName(row) || resolveProductSku(row) || 'Sản phẩm'}`,
-                    };
-                })
-                .sort((left, right) => {
-                    const leftSequence = resolveProductWarehouseSequence(left);
-                    const rightSequence = resolveProductWarehouseSequence(right);
-
-                    if (leftSequence && rightSequence && leftSequence !== rightSequence) {
-                        return leftSequence - rightSequence;
-                    }
-                    if (leftSequence && !rightSequence) return -1;
-                    if (!leftSequence && rightSequence) return 1;
-
-                    return resolveProductSku(left).localeCompare(resolveProductSku(right), 'vi');
-                }));
-            setSequenceSelectedRowsByKey((previous) => {
-                if (!previous[key]) return previous;
-
-                const row = previous[key];
-                return {
-                    ...previous,
-                    [key]: {
-                        ...row,
-                        warehouse_sequence: savedSequence,
-                        product_warehouse_sequence: savedSequence,
-                        warehouse_pick_label: `${savedSequence} - ${resolveProductName(row) || resolveProductSku(row) || 'Sản phẩm'}`,
-                    },
-                };
-            });
-            setSequenceDrafts((previous) => ({
-                ...previous,
-                [key]: String(savedSequence),
-            }));
-            setSearchResults((previous) => ({
-                shelves: previous.shelves,
-                locations: previous.locations.map((location) => {
-                    const sameProduct = Number(location.product_id) === productId
-                        || (skuKey && normalizeSkuKey(location.product_sku) === skuKey);
-                    if (!sameProduct) return location;
-
-                    return {
-                        ...location,
-                        warehouse_sequence: savedSequence,
-                        product_warehouse_sequence: savedSequence,
-                        warehouse_pick_label: `${savedSequence} - ${location.product_name || resolveProductName(location) || 'Sản phẩm'}`,
-                    };
-                }),
-            }));
-
-            await Promise.allSettled([
-                selectedShelf?.id ? loadShelfDetail(selectedShelf.id) : Promise.resolve(),
-                loadShelves(search.trim() ? { search: search.trim() } : {}),
-            ]);
-        } catch (error) {
-            console.error('Error saving warehouse sequence', error);
-            const sequenceMessage = error?.response?.data?.errors?.warehouse_sequence?.[0];
-            setSequenceRowErrors((previous) => ({
-                ...previous,
-                [key]: sequenceMessage || extractFirstApiError(error, 'Không lưu được số thứ tự.'),
-            }));
-        } finally {
-            setSequenceSavingKey('');
-        }
-    }, [
-        loadShelfDetail,
-        loadShelves,
-        search,
-        selectedShelf?.id,
-        sequenceDrafts,
-    ]);
+    }, [getSelectedSequenceRows]);
 
     const updateSkuSearchFilter = useCallback((field, value) => {
         setSkuSearchFilters((previous) => {
@@ -2937,12 +3037,13 @@ const WarehouseShelfManager = () => {
                 open={sequenceManagerOpen}
                 search={sequenceSearch}
                 rows={sequenceRows}
-                drafts={sequenceDrafts}
                 loading={sequenceLoading}
-                savingKey={sequenceSavingKey}
                 error={sequenceError}
                 rowErrors={sequenceRowErrors}
                 selectedKeys={sequenceSelectedKeys}
+                quickFilterActive={sequenceQuickFilterActive}
+                declarationModeActive={sequenceDeclarationModeActive}
+                starLoadingProductIds={sequenceStarLoadingProductIds}
                 selectedPrintCount={selectedSequenceRowsForPrint.length}
                 categoryOptions={categories}
                 filterAttributes={productQuickFilterAttributes}
@@ -2950,20 +3051,20 @@ const WarehouseShelfManager = () => {
                 filterPills={activeSequenceFilterPills}
                 filterCount={activeSequenceFilterCount}
                 activeFilterAttribute={activeSequenceFilterAttribute}
+                activeFilterAttribute2={activeSequenceFilterAttribute2}
                 activeFilterAttribute2Options={activeSequenceFilterAttribute2Options}
-                quickSetupOpen={sequenceQuickSetupOpen}
                 onSearchChange={setSequenceSearch}
-                onDraftChange={updateSequenceDraft}
-                onSave={saveSequenceRow}
                 onReload={() => loadSequenceRows(sequenceSearch)}
                 onFilterChange={updateSequenceFilter}
                 onResetFilters={resetSequenceFilters}
-                onToggleQuickSetup={() => setSequenceQuickSetupOpen((previous) => !previous)}
+                onToggleQuickFilter={toggleSequenceQuickFilter}
+                onBeginDeclaration={beginSequenceQuickFilterDeclaration}
+                onToggleImportStar={toggleSequenceImportStar}
                 onToggleRow={toggleSequenceRowSelection}
                 onToggleAllRows={toggleAllSequenceRows}
                 onPrintSelected={printSelectedSequenceRows}
                 onPrintLabelsSelected={printSelectedSequenceLabels}
-                onClose={() => setSequenceManagerOpen(false)}
+                onClose={closeSequenceManager}
             />
         </div>
     );

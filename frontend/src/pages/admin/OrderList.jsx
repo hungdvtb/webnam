@@ -6135,6 +6135,11 @@ const OrderList = () => {
         navigate(buildOrderListUrl(nextView));
     }, [navigate]);
 
+    const openWarehouseSequenceManager = useCallback(() => {
+        persistCurrentOrderListState();
+        navigate('/admin/inventory/vi-tri-ke?sequence=1');
+    }, [navigate, persistCurrentOrderListState]);
+
     const clearRouteOrderScopeFromUrl = useCallback(() => {
         const params = new URLSearchParams(location.search);
         params.delete('order_ids');
@@ -6685,7 +6690,7 @@ const OrderList = () => {
                         )}
                     </div>
 
-                    <div className={`grid gap-2 lg:hidden ${!isReturnFollowupView ? 'grid-cols-3' : 'grid-cols-2'}`}>
+                    <div className={`grid gap-2 lg:hidden ${!isReturnFollowupView ? 'grid-cols-4' : 'grid-cols-3'}`}>
                         <button type="button" onClick={() => navigateToListView('main')} className={`inline-flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-[16px] border px-2 text-[10px] font-black uppercase tracking-[0.12em] transition-all ${isMainView ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/60'}`}>
                             <span className="material-symbols-outlined text-[18px]">receipt_long</span>
                             Đơn
@@ -6705,6 +6710,15 @@ const OrderList = () => {
                                 Lọc
                             </button>
                         )}
+                        <button
+                            type="button"
+                            onClick={openWarehouseSequenceManager}
+                            className="inline-flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-[16px] border border-gold/25 bg-gold/5 px-2 text-[10px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-gold/45 hover:bg-gold/10"
+                            title="Quản lý số thứ tự"
+                        >
+                            <span className="material-symbols-outlined text-[18px]">format_list_numbered</span>
+                            STT
+                        </button>
                     </div>
 
                     {selectedIds.length === 0 && renderOrderSearch(

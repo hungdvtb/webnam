@@ -512,6 +512,11 @@ class Product extends Model
         return $this->hasMany(InventoryBatchAllocation::class);
     }
 
+    public function storageLocation()
+    {
+        return $this->hasOne(ProductStorageLocation::class);
+    }
+
     public function supplierPrices()
     {
         return $this->hasMany(SupplierProductPrice::class);

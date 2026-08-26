@@ -720,6 +720,70 @@ class ProductSearchBehaviorTest extends TestCase
         $this->assertNotContains('ML80-LOHOALAM-20', $skus);
     }
 
+    public function test_picker_name_search_matches_numeric_token_against_sku_when_name_words_match(): void
+    {
+        $account = $this->authenticate();
+
+        $matching = $this->createProduct($account, [
+            'name' => 'Lo hoa men RAN',
+            'sku' => 'MR70-LOHOARAN-25',
+        ]);
+
+        $this->createProduct($account, [
+            'name' => 'Lo hoa men RAN',
+            'sku' => 'MR70-LOHOARAN-18',
+        ]);
+
+        $this->createProduct($account, [
+            'name' => 'Binh gom men RAN',
+            'sku' => 'MR70-LOHOARAN-25-OTHER',
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?' . http_build_query([
+                'picker' => 1,
+                'search' => 'lọ hoa 25',
+                'per_page' => 20,
+            ]));
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.id', $matching->id)
+            ->assertJsonPath('data.0.sku', 'MR70-LOHOARAN-25');
+    }
+
+    public function test_picker_import_starred_filter_returns_declared_products(): void
+    {
+        $account = $this->authenticate();
+
+        $starred = $this->createProduct($account, [
+            'name' => 'San pham da khai bao loc nhanh',
+            'sku' => 'STARRED-IMPORT-PICKER',
+            'inventory_import_starred' => true,
+        ]);
+
+        $this->createProduct($account, [
+            'name' => 'San pham chua khai bao loc nhanh',
+            'sku' => 'UNSTARRED-IMPORT-PICKER',
+            'inventory_import_starred' => false,
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?' . http_build_query([
+                'picker' => 1,
+                'import_starred' => 1,
+                'per_page' => 20,
+            ]));
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.id', $starred->id)
+            ->assertJsonPath('data.0.inventory_import_starred', true);
+    }
     public function test_attribute_filter_can_be_combined_with_search(): void
     {
         $account = $this->authenticate();
@@ -1073,7 +1137,7 @@ class ProductSearchBehaviorTest extends TestCase
             ->assertJsonPath('data.0.sku', 'BUNDLE-CHILD-MEN-LAM');
     }
 
-    public function test_admin_search_returns_matching_variant_row_instead_of_parent(): void
+    public function test_admin_search_returns_parent_before_matching_variant_row(): void
     {
         $account = $this->authenticate();
 
@@ -1102,13 +1166,15 @@ class ProductSearchBehaviorTest extends TestCase
 
         $response
             ->assertOk()
-            ->assertJsonPath('total', 1)
-            ->assertJsonPath('data.0.id', $matchingVariant->id)
-            ->assertJsonPath('data.0.sku', 'ML80-ONGHUONG-S1-22')
-            ->assertJsonPath('data.0.parent_configurable.0.id', $parent->id);
+            ->assertJsonPath('total', 2)
+            ->assertJsonPath('data.0.id', $parent->id)
+            ->assertJsonPath('data.0.sku', 'ML80-ONGHUONG-LAM')
+            ->assertJsonPath('data.1.id', $matchingVariant->id)
+            ->assertJsonPath('data.1.sku', 'ML80-ONGHUONG-S1-22')
+            ->assertJsonPath('data.1.parent_configurable.0.id', $parent->id);
     }
 
-    public function test_admin_search_keeps_parent_filters_but_renders_matching_variant_directly(): void
+    public function test_admin_search_keeps_parent_filters_and_places_parent_before_matching_variant(): void
     {
         $account = $this->authenticate();
         $category = $this->createCategory($account, 'Danh muc ong huong');
@@ -1139,12 +1205,13 @@ class ProductSearchBehaviorTest extends TestCase
 
         $response
             ->assertOk()
-            ->assertJsonPath('total', 1)
-            ->assertJsonPath('data.0.id', $matchingVariant->id)
-            ->assertJsonPath('data.0.parent_configurable.0.id', $parent->id);
+            ->assertJsonPath('total', 2)
+            ->assertJsonPath('data.0.id', $parent->id)
+            ->assertJsonPath('data.1.id', $matchingVariant->id)
+            ->assertJsonPath('data.1.parent_configurable.0.id', $parent->id);
     }
 
-    public function test_admin_search_keeps_matching_parent_and_matching_variants_without_duplicate_parent_rows(): void
+    public function test_admin_search_hides_matching_variants_when_parent_matches_directly(): void
     {
         $account = $this->authenticate();
 
@@ -1179,7 +1246,7 @@ class ProductSearchBehaviorTest extends TestCase
             ->all();
 
         $this->assertEqualsCanonicalizing(
-            [$parent->id, $variantSmall->id, $variantMedium->id],
+            [$parent->id],
             $returnedIds
         );
         $this->assertSame(1, count(array_keys($returnedIds, $parent->id, true)));

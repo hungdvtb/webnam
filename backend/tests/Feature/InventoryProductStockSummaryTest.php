@@ -238,14 +238,42 @@ class InventoryProductStockSummaryTest extends TestCase
         $this->assertSame(320000.0, (float) ($bundleLine['cost_price'] ?? 0));
     }
 
-    public function test_refresh_order_items_uses_product_stock_quantity_as_available_to_sell_baseline(): void
+    public function test_refresh_order_items_matches_inventory_available_to_sell_when_product_snapshot_has_drift(): void
     {
-        [$account] = $this->authenticate();
+        [$account, $user] = $this->authenticate();
         $supplier = $this->createSupplier($account);
         $product = $this->createProduct($account, $supplier, [
             'name' => 'San pham lech ton snapshot',
             'sku' => 'ORDER-FORM-DRIFT-001',
         ]);
+
+        $service = app(InventoryService::class);
+        $service->createImport([
+            'supplier_id' => $supplier->id,
+            'inventory_import_status_id' => $this->completedImportStatusId(),
+            'import_date' => now()->subDay()->toDateString(),
+            'items' => [[
+                'product_id' => $product->id,
+                'quantity' => 10,
+                'received_quantity' => 10,
+                'unit_cost' => 100000,
+            ]],
+        ], $account->id, $user->id);
+
+        $order = $this->createOrder($account, $user, [
+            'order_number' => 'ORD-PENDING-DRIFT-001',
+            'status' => 'new',
+        ]);
+        $this->createOrderItem($account, $order, $product, 3);
+
+        $product->forceFill(['stock_quantity' => 7])->save();
+
+        $inventoryResponse = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/inventory/products?per_page=20');
+
+        $inventoryResponse->assertOk();
+        $inventoryRow = collect($inventoryResponse->json('data'))->firstWhere('id', $product->id);
 
         $response = $this
             ->withHeaders($this->headers($account))
@@ -261,10 +289,14 @@ class InventoryProductStockSummaryTest extends TestCase
 
         $item = collect($response->json('items'))->firstWhere('product_id', $product->id);
 
+        $this->assertNotNull($inventoryRow);
+        $this->assertSame(10, (int) ($inventoryRow['computed_stock'] ?? 0));
+        $this->assertSame(3, (int) ($inventoryRow['pending_export_quantity'] ?? 0));
+        $this->assertSame(7, (int) ($inventoryRow['actual_stock'] ?? 0));
         $this->assertNotNull($item);
-        $this->assertSame(0, (int) ($item['computed_stock'] ?? 0));
-        $this->assertSame(0, (int) ($item['pending_export_quantity'] ?? 0));
-        $this->assertSame(0, (int) ($item['available_to_sell'] ?? 0));
+        $this->assertSame(10, (int) ($item['computed_stock'] ?? 0));
+        $this->assertSame(3, (int) ($item['pending_export_quantity'] ?? 0));
+        $this->assertSame(7, (int) ($item['available_to_sell'] ?? 0));
     }
 
     public function test_refresh_order_items_excludes_quantities_already_on_draft_export_slips(): void

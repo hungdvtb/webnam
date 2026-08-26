@@ -9,6 +9,7 @@ use App\Models\Account;
 use App\Models\Attribute;
 use App\Models\AttributeOption;
 use App\Models\Category;
+use App\Models\InventoryDocument;
 use App\Models\InventoryUnit;
 use App\Models\Order;
 use App\Models\OrderItem;
@@ -39,6 +40,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
@@ -5085,6 +5087,532 @@ class ProductController extends Controller
         }
     }
 
+    protected function applyInventorySnapshotProductIdScope($query, string $column, array $productIds): void
+    {
+        if (empty($productIds)) {
+            return;
+        }
+
+        $target = preg_match('/^[A-Za-z0-9_.]+$/', $column) === 1 ? $column : DB::raw($column);
+        $query->whereIn($target, $productIds);
+    }
+
+    protected function applyInventorySnapshotDateRange($query, string $column, Request $request): void
+    {
+        $this->applyInventorySnapshotDateRangeExpression($query, $column, $request);
+    }
+
+    protected function applyInventorySnapshotDateRangeExpression($query, string $expression, Request $request): void
+    {
+        if ($request->filled('date_from')) {
+            $query->whereRaw("({$expression}) >= ?", [
+                Carbon::parse((string) $request->input('date_from'))->startOfDay()->toDateTimeString(),
+            ]);
+        }
+
+        if ($request->filled('date_to')) {
+            $query->whereRaw("({$expression}) < ?", [
+                Carbon::parse((string) $request->input('date_to'))->addDay()->startOfDay()->toDateTimeString(),
+            ]);
+        }
+    }
+
+    protected function applyInventorySnapshotExportInvalidStatusFilter($query, string $column): void
+    {
+        $statusExpression = "LOWER(COALESCE({$column}, ''))";
+
+        foreach ([
+            'cancel',
+            'canceled',
+            'cancelled',
+            'draft',
+            'nhap',
+            'huy',
+            'void',
+        ] as $keyword) {
+            $query->whereRaw($statusExpression . ' NOT LIKE ?', ['%' . $keyword . '%']);
+        }
+    }
+
+    protected function inventorySnapshotOrderAccountIds(Request $request, int $inventoryAccountId): array
+    {
+        return $inventoryAccountId > 0
+            ? $this->accountDataScopeService->accountIdsSharingInventoryScope($inventoryAccountId)
+            : $this->inventoryOrderAccountIds($request);
+    }
+
+    protected function applyInventorySnapshotExportEligibleOrderScope($query, Request $request, int $inventoryAccountId, string $dateColumn): void
+    {
+        $accountIds = $this->inventorySnapshotOrderAccountIds($request, $inventoryAccountId);
+
+        if (!empty($accountIds)) {
+            $query->whereIn('orders.account_id', $accountIds);
+        }
+
+        if (Schema::hasColumn('orders', 'deleted_at')) {
+            $query->whereNull('orders.deleted_at');
+        }
+
+        $query->where(function ($builder) {
+            $builder
+                ->where('orders.order_kind', Order::KIND_OFFICIAL)
+                ->orWhereNull('orders.order_kind')
+                ->orWhere('orders.order_kind', '');
+        });
+
+        $this->applyInventorySnapshotExportInvalidStatusFilter($query, 'orders.status');
+        $this->applyInventorySnapshotDateRangeExpression($query, $dateColumn, $request);
+    }
+
+    protected function applyInventorySnapshotPendingOutboundEligibleOrderScope($query, Request $request, int $inventoryAccountId): void
+    {
+        $accountIds = $this->inventorySnapshotOrderAccountIds($request, $inventoryAccountId);
+
+        if (!empty($accountIds)) {
+            $query->whereIn('orders.account_id', $accountIds);
+        }
+
+        if (Schema::hasColumn('orders', 'deleted_at')) {
+            $query->whereNull('orders.deleted_at');
+        }
+
+        $query->where(function ($builder) {
+            $builder
+                ->where('orders.order_kind', Order::KIND_OFFICIAL)
+                ->orWhereNull('orders.order_kind')
+                ->orWhere('orders.order_kind', '');
+        });
+
+        $this->applyPendingOutboundInvalidStatusFilter($query, 'orders.status');
+        $this->applyInventorySnapshotDateRange($query, 'orders.created_at', $request);
+
+        $query
+            ->where(function ($builder) {
+                $builder
+                    ->whereNull('orders.type')
+                    ->orWhere('orders.type', '!=', 'inventory_export');
+            })
+            ->where(function ($builder) {
+                $builder
+                    ->whereNull('orders.shipping_tracking_code')
+                    ->orWhere('orders.shipping_tracking_code', '');
+            })
+            ->whereNotExists(function ($shipmentQuery) {
+                $shipmentQuery
+                    ->select(DB::raw(1))
+                    ->from('shipments')
+                    ->whereColumn('shipments.order_id', 'orders.id');
+
+                $this->applyActiveShipmentFilters($shipmentQuery, 'shipments');
+            });
+    }
+
+    protected function buildInventorySnapshotImportQuantitySubquery(Request $request, array $productIds, int $inventoryAccountId)
+    {
+        $query = \App\Models\ImportItem::withoutGlobalScope('account_id')
+            ->join('imports', 'imports.id', '=', 'import_items.import_id')
+            ->leftJoin('inventory_import_statuses', 'inventory_import_statuses.id', '=', 'imports.inventory_import_status_id')
+            ->selectRaw('import_items.product_id')
+            ->selectRaw('COALESCE(SUM(import_items.received_quantity), 0) AS total_imported')
+            ->groupBy('import_items.product_id');
+
+        if ($inventoryAccountId > 0) {
+            $query->where('import_items.account_id', $inventoryAccountId);
+        }
+
+        if (Schema::hasColumn('imports', 'deleted_at')) {
+            $query->whereNull('imports.deleted_at');
+        }
+
+        $query->where(function ($builder) {
+            $builder
+                ->whereNull('inventory_import_statuses.id')
+                ->orWhere('inventory_import_statuses.affects_inventory', true);
+        });
+
+        $this->applyInventorySnapshotProductIdScope($query, 'import_items.product_id', $productIds);
+        $this->applyInventorySnapshotDateRange($query, 'imports.import_date', $request);
+
+        return $query;
+    }
+
+    protected function buildInventorySnapshotDocumentQuantitySubquery(
+        Request $request,
+        array $productIds,
+        int $inventoryAccountId,
+        string $documentType,
+        string $quantityAlias
+    ) {
+        $query = DB::table('inventory_document_items')
+            ->join('inventory_documents', 'inventory_documents.id', '=', 'inventory_document_items.inventory_document_id')
+            ->selectRaw('inventory_document_items.product_id')
+            ->selectRaw("COALESCE(SUM(inventory_document_items.quantity), 0) AS {$quantityAlias}")
+            ->where('inventory_documents.type', $documentType)
+            ->groupBy('inventory_document_items.product_id');
+
+        if ($inventoryAccountId > 0) {
+            $query
+                ->where('inventory_document_items.account_id', $inventoryAccountId)
+                ->where('inventory_documents.account_id', $inventoryAccountId);
+        }
+
+        if (Schema::hasColumn('inventory_documents', 'deleted_at')) {
+            $query->whereNull('inventory_documents.deleted_at');
+        }
+
+        $this->applyInventorySnapshotProductIdScope($query, 'inventory_document_items.product_id', $productIds);
+        $this->applyInventorySnapshotDateRange($query, 'inventory_documents.document_date', $request);
+
+        return $query;
+    }
+
+    protected function buildInventorySnapshotStockAdjustmentQuantitySubquery(Request $request, array $productIds, int $inventoryAccountId)
+    {
+        $query = DB::table('inventory_document_items')
+            ->join('inventory_documents', 'inventory_documents.id', '=', 'inventory_document_items.inventory_document_id')
+            ->selectRaw('inventory_document_items.product_id')
+            ->selectRaw("
+                COALESCE(SUM(
+                    CASE
+                        WHEN inventory_document_items.stock_bucket = 'sellable'
+                            AND inventory_document_items.direction = 'in'
+                            THEN inventory_document_items.quantity
+                        WHEN inventory_document_items.stock_bucket = 'sellable'
+                            AND inventory_document_items.direction = 'out'
+                            THEN -inventory_document_items.quantity
+                        ELSE 0
+                    END
+                ), 0) AS total_adjusted
+            ")
+            ->where('inventory_documents.type', 'adjustment')
+            ->where(function ($builder) {
+                $builder
+                    ->whereNull('inventory_documents.adjustment_kind')
+                    ->orWhere('inventory_documents.adjustment_kind', InventoryDocument::ADJUSTMENT_KIND_STOCK);
+            })
+            ->groupBy('inventory_document_items.product_id');
+
+        if ($inventoryAccountId > 0) {
+            $query
+                ->where('inventory_document_items.account_id', $inventoryAccountId)
+                ->where('inventory_documents.account_id', $inventoryAccountId);
+        }
+
+        if (Schema::hasColumn('inventory_documents', 'deleted_at')) {
+            $query->whereNull('inventory_documents.deleted_at');
+        }
+
+        $this->applyInventorySnapshotProductIdScope($query, 'inventory_document_items.product_id', $productIds);
+        $this->applyInventorySnapshotDateRange($query, 'inventory_documents.document_date', $request);
+
+        return $query;
+    }
+
+    protected function buildInventorySnapshotExportAdjustmentQuantitySubquery(Request $request, array $productIds, int $inventoryAccountId)
+    {
+        $query = DB::table('inventory_document_items')
+            ->join('inventory_documents', 'inventory_documents.id', '=', 'inventory_document_items.inventory_document_id')
+            ->selectRaw('inventory_document_items.product_id')
+            ->selectRaw("
+                COALESCE(SUM(
+                    CASE
+                        WHEN inventory_document_items.direction = 'in'
+                            THEN inventory_document_items.quantity
+                        WHEN inventory_document_items.direction = 'out'
+                            THEN -inventory_document_items.quantity
+                        ELSE 0
+                    END
+                ), 0) AS total_export_adjusted
+            ")
+            ->where('inventory_documents.type', 'adjustment')
+            ->where('inventory_documents.adjustment_kind', InventoryDocument::ADJUSTMENT_KIND_EXPORT)
+            ->where('inventory_document_items.stock_bucket', 'sellable')
+            ->groupBy('inventory_document_items.product_id');
+
+        if ($inventoryAccountId > 0) {
+            $query
+                ->where('inventory_document_items.account_id', $inventoryAccountId)
+                ->where('inventory_documents.account_id', $inventoryAccountId);
+        }
+
+        if (Schema::hasColumn('inventory_documents', 'deleted_at')) {
+            $query->whereNull('inventory_documents.deleted_at');
+        }
+
+        $this->applyInventorySnapshotProductIdScope($query, 'inventory_document_items.product_id', $productIds);
+        $this->applyInventorySnapshotDateRange($query, 'inventory_documents.document_date', $request);
+
+        return $query;
+    }
+
+    protected function buildInventorySnapshotExportQuantitySubquery(Request $request, array $productIds, int $inventoryAccountId)
+    {
+        $manualExportScopeSql = "
+            CASE
+                WHEN inventory_documents.reference_type = 'order'
+                    AND inventory_documents.reference_id IS NOT NULL
+                    THEN inventory_documents.reference_id
+                ELSE -inventory_documents.id
+            END
+        ";
+
+        $manualExportQtySub = DB::table('inventory_document_items')
+            ->join('inventory_documents', 'inventory_documents.id', '=', 'inventory_document_items.inventory_document_id')
+            ->selectRaw($manualExportScopeSql . ' AS order_id')
+            ->selectRaw('inventory_document_items.product_id')
+            ->selectRaw('COALESCE(SUM(inventory_document_items.quantity), 0) AS manual_export_quantity')
+            ->where('inventory_documents.type', 'export')
+            ->where('inventory_documents.status', 'completed')
+            ->groupByRaw($manualExportScopeSql . ', inventory_document_items.product_id');
+
+        if ($inventoryAccountId > 0) {
+            $manualExportQtySub
+                ->where('inventory_document_items.account_id', $inventoryAccountId)
+                ->where('inventory_documents.account_id', $inventoryAccountId);
+        }
+
+        if (Schema::hasColumn('inventory_documents', 'deleted_at')) {
+            $manualExportQtySub->whereNull('inventory_documents.deleted_at');
+        }
+
+        $this->applyInventorySnapshotProductIdScope($manualExportQtySub, 'inventory_document_items.product_id', $productIds);
+        $this->applyInventorySnapshotDateRange($manualExportQtySub, 'inventory_documents.document_date', $request);
+
+        $shipmentExportQtySub = DB::table('shipment_items')
+            ->join('shipments', 'shipments.id', '=', 'shipment_items.shipment_id')
+            ->join('order_items', 'order_items.id', '=', 'shipment_items.order_item_id')
+            ->join('orders', 'orders.id', '=', 'shipments.order_id')
+            ->selectRaw('shipments.order_id')
+            ->selectRaw('COALESCE(order_items.actual_product_id, order_items.product_id) AS product_id')
+            ->selectRaw('COALESCE(SUM(shipment_items.qty), 0) AS automatic_export_quantity')
+            ->where(function ($builder) {
+                $builder
+                    ->whereNotNull('order_items.actual_product_id')
+                    ->orWhereNotNull('order_items.product_id');
+            })
+            ->groupBy('shipments.order_id')
+            ->groupByRaw('COALESCE(order_items.actual_product_id, order_items.product_id)');
+
+        $this->applyInventorySnapshotProductIdScope($shipmentExportQtySub, 'COALESCE(order_items.actual_product_id, order_items.product_id)', $productIds);
+        $this->applyInventorySnapshotExportEligibleOrderScope(
+            $shipmentExportQtySub,
+            $request,
+            $inventoryAccountId,
+            'COALESCE(shipments.shipped_at, shipments.out_for_delivery_at, shipments.created_at, orders.shipping_dispatched_at, orders.created_at)'
+        );
+        $this->applyActiveShipmentFilters($shipmentExportQtySub, 'shipments');
+
+        $legacyAutomaticExportQtySub = OrderItem::withoutGlobalScope('account_id')
+            ->join('orders', 'orders.id', '=', 'order_items.order_id')
+            ->selectRaw('orders.id AS order_id')
+            ->selectRaw('COALESCE(order_items.actual_product_id, order_items.product_id) AS product_id')
+            ->selectRaw('COALESCE(SUM(order_items.quantity), 0) AS automatic_export_quantity')
+            ->where(function ($builder) {
+                $builder
+                    ->whereNotNull('order_items.actual_product_id')
+                    ->orWhereNotNull('order_items.product_id');
+            })
+            ->groupBy('orders.id')
+            ->groupByRaw('COALESCE(order_items.actual_product_id, order_items.product_id)');
+
+        $this->applyInventorySnapshotProductIdScope($legacyAutomaticExportQtySub, 'COALESCE(order_items.actual_product_id, order_items.product_id)', $productIds);
+        $this->applyInventorySnapshotExportEligibleOrderScope(
+            $legacyAutomaticExportQtySub,
+            $request,
+            $inventoryAccountId,
+            'COALESCE(orders.shipping_dispatched_at, orders.created_at)'
+        );
+
+        $legacyAutomaticExportQtySub
+            ->where(function ($builder) {
+                $builder
+                    ->where('orders.type', 'inventory_export')
+                    ->orWhere(function ($trackingQuery) {
+                        $trackingQuery
+                            ->whereNotNull('orders.shipping_tracking_code')
+                            ->where('orders.shipping_tracking_code', '!=', '');
+                    })
+                    ->orWhereExists(function ($shipmentQuery) {
+                        $shipmentQuery
+                            ->select(DB::raw(1))
+                            ->from('shipments')
+                            ->whereColumn('shipments.order_id', 'orders.id');
+
+                        $this->applyActiveShipmentFilters($shipmentQuery, 'shipments');
+                    });
+            })
+            ->whereNotExists(function ($shipmentItemQuery) {
+                $shipmentItemQuery
+                    ->select(DB::raw(1))
+                    ->from('shipment_items')
+                    ->join('shipments', 'shipments.id', '=', 'shipment_items.shipment_id')
+                    ->whereColumn('shipments.order_id', 'orders.id');
+
+                $this->applyActiveShipmentFilters($shipmentItemQuery, 'shipments');
+            });
+
+        $automaticExportQtySub = DB::query()
+            ->fromSub(
+                DB::query()
+                    ->fromSub($shipmentExportQtySub, 'shipment_exports')
+                    ->selectRaw('order_id, product_id, automatic_export_quantity')
+                    ->unionAll(
+                        DB::query()
+                            ->fromSub($legacyAutomaticExportQtySub, 'legacy_automatic_exports')
+                            ->selectRaw('order_id, product_id, automatic_export_quantity')
+                    ),
+                'automatic_export_sources'
+            )
+            ->selectRaw('order_id')
+            ->selectRaw('product_id')
+            ->selectRaw('COALESCE(SUM(automatic_export_quantity), 0) AS automatic_export_quantity')
+            ->groupBy('order_id', 'product_id');
+
+        $exportKeysSub = DB::query()
+            ->fromSub(
+                DB::query()
+                    ->fromSub($manualExportQtySub, 'manual_export_keys')
+                    ->selectRaw('order_id, product_id')
+                    ->union(
+                        DB::query()
+                            ->fromSub($automaticExportQtySub, 'automatic_export_keys')
+                            ->selectRaw('order_id, product_id')
+                    ),
+                'export_keys'
+            )
+            ->selectRaw('order_id')
+            ->selectRaw('product_id');
+
+        return DB::query()
+            ->fromSub($exportKeysSub, 'export_keys')
+            ->leftJoinSub($manualExportQtySub, 'manual_exports', function ($join) {
+                $join
+                    ->on('manual_exports.order_id', '=', 'export_keys.order_id')
+                    ->on('manual_exports.product_id', '=', 'export_keys.product_id');
+            })
+            ->leftJoinSub($automaticExportQtySub, 'automatic_exports', function ($join) {
+                $join
+                    ->on('automatic_exports.order_id', '=', 'export_keys.order_id')
+                    ->on('automatic_exports.product_id', '=', 'export_keys.product_id');
+            })
+            ->selectRaw('export_keys.product_id')
+            ->selectRaw('COALESCE(SUM(GREATEST(COALESCE(manual_exports.manual_export_quantity, 0), COALESCE(automatic_exports.automatic_export_quantity, 0))), 0) AS total_exported')
+            ->groupBy('export_keys.product_id');
+    }
+
+    protected function buildInventorySnapshotPendingOutboundQuantitySubquery(Request $request, array $productIds, int $inventoryAccountId)
+    {
+        $manualExportQtySub = DB::table('inventory_document_items')
+            ->join('inventory_documents', 'inventory_documents.id', '=', 'inventory_document_items.inventory_document_id')
+            ->selectRaw('inventory_documents.reference_id AS order_id')
+            ->selectRaw('inventory_document_items.product_id')
+            ->selectRaw('COALESCE(SUM(inventory_document_items.quantity), 0) AS exported_quantity')
+            ->where('inventory_documents.type', 'export')
+            ->whereIn('inventory_documents.status', ['draft', 'completed'])
+            ->where('inventory_documents.reference_type', 'order')
+            ->whereNotNull('inventory_documents.reference_id')
+            ->groupBy('inventory_documents.reference_id', 'inventory_document_items.product_id');
+
+        if ($inventoryAccountId > 0) {
+            $manualExportQtySub
+                ->where('inventory_document_items.account_id', $inventoryAccountId)
+                ->where('inventory_documents.account_id', $inventoryAccountId);
+        }
+
+        if (Schema::hasColumn('inventory_documents', 'deleted_at')) {
+            $manualExportQtySub->whereNull('inventory_documents.deleted_at');
+        }
+
+        $this->applyInventorySnapshotProductIdScope($manualExportQtySub, 'inventory_document_items.product_id', $productIds);
+
+        $pendingOrderItemsSub = OrderItem::withoutGlobalScope('account_id')
+            ->join('orders', 'orders.id', '=', 'order_items.order_id')
+            ->selectRaw('order_items.order_id')
+            ->selectRaw('COALESCE(order_items.actual_product_id, order_items.product_id) AS product_id')
+            ->selectRaw('COALESCE(SUM(order_items.quantity), 0) AS ordered_quantity')
+            ->where(function ($builder) {
+                $builder
+                    ->whereNotNull('order_items.actual_product_id')
+                    ->orWhereNotNull('order_items.product_id');
+            })
+            ->groupBy('order_items.order_id')
+            ->groupByRaw('COALESCE(order_items.actual_product_id, order_items.product_id)');
+
+        $this->applyInventorySnapshotProductIdScope($pendingOrderItemsSub, 'COALESCE(order_items.actual_product_id, order_items.product_id)', $productIds);
+        $this->applyInventorySnapshotPendingOutboundEligibleOrderScope($pendingOrderItemsSub, $request, $inventoryAccountId);
+
+        return DB::query()
+            ->fromSub($pendingOrderItemsSub, 'pending_order_items')
+            ->leftJoinSub($manualExportQtySub, 'manual_exports', function ($join) {
+                $join
+                    ->on('manual_exports.order_id', '=', 'pending_order_items.order_id')
+                    ->on('manual_exports.product_id', '=', 'pending_order_items.product_id');
+            })
+            ->selectRaw('pending_order_items.product_id')
+            ->selectRaw('COALESCE(SUM(GREATEST(pending_order_items.ordered_quantity - COALESCE(manual_exports.exported_quantity, 0), 0)), 0) AS pending_export_quantity')
+            ->groupBy('pending_order_items.product_id');
+    }
+
+    protected function attachInventoryLedgerSnapshotSubqueries(Builder $query, Request $request, array $productIds, int $inventoryAccountId): array
+    {
+        $importQtySub = $this->buildInventorySnapshotImportQuantitySubquery($request, $productIds, $inventoryAccountId);
+        $exportQtySub = $this->buildInventorySnapshotExportQuantitySubquery($request, $productIds, $inventoryAccountId);
+        $exportAdjustmentQtySub = $this->buildInventorySnapshotExportAdjustmentQuantitySubquery($request, $productIds, $inventoryAccountId);
+        $returnQtySub = $this->buildInventorySnapshotDocumentQuantitySubquery($request, $productIds, $inventoryAccountId, 'return', 'total_returned');
+        $damagedQtySub = $this->buildInventorySnapshotDocumentQuantitySubquery($request, $productIds, $inventoryAccountId, 'damaged', 'total_damaged');
+        $adjustmentQtySub = $this->buildInventorySnapshotStockAdjustmentQuantitySubquery($request, $productIds, $inventoryAccountId);
+        $pendingOutboundQtySub = $this->buildInventorySnapshotPendingOutboundQuantitySubquery($request, $productIds, $inventoryAccountId);
+
+        $query->leftJoinSub($importQtySub, 'import_totals', function ($join) {
+            $join->on('import_totals.product_id', '=', 'products.id');
+        });
+        $query->leftJoinSub($exportQtySub, 'export_totals', function ($join) {
+            $join->on('export_totals.product_id', '=', 'products.id');
+        });
+        $query->leftJoinSub($exportAdjustmentQtySub, 'export_adjustments', function ($join) {
+            $join->on('export_adjustments.product_id', '=', 'products.id');
+        });
+        $query->leftJoinSub($returnQtySub, 'return_totals', function ($join) {
+            $join->on('return_totals.product_id', '=', 'products.id');
+        });
+        $query->leftJoinSub($damagedQtySub, 'damaged_totals', function ($join) {
+            $join->on('damaged_totals.product_id', '=', 'products.id');
+        });
+        $query->leftJoinSub($adjustmentQtySub, 'stock_adjustments', function ($join) {
+            $join->on('stock_adjustments.product_id', '=', 'products.id');
+        });
+        $query->leftJoinSub($pendingOutboundQtySub, 'pending_outbound', function ($join) {
+            $join->on('pending_outbound.product_id', '=', 'products.id');
+        });
+
+        $importQtySql = 'COALESCE(import_totals.total_imported, 0)';
+        $exportQtySql = 'COALESCE(export_totals.total_exported, 0)';
+        $exportAdjustmentQtySql = 'COALESCE(export_adjustments.total_export_adjusted, 0)';
+        $returnQtySql = 'COALESCE(return_totals.total_returned, 0)';
+        $damagedQtySql = 'COALESCE(damaged_totals.total_damaged, 0)';
+        $adjustmentQtySql = 'COALESCE(stock_adjustments.total_adjusted, 0)';
+        $pendingExportQtySql = 'COALESCE(pending_outbound.pending_export_quantity, 0)';
+        $correctedExportQtySql = '(' . $exportQtySql . ' + ' . $exportAdjustmentQtySql . ')';
+        $computedStockSql = '('
+            . $importQtySql
+            . ' - '
+            . $correctedExportQtySql
+            . ' + '
+            . $returnQtySql
+            . ' - '
+            . $damagedQtySql
+            . ' + '
+            . $adjustmentQtySql
+            . ')';
+        $actualStockSql = '(' . $computedStockSql . ' - ' . $pendingExportQtySql . ')';
+
+        return [
+            'computed_stock_sql' => $computedStockSql,
+            'pending_export_sql' => $pendingExportQtySql,
+            'actual_stock_sql' => $actualStockSql,
+        ];
+    }
+
     protected function buildActualStockMap(Request $request, array $productIds): array
     {
         $normalizedIds = collect($productIds)
@@ -5172,17 +5700,19 @@ class ProductController extends Controller
                 ->select(['products.id'])
                 ->whereIn('products.id', $sourceProductIds);
 
-            $stockContext = $this->attachActualStockSubqueries($stockQuery, $request, (int) $inventoryAccountId);
+            $stockContext = $this->attachInventoryLedgerSnapshotSubqueries($stockQuery, $request, $sourceProductIds, (int) $inventoryAccountId);
 
             $stockQuery
-                ->selectRaw($stockContext['base_stock_sql'] . ' AS computed_stock')
+                ->selectRaw($stockContext['computed_stock_sql'] . ' AS computed_stock')
                 ->selectRaw($stockContext['pending_export_sql'] . ' AS pending_export_quantity')
+                ->selectRaw($stockContext['actual_stock_sql'] . ' AS available_to_sell')
                 ->get()
                 ->each(function (Product $product) use (&$snapshotMap) {
                     $computedStock = InventoryQuantity::normalize($product->computed_stock ?? 0);
                     $pendingExportQuantity = InventoryQuantity::normalize($product->pending_export_quantity ?? 0);
-                    // available_to_sell is allowed to be negative (pre-sales / back-orders)
-                    $availableToSell = $computedStock - $pendingExportQuantity;
+                    $availableToSell = InventoryQuantity::normalize(
+                        $product->available_to_sell ?? ($computedStock - $pendingExportQuantity)
+                    );
 
                     $snapshotMap[(int) $product->id] = [
                         'computed_stock' => $computedStock,
@@ -5894,22 +6424,25 @@ class ProductController extends Controller
         Builder $query,
         array $tokenLikes,
         bool $includeSku = false,
-        bool $includeVariationMatches = true
+        bool $includeVariationMatches = true,
+        array $skuTokenLikes = []
     ): void
     {
         $nameExpr = $this->normalizedWordsExpression('products.name');
         $compactNameExpr = $this->compactSearchExpression('products.name');
-        $compactSkuExpr = $includeSku ? $this->compactSearchExpression('products.sku') : null;
+        $compactSkuExpr = ($includeSku || !empty($skuTokenLikes)) ? $this->compactSearchExpression('products.sku') : null;
+        $skuTokenLikeSet = array_fill_keys($skuTokenLikes, true);
 
         $query
-            ->where(function (Builder $directQuery) use ($nameExpr, $compactNameExpr, $compactSkuExpr, $tokenLikes) {
+            ->where(function (Builder $directQuery) use ($nameExpr, $compactNameExpr, $compactSkuExpr, $tokenLikes, $includeSku, $skuTokenLikeSet) {
                 foreach ($tokenLikes as $tokenLike) {
-                    $directQuery->where(function (Builder $segmentQuery) use ($nameExpr, $compactNameExpr, $compactSkuExpr, $tokenLike) {
+                    $matchSkuForToken = $includeSku || isset($skuTokenLikeSet[$tokenLike]);
+                    $directQuery->where(function (Builder $segmentQuery) use ($nameExpr, $compactNameExpr, $compactSkuExpr, $tokenLike, $matchSkuForToken) {
                         $segmentQuery
                             ->whereRaw("{$nameExpr} LIKE ? ESCAPE '\\'", [$tokenLike])
                             ->orWhereRaw("{$compactNameExpr} LIKE ? ESCAPE '\\'", [$tokenLike]);
 
-                        if ($compactSkuExpr !== null) {
+                        if ($matchSkuForToken && $compactSkuExpr !== null) {
                             $segmentQuery->orWhereRaw("{$compactSkuExpr} LIKE ? ESCAPE '\\'", [$tokenLike]);
                         }
                     });
@@ -5923,20 +6456,21 @@ class ProductController extends Controller
 
         if ($includeVariationMatches) {
             $query
-                ->orWhereHas('variations', function (Builder $variationQuery) use ($tokenLikes, $includeSku) {
+                ->orWhereHas('variations', function (Builder $variationQuery) use ($tokenLikes, $includeSku, $skuTokenLikes, $skuTokenLikeSet) {
                     $variationNameExpr = $this->normalizedWordsExpression('name');
                     $variationCompactNameExpr = $this->compactSearchExpression('name');
-                    $variationCompactSkuExpr = $includeSku ? $this->compactSearchExpression('sku') : null;
+                    $variationCompactSkuExpr = ($includeSku || !empty($skuTokenLikes)) ? $this->compactSearchExpression('sku') : null;
 
                     $variationQuery->where('status', true);
 
                     foreach ($tokenLikes as $tokenLike) {
-                        $variationQuery->where(function (Builder $segmentQuery) use ($variationNameExpr, $variationCompactNameExpr, $variationCompactSkuExpr, $tokenLike) {
+                        $matchSkuForToken = $includeSku || isset($skuTokenLikeSet[$tokenLike]);
+                        $variationQuery->where(function (Builder $segmentQuery) use ($variationNameExpr, $variationCompactNameExpr, $variationCompactSkuExpr, $tokenLike, $matchSkuForToken) {
                             $segmentQuery
                                 ->whereRaw("{$variationNameExpr} LIKE ? ESCAPE '\\'", [$tokenLike])
                                 ->orWhereRaw("{$variationCompactNameExpr} LIKE ? ESCAPE '\\'", [$tokenLike]);
 
-                            if ($variationCompactSkuExpr !== null) {
+                            if ($matchSkuForToken && $variationCompactSkuExpr !== null) {
                                 $segmentQuery->orWhereRaw("{$variationCompactSkuExpr} LIKE ? ESCAPE '\\'", [$tokenLike]);
                             }
                         });
@@ -6011,6 +6545,15 @@ class ProductController extends Controller
             fn ($token) => '%' . $this->escapeLike($token) . '%',
             $nameTokens
         );
+        $hasAlphaToken = collect($nameTokens)->contains(fn ($token) => preg_match('/[a-z]/i', $token) === 1);
+        $skuTokenLikes = $isCompactCompositeSearch || !$hasAlphaToken
+            ? []
+            : collect($nameTokens)
+                ->filter(fn ($token) => preg_match('/\d/', $token) === 1)
+                ->map(fn ($token) => '%' . $this->escapeLike($token) . '%')
+                ->unique()
+                ->values()
+                ->all();
         $adjacentPhraseLikes = collect($nameTokens)
             ->sliding(2)
             ->map(function ($tokens) {
@@ -6110,13 +6653,13 @@ class ProductController extends Controller
             $namePrefixLike,
             $nameContainsLike,
         ];
-        $compactSkuExpr = $isCompactCompositeSearch ? $this->compactSearchExpression('products.sku') : null;
+        $compactSkuExpr = ($isCompactCompositeSearch || !empty($skuTokenLikes)) ? $this->compactSearchExpression('products.sku') : null;
 
         foreach ($tokenLikes as $tokenLike) {
             $searchRankingParts[] = "CASE WHEN {$nameExpr} LIKE ? ESCAPE '\\' THEN 120 ELSE 0 END";
             $searchRankingBindings[] = $tokenLike;
 
-            if ($compactSkuExpr !== null) {
+            if ($compactSkuExpr !== null && ($isCompactCompositeSearch || in_array($tokenLike, $skuTokenLikes, true))) {
                 $searchRankingParts[] = "CASE WHEN {$compactSkuExpr} LIKE ? ESCAPE '\\' THEN 90 ELSE 0 END";
                 $searchRankingBindings[] = $tokenLike;
             }
@@ -6131,8 +6674,8 @@ class ProductController extends Controller
 
         $searchRankingSql = '(' . implode(' + ', $searchRankingParts) . ')';
         $query->selectRaw("{$searchRankingSql} AS search_score", $searchRankingBindings);
-        $query->where(function (Builder $searchQuery) use ($tokenLikes, $isCompactCompositeSearch, $includeVariationMatches) {
-            $this->applyProductNameTokenConstraint($searchQuery, $tokenLikes, $isCompactCompositeSearch, $includeVariationMatches);
+        $query->where(function (Builder $searchQuery) use ($tokenLikes, $isCompactCompositeSearch, $includeVariationMatches, $skuTokenLikes) {
+            $this->applyProductNameTokenConstraint($searchQuery, $tokenLikes, $isCompactCompositeSearch, $includeVariationMatches, $skuTokenLikes);
         });
 
         if ($hasAdjacentPhraseMatch) {
@@ -6577,6 +7120,25 @@ class ProductController extends Controller
     protected function productQuickFilterRankRequested(Request $request): bool
     {
         return $request->boolean('quick_filter_rank') && ! $this->productQuickFiltersEnabled($request);
+    }
+
+    protected function productImportQuickFilterRequested(Request $request): bool
+    {
+        return $request->boolean('import_starred') || $request->boolean('inventory_import_starred');
+    }
+
+    protected function applyProductImportQuickFilter(Builder $query): void
+    {
+        $query->where(function (Builder $starQuery) {
+            $starQuery
+                ->where('products.inventory_import_starred', true)
+                ->orWhereHas('variations', function (Builder $variationQuery) {
+                    $variationQuery->where('inventory_import_starred', true);
+                })
+                ->orWhereHas('parentConfigurable', function (Builder $parentQuery) {
+                    $parentQuery->where('inventory_import_starred', true);
+                });
+        });
     }
 
     protected function sqlPlaceholders(array $values): string
@@ -7521,6 +8083,7 @@ class ProductController extends Controller
                     'products.category_id',
                     'products.inventory_unit_id',
                     'products.profit_center_id',
+                    'products.inventory_import_starred',
                 ]);
 
                 if ($bundleOptionSearch !== null && !empty($matchedProductIds)) {
@@ -7575,6 +8138,7 @@ class ProductController extends Controller
                 'products.category_id',
                 'products.inventory_unit_id',
                 'products.profit_center_id',
+                'products.inventory_import_starred',
             ])
             ->whereIn('products.id', $variantIds->all())
             ->where('products.status', true);
@@ -7730,6 +8294,8 @@ class ProductController extends Controller
                         'display_name' => $resolvedProduct->name,
                         'display_sku' => $resolvedProduct->sku,
                         'warehouse_sequence' => $this->productWarehouseSequenceForDisplay($resolvedProduct),
+                        'inventory_import_starred' => (bool) ($resolvedProduct->inventory_import_starred ?? false),
+                        'base_inventory_import_starred' => (bool) ($bundleItem->inventory_import_starred ?? false),
                         'category_id' => $resolvedProduct->category_id !== null ? (int) $resolvedProduct->category_id : null,
                         'profit_center_id' => $resolvedProduct->profit_center_id !== null
                             ? (int) $resolvedProduct->profit_center_id
@@ -7806,6 +8372,7 @@ class ProductController extends Controller
             'products.inventory_unit_id',
             'products.profit_center_id',
             'products.warehouse_sequence',
+            'products.inventory_import_starred',
         ]);
         $query->withExists('variations');
 
@@ -7884,6 +8451,10 @@ class ProductController extends Controller
             }
         }
 
+        if ($this->productImportQuickFilterRequested($request)) {
+            $this->applyProductImportQuickFilter($query);
+        }
+
         // Apply parent variation filter if requested
         if ($request->filled('parent_id')) {
             $parentId = (int) $request->parent_id;
@@ -7935,7 +8506,7 @@ class ProductController extends Controller
             'parentConfigurable' => fn ($parentQuery) => $parentQuery
                 ->withoutGlobalScope('account_id')
                 ->when(!empty($sourceCatalogAccountIds), fn ($query) => $query->whereIn('products.account_id', $sourceCatalogAccountIds))
-                ->select('products.id', 'products.account_id', 'products.name', 'products.sku', 'products.inventory_unit_id', 'products.profit_center_id', 'products.warehouse_sequence')
+                ->select('products.id', 'products.account_id', 'products.name', 'products.sku', 'products.inventory_unit_id', 'products.profit_center_id', 'products.warehouse_sequence', 'products.inventory_import_starred')
                 ->with(['unit:id,name']),
             'variations' => function ($variationQuery) use ($pickerAttributeFilters, $sourceCatalogAccountIds) {
                 $variationQuery->withoutGlobalScope('account_id');
@@ -8002,6 +8573,8 @@ class ProductController extends Controller
                 'sku' => $product->sku,
                 'display_sku' => $product->sku,
                 'warehouse_sequence' => $this->productWarehouseSequenceForDisplay($product),
+                'inventory_import_starred' => (bool) ($product->inventory_import_starred ?? false),
+                'parent_inventory_import_starred' => (bool) ($parentProduct?->inventory_import_starred ?? false),
                 'name' => $product->name,
                 'display_name' => $displayName,
                 'entry_kind' => $parentProduct ? 'variation' : 'product',
@@ -8044,6 +8617,8 @@ class ProductController extends Controller
                             'sku' => $variation->sku,
                             'display_sku' => $variation->sku,
                             'warehouse_sequence' => $this->productWarehouseSequenceForDisplay($variation),
+                            'inventory_import_starred' => (bool) ($variation->inventory_import_starred ?? false),
+                            'parent_inventory_import_starred' => (bool) ($product->inventory_import_starred ?? false),
                             'name' => $variation->name,
                             'display_name' => $variationDisplayName,
                             'entry_kind' => 'variation',
@@ -8517,95 +9092,165 @@ class ProductController extends Controller
             $sortOrder = $request->input('sort_order', 'desc');
             $requestedSort = is_string($sortBy) && trim($sortBy) !== '' ? trim($sortBy) : 'created_at';
             $order = strtolower((string) $sortOrder) === 'asc' ? 'asc' : 'desc';
+            $groupNumericAggregate = $order === 'asc' ? 'MIN' : 'MAX';
 
             $topLevelScopeQuery = clone $query;
             $topLevelScopeQuery->whereDoesntHave('parentConfigurable');
 
-            $directMatchQuery = clone $topLevelScopeQuery;
-            $directMatchQuery->setEagerLoads([]);
-            $directMatchQuery->select('products.id');
-            [$directSearchRankingSql, $directSearchRankingBindings] = $this->applyProductSearch(
-                $directMatchQuery,
-                $searchTerm,
-                false
-            );
-            if ($directSearchRankingSql === null) {
-                $directMatchQuery->selectRaw('0 AS search_score');
-            }
-
             $directSortProjection = $this->buildProductListSortProjection($requestedSort, $actualStockSql);
-            $directMatchQuery
-                ->selectRaw("{$directSortProjection['empty_rank']} AS sort_empty_rank")
-                ->selectRaw("{$directSortProjection['text_value']} AS sort_text_value")
-                ->selectRaw("{$directSortProjection['number_value']} AS sort_numeric_value");
+            $buildDirectMatchQuery = function () use ($topLevelScopeQuery, $searchTerm, $directSortProjection) {
+                $directMatchQuery = clone $topLevelScopeQuery;
+                $directMatchQuery->setEagerLoads([]);
+                $directMatchQuery->select('products.id');
+                [$directSearchRankingSql] = $this->applyProductSearch(
+                    $directMatchQuery,
+                    $searchTerm,
+                    false
+                );
+                if ($directSearchRankingSql === null) {
+                    $directMatchQuery->selectRaw('0 AS search_score');
+                }
 
-            $configurableParentIdsQuery = clone $topLevelScopeQuery;
-            $configurableParentIdsQuery->setEagerLoads([]);
-            $configurableParentIdsQuery
-                ->select('products.id')
-                ->where('products.type', 'configurable');
+                return $directMatchQuery
+                    ->selectRaw('products.id AS parent_id')
+                    ->selectRaw("{$directSortProjection['empty_rank']} AS sort_empty_rank")
+                    ->selectRaw("{$directSortProjection['text_value']} AS sort_text_value")
+                    ->selectRaw("{$directSortProjection['number_value']} AS sort_numeric_value")
+                    ->selectRaw('0 AS variant_position');
+            };
 
-            $variantMatchQuery = Product::query()
-                ->select('products.id')
-                ->distinct()
-                ->join('product_links as variant_parent_links', function ($join) {
-                    $join->on('variant_parent_links.linked_product_id', '=', 'products.id')
-                        ->where('variant_parent_links.link_type', 'super_link');
-                });
+            $buildDirectParentIdsQuery = function () use ($topLevelScopeQuery, $searchTerm) {
+                $directParentIdsQuery = clone $topLevelScopeQuery;
+                $directParentIdsQuery->setEagerLoads([]);
+                $directParentIdsQuery->select('products.id');
+                $this->applyProductSearch($directParentIdsQuery, $searchTerm, false);
 
-            if ($request->boolean('is_trash')) {
-                $variantMatchQuery->onlyTrashed();
-            }
+                return $directParentIdsQuery->select('products.id');
+            };
 
-            $variantStockContext = $this->attachActualStockSubqueries($variantMatchQuery, $request);
-            $variantActualStockSql = $variantStockContext['actual_stock_sql'];
+            $buildConfigurableParentIdsQuery = function () use ($topLevelScopeQuery) {
+                $configurableParentIdsQuery = clone $topLevelScopeQuery;
+                $configurableParentIdsQuery->setEagerLoads([]);
 
-            // Keep variant rows in the result set by filtering through the
-            // parent ids subquery directly, instead of relying on relation
-            // aliases inside whereHas that can point back to the child table.
-            $variantMatchQuery->whereIn('variant_parent_links.product_id', $configurableParentIdsQuery);
+                return $configurableParentIdsQuery
+                    ->select('products.id')
+                    ->where('products.type', 'configurable');
+            };
 
-            [$variantSearchRankingSql, $variantSearchRankingBindings] = $this->applyProductSearch(
-                $variantMatchQuery,
+            $buildVariantMatchQuery = function () use (
+                $request,
                 $searchTerm,
-                false
-            );
-            if ($variantSearchRankingSql === null) {
-                $variantMatchQuery->selectRaw('0 AS search_score');
-            }
+                $requestedSort,
+                $buildConfigurableParentIdsQuery,
+                $buildDirectParentIdsQuery
+            ) {
+                $variantMatchQuery = Product::query()
+                    ->select('products.id')
+                    ->distinct()
+                    ->join('product_links as variant_parent_links', function ($join) {
+                        $join->on('variant_parent_links.linked_product_id', '=', 'products.id')
+                            ->where('variant_parent_links.link_type', 'super_link');
+                    });
 
-            $variantSortProjection = $this->buildProductListSortProjection($requestedSort, $variantActualStockSql);
-            $variantMatchQuery
-                ->selectRaw("{$variantSortProjection['empty_rank']} AS sort_empty_rank")
-                ->selectRaw("{$variantSortProjection['text_value']} AS sort_text_value")
-                ->selectRaw("{$variantSortProjection['number_value']} AS sort_numeric_value");
+                if ($request->boolean('is_trash')) {
+                    $variantMatchQuery->onlyTrashed();
+                }
 
-            $searchMatches = $directMatchQuery->toBase()->unionAll($variantMatchQuery->toBase());
-            $searchMatchRows = DB::query()
-                ->fromSub($searchMatches, 'search_matches')
-                ->selectRaw('search_matches.id AS id')
-                ->selectRaw('search_matches.search_score')
-                ->selectRaw('search_matches.sort_empty_rank')
-                ->selectRaw('search_matches.sort_text_value')
-                ->selectRaw('search_matches.sort_numeric_value');
+                $variantStockContext = $this->attachActualStockSubqueries($variantMatchQuery, $request);
+                $variantActualStockSql = $variantStockContext['actual_stock_sql'];
+
+                // Filter variants through matching parent scope, then hide them
+                // when their parent already matches the search directly.
+                $variantMatchQuery
+                    ->whereIn('variant_parent_links.product_id', $buildConfigurableParentIdsQuery())
+                    ->whereNotIn('variant_parent_links.product_id', $buildDirectParentIdsQuery());
+
+                [$variantSearchRankingSql] = $this->applyProductSearch(
+                    $variantMatchQuery,
+                    $searchTerm,
+                    false
+                );
+                if ($variantSearchRankingSql === null) {
+                    $variantMatchQuery->selectRaw('0 AS search_score');
+                }
+
+                $variantSortProjection = $this->buildProductListSortProjection($requestedSort, $variantActualStockSql);
+
+                return $variantMatchQuery
+                    ->selectRaw('variant_parent_links.product_id AS parent_id')
+                    ->selectRaw("{$variantSortProjection['empty_rank']} AS sort_empty_rank")
+                    ->selectRaw("{$variantSortProjection['text_value']} AS sort_text_value")
+                    ->selectRaw("{$variantSortProjection['number_value']} AS sort_numeric_value")
+                    ->selectRaw('COALESCE(variant_parent_links.position, 0) AS variant_position');
+            };
+
+            $directRows = DB::query()
+                ->fromSub($buildDirectMatchQuery()->toBase(), 'direct_matches')
+                ->selectRaw('direct_matches.id AS id')
+                ->selectRaw('direct_matches.parent_id AS parent_id')
+                ->selectRaw('direct_matches.search_score AS group_score')
+                ->selectRaw('direct_matches.search_score AS search_score')
+                ->selectRaw('direct_matches.sort_empty_rank AS group_sort_empty_rank')
+                ->selectRaw('direct_matches.sort_text_value AS group_sort_text_value')
+                ->selectRaw('direct_matches.sort_numeric_value AS group_sort_numeric_value')
+                ->selectRaw('direct_matches.sort_empty_rank AS row_sort_empty_rank')
+                ->selectRaw('direct_matches.sort_text_value AS row_sort_text_value')
+                ->selectRaw('direct_matches.sort_numeric_value AS row_sort_numeric_value')
+                ->selectRaw('0 AS row_rank')
+                ->selectRaw('direct_matches.variant_position AS variant_position');
+
+            $variantParentRows = DB::query()
+                ->fromSub($buildVariantMatchQuery()->toBase(), 'variant_matches')
+                ->selectRaw('variant_matches.parent_id AS id')
+                ->selectRaw('variant_matches.parent_id AS parent_id')
+                ->selectRaw('MAX(variant_matches.search_score) AS group_score')
+                ->selectRaw('MAX(variant_matches.search_score) AS search_score')
+                ->selectRaw('MIN(variant_matches.sort_empty_rank) AS group_sort_empty_rank')
+                ->selectRaw('MIN(variant_matches.sort_text_value) AS group_sort_text_value')
+                ->selectRaw("{$groupNumericAggregate}(variant_matches.sort_numeric_value) AS group_sort_numeric_value")
+                ->selectRaw('MIN(variant_matches.sort_empty_rank) AS row_sort_empty_rank')
+                ->selectRaw('MIN(variant_matches.sort_text_value) AS row_sort_text_value')
+                ->selectRaw("{$groupNumericAggregate}(variant_matches.sort_numeric_value) AS row_sort_numeric_value")
+                ->selectRaw('0 AS row_rank')
+                ->selectRaw('0 AS variant_position')
+                ->groupBy('variant_matches.parent_id');
+
+            $variantChildRows = DB::query()
+                ->fromSub($buildVariantMatchQuery()->toBase(), 'variant_matches')
+                ->selectRaw('variant_matches.id AS id')
+                ->selectRaw('variant_matches.parent_id AS parent_id')
+                ->selectRaw('MAX(variant_matches.search_score) OVER (PARTITION BY variant_matches.parent_id) AS group_score')
+                ->selectRaw('variant_matches.search_score AS search_score')
+                ->selectRaw('MIN(variant_matches.sort_empty_rank) OVER (PARTITION BY variant_matches.parent_id) AS group_sort_empty_rank')
+                ->selectRaw('MIN(variant_matches.sort_text_value) OVER (PARTITION BY variant_matches.parent_id) AS group_sort_text_value')
+                ->selectRaw("{$groupNumericAggregate}(variant_matches.sort_numeric_value) OVER (PARTITION BY variant_matches.parent_id) AS group_sort_numeric_value")
+                ->selectRaw('variant_matches.sort_empty_rank AS row_sort_empty_rank')
+                ->selectRaw('variant_matches.sort_text_value AS row_sort_text_value')
+                ->selectRaw('variant_matches.sort_numeric_value AS row_sort_numeric_value')
+                ->selectRaw('1 AS row_rank')
+                ->selectRaw('variant_matches.variant_position AS variant_position');
+
+            $searchRows = $directRows
+                ->unionAll($variantParentRows)
+                ->unionAll($variantChildRows);
 
             $dedupeMatchRows = DB::query()
-                ->fromSub($searchMatchRows, 'search_match_rows')
+                ->fromSub($searchRows, 'search_rows')
                 ->select([
-                    'search_match_rows.id',
-                    'search_match_rows.search_score',
-                    'search_match_rows.sort_empty_rank',
-                    'search_match_rows.sort_text_value',
-                    'search_match_rows.sort_numeric_value',
-                ]);
-
-            // Keep matching variants as renderable rows while still deduplicating
-            // direct and relation matches that point at the same product id.
-            if ($directSortProjection['mode'] === 'text') {
-                $dedupeMatchRows->selectRaw("ROW_NUMBER() OVER (PARTITION BY search_match_rows.id ORDER BY search_match_rows.search_score DESC, search_match_rows.sort_empty_rank ASC, search_match_rows.sort_text_value {$order}, search_match_rows.id DESC) AS match_rank");
-            } else {
-                $dedupeMatchRows->selectRaw("ROW_NUMBER() OVER (PARTITION BY search_match_rows.id ORDER BY search_match_rows.search_score DESC, search_match_rows.sort_numeric_value {$order}, search_match_rows.id DESC) AS match_rank");
-            }
+                    'search_rows.id',
+                    'search_rows.parent_id',
+                    'search_rows.group_score',
+                    'search_rows.search_score',
+                    'search_rows.group_sort_empty_rank',
+                    'search_rows.group_sort_text_value',
+                    'search_rows.group_sort_numeric_value',
+                    'search_rows.row_sort_empty_rank',
+                    'search_rows.row_sort_text_value',
+                    'search_rows.row_sort_numeric_value',
+                    'search_rows.row_rank',
+                    'search_rows.variant_position',
+                ])
+                ->selectRaw('ROW_NUMBER() OVER (PARTITION BY search_rows.id ORDER BY search_rows.row_rank ASC, search_rows.group_score DESC, search_rows.search_score DESC, search_rows.parent_id DESC, search_rows.id DESC) AS match_rank');
 
             $deduplicatedMatches = DB::query()
                 ->fromSub($dedupeMatchRows, 'deduped_search_matches')
@@ -8613,17 +9258,22 @@ class ProductController extends Controller
 
             $rankedMatches = DB::query()
                 ->fromSub($deduplicatedMatches, 'search_matches')
-                ->orderByDesc('search_score');
+                ->orderByDesc('group_score');
 
             if ($directSortProjection['mode'] === 'text') {
                 $rankedMatches
-                    ->orderBy('sort_empty_rank', 'asc')
-                    ->orderBy('sort_text_value', $order);
+                    ->orderBy('group_sort_empty_rank', 'asc')
+                    ->orderBy('group_sort_text_value', $order);
             } else {
-                $rankedMatches->orderBy('sort_numeric_value', $order);
+                $rankedMatches->orderBy('group_sort_numeric_value', $order);
             }
 
-            $rankedMatches->orderByDesc('id');
+            $rankedMatches
+                ->orderByDesc('parent_id')
+                ->orderBy('row_rank')
+                ->orderByDesc('search_score')
+                ->orderBy('variant_position')
+                ->orderByDesc('id');
 
             $perPage = min(max((int) $request->get('per_page', 20), 1), 100);
             $paginatedMatches = $rankedMatches->paginate($perPage);

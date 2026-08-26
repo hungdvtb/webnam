@@ -13,6 +13,7 @@ use App\Models\InventoryUnit;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Product;
+use App\Models\ProductStorageLocation;
 use App\Models\Supplier;
 use App\Models\SupplierProductPrice;
 use App\Services\Inventory\InvoiceAnalysisService;
@@ -158,141 +159,38 @@ class InventoryController extends Controller
     {
         $isPickerMode = $request->boolean('picker') || $request->boolean('quick_lookup');
         $withoutSummary = $request->boolean('without_summary');
-        $query = $this->buildInventoryProductsQuery($request, $isPickerMode);
-        $summary = ($isPickerMode || $withoutSummary) ? null : $this->inventoryProductSummary(clone $query);
         $withVariants = $request->boolean('with_variants');
         $includeAttributeValues = $isPickerMode || $request->has('attributes');
         $searchTerm = trim((string) ($request->input('quick_search') ?? $request->input('search') ?? ''));
-
-        $baseRelations = [
-            'unit:id,name',
-            'parentConfigurable:id,name,sku',
-            'supplierPrices' => function ($builder) {
-                $builder
-                    ->select(['id', 'supplier_id', 'product_id', 'unit_cost', 'supplier_product_code', 'updated_at']);
-            },
-        ];
-
-        if (!$isPickerMode) {
-            $baseRelations[] = 'category:id,name';
-            $baseRelations[] = 'suppliers:id,name,code';
-            $baseRelations['supplierPrices'] = function ($builder) {
-                $builder
-                    ->select(['id', 'supplier_id', 'product_id', 'unit_cost', 'supplier_product_code', 'updated_at'])
-                    ->with(['supplier:id,name,code']);
-            };
-        }
-
-        if ($includeAttributeValues) {
-            $baseRelations[] = 'attributeValues:id,product_id,attribute_id,value';
-        }
-
-        $query->with($baseRelations);
-
-        if ($withVariants) {
-            $query->with([
-                'variations' => function ($builder) use ($isPickerMode, $includeAttributeValues) {
-                    $variationRelations = [
-                        'unit:id,name',
-                        'parentConfigurable:id,name,sku',
-                        'supplierPrices' => function ($priceBuilder) {
-                            $priceBuilder
-                                ->select(['id', 'supplier_id', 'product_id', 'unit_cost', 'supplier_product_code', 'updated_at']);
-                        },
-                    ];
-
-                    if (!$isPickerMode) {
-                        $variationRelations[] = 'category:id,name';
-                        $variationRelations[] = 'suppliers:id,name,code';
-                        $variationRelations['supplierPrices'] = function ($priceBuilder) {
-                            $priceBuilder
-                                ->select(['id', 'supplier_id', 'product_id', 'unit_cost', 'supplier_product_code', 'updated_at'])
-                                ->with(['supplier:id,name,code']);
-                        };
-                    }
-
-                    if ($includeAttributeValues) {
-                        $variationRelations[] = 'attributeValues:id,product_id,attribute_id,value';
-                    }
-
-                    $builder
-                        ->select([
-                            'products.id',
-                            'products.sku',
-                            'products.name',
-                            'products.price',
-                            'products.expected_cost',
-                            'products.cost_price',
-                            'products.inventory_unit_id',
-                            'products.inventory_import_starred',
-                            'products.stock_quantity',
-                            'products.damaged_quantity',
-                            'products.status',
-                            'products.type',
-                            'products.category_id',
-                            'products.created_at',
-                            'products.deleted_at',
-                        ])
-                        ->with($variationRelations)
-                        ->orderBy('products.name');
-                },
-            ]);
-        }
-
         $trackingMode = $request->boolean('tracking_mode');
         $requestedSortBy = $request->input('sort_by');
         $sortBy = $requestedSortBy ?: 'created_at';
         $sortOrder = strtolower((string) $request->input('sort_order', 'desc')) === 'asc' ? 'asc' : 'desc';
-        $allowedSorts = [
-            'created_at',
-            'deleted_at',
-            'sku',
-            'name',
-            'stock_quantity',
-            'damaged_quantity',
-            'price',
-            'expected_cost',
-            'cost_price',
-            'display_cost',
-            'computed_stock',
-            'pending_export_quantity',
-            'pending_return_quantity',
-            'actual_stock',
-            'inventory_value',
-            'recent_outbound_quantity',
-            'tracking_demand_quantity',
-            'tracking_daily_average',
-            'tracking_stock_coverage_days',
-            'tracking_priority_score',
-            'total_imported',
-            'total_exported',
-            'total_returned',
-            'total_damaged',
-            'total_adjusted',
-        ];
-        if ($searchTerm !== '') {
-            // Keep alias sorting raw so PostgreSQL does not wrap it into an expression and lose alias resolution.
-            $query
-                ->orderByRaw('search_score DESC')
-                ->orderBy('products.name', 'asc')
-                ->orderBy('products.created_at', 'desc');
-        } else {
-            $resolvedSortBy = in_array($sortBy, $allowedSorts, true) ? $sortBy : 'created_at';
-            $resolvedSortOrder = $sortOrder;
+        $perPage = min(max((int) $request->input('per_page', 20), 20), 500);
 
-            if ($trackingMode && !$requestedSortBy) {
-                $resolvedSortBy = 'tracking_priority_score';
-                $resolvedSortOrder = 'desc';
-            }
+        if ($this->shouldUseFastInventoryProductPage($request, $isPickerMode, $withoutSummary, $requestedSortBy, $searchTerm)) {
+            $fastResponse = $this->fastInventoryProductPage(
+                $request,
+                $perPage,
+                $withVariants,
+                $isPickerMode,
+                $includeAttributeValues,
+                $trackingMode,
+                $requestedSortBy,
+                $sortBy,
+                $sortOrder,
+                $searchTerm
+            );
 
-            $query->orderBy($resolvedSortBy, $resolvedSortOrder);
-
-            if ($trackingMode && $resolvedSortBy !== 'name') {
-                $query->orderBy('products.name', 'asc');
+            if ($fastResponse !== null) {
+                return response()->json($fastResponse);
             }
         }
 
-        $perPage = min(max((int) $request->input('per_page', 20), 20), 500);
+        $query = $this->buildInventoryProductsQuery($request, $isPickerMode);
+        $summary = ($isPickerMode || $withoutSummary) ? null : $this->inventoryProductSummary(clone $query);
+        $this->withInventoryProductRelations($query, $isPickerMode, $includeAttributeValues, $withVariants);
+        $this->applyInventoryProductOrdering($query, $trackingMode, $requestedSortBy, $sortBy, $sortOrder, $searchTerm);
         $paginated = $query->paginate($perPage);
 
         $pageProductIds = collect($paginated->items())
@@ -304,7 +202,7 @@ class InventoryController extends Controller
 
                 return $ids;
             });
-        $exportSlipProductTotals = $isPickerMode ? [] : $this->exportSlipProductTotalsForRequest($request);
+        $exportSlipProductTotals = $isPickerMode ? [] : $this->exportSlipProductTotalsForRequest($request, $pageProductIds);
         $supplierPriceMap = $this->supplierPriceMap($request, $pageProductIds);
 
         $paginated->getCollection()->transform(function (Product $product) use ($supplierPriceMap, $withVariants, $isPickerMode, $exportSlipProductTotals) {
@@ -326,6 +224,295 @@ class InventoryController extends Controller
         }
 
         return response()->json($response);
+    }
+
+    private function fastInventoryProductPage(
+        Request $request,
+        int $perPage,
+        bool $withVariants,
+        bool $isPickerMode,
+        bool $includeAttributeValues,
+        bool $trackingMode,
+        ?string $requestedSortBy,
+        string $sortBy,
+        string $sortOrder,
+        string $searchTerm
+    ): ?array {
+        $idQuery = Product::query()->select(['products.id']);
+
+        $this->applyInventoryProductFilters($idQuery, $request);
+        $this->applyInventoryProductOrdering(
+            $idQuery,
+            $trackingMode,
+            $requestedSortBy,
+            $sortBy,
+            $sortOrder,
+            $searchTerm,
+            true
+        );
+
+        $paginatedIds = $idQuery->paginate($perPage);
+        $pageIds = collect($paginatedIds->items())
+            ->map(fn (Product $product) => (int) $product->id)
+            ->filter()
+            ->values()
+            ->all();
+
+        $response = $paginatedIds->toArray();
+
+        if (empty($pageIds)) {
+            $response['data'] = [];
+            if (!$isPickerMode) {
+                $response['summary'] = null;
+            }
+
+            return $response;
+        }
+
+        $pageRequest = $this->requestWithInventoryProductIds($request, $pageIds);
+        $detailQuery = $this->buildInventoryProductsQuery($pageRequest, $isPickerMode);
+        $this->withInventoryProductRelations($detailQuery, $isPickerMode, $includeAttributeValues, $withVariants);
+
+        $positionById = array_flip($pageIds);
+        $products = $detailQuery
+            ->get()
+            ->sortBy(fn (Product $product) => $positionById[(int) $product->id] ?? PHP_INT_MAX)
+            ->values();
+
+        $pageProductIds = $products->flatMap(function (Product $product) use ($withVariants) {
+            $ids = [$product->id];
+            if ($withVariants && $product->relationLoaded('variations')) {
+                $ids = array_merge($ids, $product->variations->pluck('id')->all());
+            }
+
+            return $ids;
+        });
+        $exportSlipProductTotals = $isPickerMode ? [] : $this->exportSlipProductTotalsForRequest($pageRequest, $pageProductIds);
+        $supplierPriceMap = $this->supplierPriceMap($request, $pageProductIds);
+
+        $response['data'] = $products
+            ->map(function (Product $product) use ($supplierPriceMap, $withVariants, $isPickerMode, $exportSlipProductTotals) {
+                if (!$isPickerMode) {
+                    $this->applyExportSlipTotalsToInventoryProduct($product, $exportSlipProductTotals);
+                }
+
+                return $this->inventoryProductPayload(
+                    $product,
+                    $supplierPriceMap->get($product->id),
+                    $withVariants ? $supplierPriceMap : null,
+                    $isPickerMode
+                );
+            })
+            ->values()
+            ->all();
+
+        if (!$isPickerMode) {
+            $response['summary'] = null;
+        }
+
+        return $response;
+    }
+
+    private function shouldUseFastInventoryProductPage(
+        Request $request,
+        bool $isPickerMode,
+        bool $withoutSummary,
+        ?string $requestedSortBy,
+        string $searchTerm
+    ): bool {
+        if (!$isPickerMode && !$withoutSummary) {
+            return false;
+        }
+
+        if (!empty(array_intersect($this->requestStringList($request, 'stock_alert'), ['low', 'out', 'available']))) {
+            return false;
+        }
+
+        $trackingModes = $this->requestStringList($request, 'tracking_mode');
+        if ($request->boolean('tracking_mode') || in_array('1', $trackingModes, true)) {
+            return false;
+        }
+
+        if (trim($searchTerm) !== '') {
+            return true;
+        }
+
+        return in_array($requestedSortBy ?: 'created_at', $this->fastInventoryProductSorts(), true);
+    }
+
+    private function fastInventoryProductSorts(): array
+    {
+        return [
+            'created_at',
+            'deleted_at',
+            'sku',
+            'name',
+            'stock_quantity',
+            'damaged_quantity',
+            'price',
+            'expected_cost',
+            'cost_price',
+            'display_cost',
+        ];
+    }
+
+    private function inventoryProductAllowedSorts(): array
+    {
+        return [
+            ...$this->fastInventoryProductSorts(),
+            'computed_stock',
+            'pending_export_quantity',
+            'pending_return_quantity',
+            'actual_stock',
+            'inventory_value',
+            'recent_outbound_quantity',
+            'tracking_demand_quantity',
+            'tracking_daily_average',
+            'tracking_stock_coverage_days',
+            'tracking_priority_score',
+            'total_imported',
+            'total_exported',
+            'total_returned',
+            'total_damaged',
+            'total_adjusted',
+        ];
+    }
+
+    private function applyInventoryProductOrdering(
+        Builder $query,
+        bool $trackingMode,
+        ?string $requestedSortBy,
+        string $sortBy,
+        string $sortOrder,
+        string $searchTerm,
+        bool $baseList = false
+    ): void {
+        if ($searchTerm !== '') {
+            // Keep alias sorting raw so PostgreSQL does not wrap it into an expression and lose alias resolution.
+            $query
+                ->orderByRaw('search_score DESC')
+                ->orderBy('products.name', 'asc')
+                ->orderBy('products.created_at', 'desc');
+
+            return;
+        }
+
+        $resolvedSortBy = in_array($sortBy, $this->inventoryProductAllowedSorts(), true) ? $sortBy : 'created_at';
+        $resolvedSortOrder = $sortOrder;
+
+        if ($trackingMode && !$requestedSortBy) {
+            $resolvedSortBy = 'tracking_priority_score';
+            $resolvedSortOrder = 'desc';
+        }
+
+        if ($baseList && !in_array($resolvedSortBy, $this->fastInventoryProductSorts(), true)) {
+            $resolvedSortBy = 'created_at';
+            $resolvedSortOrder = 'desc';
+        }
+
+        if ($baseList && $resolvedSortBy === 'display_cost') {
+            $query->orderByRaw('COALESCE(products.cost_price, products.expected_cost, 0) ' . strtoupper($resolvedSortOrder));
+        } else {
+            $query->orderBy($resolvedSortBy, $resolvedSortOrder);
+        }
+
+        if ($trackingMode && $resolvedSortBy !== 'name') {
+            $query->orderBy('products.name', 'asc');
+        }
+    }
+
+    private function withInventoryProductRelations(
+        Builder $query,
+        bool $isPickerMode,
+        bool $includeAttributeValues,
+        bool $withVariants
+    ): void {
+        $query->with($this->inventoryProductBaseRelations($isPickerMode, $includeAttributeValues));
+
+        if (!$withVariants) {
+            return;
+        }
+
+        $query->with([
+            'variations' => function ($builder) use ($isPickerMode, $includeAttributeValues) {
+                $builder
+                    ->select([
+                        'products.id',
+                        'products.sku',
+                        'products.name',
+                        'products.price',
+                        'products.expected_cost',
+                        'products.cost_price',
+                        'products.inventory_unit_id',
+                        'products.inventory_import_starred',
+                        'products.warehouse_sequence',
+                        'products.stock_quantity',
+                        'products.damaged_quantity',
+                        'products.status',
+                        'products.type',
+                        'products.category_id',
+                        'products.created_at',
+                        'products.deleted_at',
+                    ])
+                    ->with($this->inventoryProductBaseRelations($isPickerMode, $includeAttributeValues))
+                    ->orderBy('products.name');
+            },
+        ]);
+    }
+
+    private function inventoryProductBaseRelations(bool $isPickerMode, bool $includeAttributeValues): array
+    {
+        $relations = [
+            'unit:id,name',
+            'parentConfigurable:id,name,sku',
+            'storageLocation' => function ($builder) {
+                $builder
+                    ->select(['id', 'account_id', 'product_id', 'warehouse_shelf_id', 'floor_number', 'position_note', 'updated_at'])
+                    ->with([
+                        'shelf:id,account_id,warehouse_id,name,code',
+                        'shelf.warehouse:id,name,code',
+                    ]);
+            },
+            'supplierPrices' => function ($builder) {
+                $builder
+                    ->select(['id', 'supplier_id', 'product_id', 'unit_cost', 'supplier_product_code', 'updated_at']);
+            },
+        ];
+
+        if (!$isPickerMode) {
+            $relations[] = 'category:id,name';
+            $relations[] = 'suppliers:id,name,code';
+            $relations['supplierPrices'] = function ($builder) {
+                $builder
+                    ->select(['id', 'supplier_id', 'product_id', 'unit_cost', 'supplier_product_code', 'updated_at'])
+                    ->with(['supplier:id,name,code']);
+            };
+        }
+
+        if ($includeAttributeValues) {
+            $relations[] = 'attributeValues:id,product_id,attribute_id,value';
+        }
+
+        return $relations;
+    }
+
+    private function requestWithInventoryProductIds(Request $request, array $productIds): Request
+    {
+        $ids = collect($productIds)
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->implode(',');
+
+        $scopedRequest = $request->duplicate(
+            array_merge($request->query->all(), ['ids' => $ids]),
+            array_merge($request->request->all(), ['ids' => $ids])
+        );
+        $scopedRequest->setUserResolver($request->getUserResolver());
+        $scopedRequest->setRouteResolver($request->getRouteResolver());
+
+        return $scopedRequest;
     }
 
     public function storeProduct(Request $request)
@@ -1672,8 +1859,16 @@ class InventoryController extends Controller
             ->with([
                 'supplier:id,name,phone,email,address',
                 'statusConfig:id,code,name,color,affects_inventory',
-                'items.product:id,sku,name,price,stock_quantity,inventory_unit_id,inventory_import_starred',
+                'items.product:id,account_id,sku,name,price,stock_quantity,inventory_unit_id,inventory_import_starred,warehouse_sequence,type',
                 'items.product.unit:id,name',
+                'items.product.storageLocation' => function ($builder) {
+                    $builder
+                        ->select(['id', 'account_id', 'product_id', 'warehouse_shelf_id', 'floor_number', 'position_note', 'updated_at'])
+                        ->with([
+                            'shelf:id,account_id,warehouse_id,name,code',
+                            'shelf.warehouse:id,name,code',
+                        ]);
+                },
                 'items.batch',
                 'items.supplierPrice',
                 'attachments',
@@ -2588,11 +2783,32 @@ class InventoryController extends Controller
         return $query;
     }
 
-    private function exportSlipProductTotalsForRequest(Request $request): array
+    private function exportSlipProductTotalsForRequest(Request $request, $productIds = []): array
     {
-        $orders = $this->buildExportSlipOrdersQuery($request, false)->get();
+        $ids = collect($productIds)
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
 
-        return $this->orderInventorySlipService->buildExportProductTotalsMap($orders);
+        $query = $this->buildExportSlipOrdersQuery($request, false);
+
+        if (!empty($ids)) {
+            $query->whereHas('items', function (Builder $itemQuery) use ($ids) {
+                $itemQuery->whereIn(DB::raw('COALESCE(order_items.actual_product_id, order_items.product_id)'), $ids);
+            });
+        }
+
+        $totals = $this->orderInventorySlipService->buildExportProductTotalsMap($query->get());
+
+        if (empty($ids)) {
+            return $totals;
+        }
+
+        return collect($totals)
+            ->only($ids)
+            ->all();
     }
 
     private function applyExportSlipTotalsToInventoryProduct(Product $product, array $exportSlipProductTotals): void
@@ -3447,6 +3663,7 @@ class InventoryController extends Controller
                 ->orWhere('inventory_import_statuses.affects_inventory', true);
         });
 
+        $this->applyInventoryProductIdScope($query, 'import_items.product_id', $request);
         $this->applyDateRange($query, 'imports.import_date', $request);
 
         return $query;
@@ -3465,6 +3682,7 @@ class InventoryController extends Controller
             $query->whereNull('inventory_documents.deleted_at');
         }
 
+        $this->applyInventoryProductIdScope($query, 'inventory_document_items.product_id', $request);
         $this->applyDateRange($query, 'inventory_documents.document_date', $request);
 
         return $query;
@@ -3483,6 +3701,7 @@ class InventoryController extends Controller
             $query->whereNull('inventory_documents.deleted_at');
         }
 
+        $this->applyInventoryProductIdScope($query, 'inventory_document_items.product_id', $request);
         $this->applyDateRange($query, 'inventory_documents.document_date', $request);
 
         return $query;
@@ -3518,6 +3737,7 @@ class InventoryController extends Controller
             $query->whereNull('inventory_documents.deleted_at');
         }
 
+        $this->applyInventoryProductIdScope($query, 'inventory_document_items.product_id', $request);
         $this->applyDateRange($query, 'inventory_documents.document_date', $request);
 
         return $query;
@@ -3569,6 +3789,7 @@ class InventoryController extends Controller
             $manualExportQtySub->whereNull('inventory_documents.deleted_at');
         }
 
+        $this->applyInventoryProductIdScope($manualExportQtySub, 'inventory_document_items.product_id', $request);
         $this->applyDateRange($manualExportQtySub, 'inventory_documents.document_date', $request);
 
         $shipmentExportQtySub = DB::table('shipment_items')
@@ -3586,6 +3807,7 @@ class InventoryController extends Controller
             ->groupBy('shipments.order_id')
             ->groupByRaw('COALESCE(order_items.actual_product_id, order_items.product_id)');
 
+        $this->applyInventoryProductIdScope($shipmentExportQtySub, 'COALESCE(order_items.actual_product_id, order_items.product_id)', $request);
         $this->applyExportEligibleOrderScope(
             $shipmentExportQtySub,
             $request,
@@ -3606,6 +3828,7 @@ class InventoryController extends Controller
             ->groupBy('orders.id')
             ->groupByRaw('COALESCE(order_items.actual_product_id, order_items.product_id)');
 
+        $this->applyInventoryProductIdScope($legacyAutomaticExportQtySub, 'COALESCE(order_items.actual_product_id, order_items.product_id)', $request);
         $this->applyExportEligibleOrderScope(
             $legacyAutomaticExportQtySub,
             $request,
@@ -3741,6 +3964,7 @@ class InventoryController extends Controller
             $query->whereNull('inventory_documents.deleted_at');
         }
 
+        $this->applyInventoryProductIdScope($query, 'inventory_document_items.product_id', $request);
         $this->applyDateRange($query, 'inventory_documents.document_date', $request);
 
         return $query;
@@ -3769,6 +3993,8 @@ class InventoryController extends Controller
             $manualExportQtySub->whereNull('inventory_documents.deleted_at');
         }
 
+        $this->applyInventoryProductIdScope($manualExportQtySub, 'inventory_document_items.product_id', $request);
+
         $pendingOrderItemsSub = OrderItem::query()
             ->join('orders', 'orders.id', '=', 'order_items.order_id')
             ->selectRaw('order_items.order_id')
@@ -3782,6 +4008,7 @@ class InventoryController extends Controller
             ->groupBy('order_items.order_id')
             ->groupByRaw('COALESCE(order_items.actual_product_id, order_items.product_id)');
 
+        $this->applyInventoryProductIdScope($pendingOrderItemsSub, 'COALESCE(order_items.actual_product_id, order_items.product_id)', $request);
         $this->applyPendingOutboundEligibleOrderScope($pendingOrderItemsSub, $request);
 
         return DB::query()
@@ -3811,6 +4038,7 @@ class InventoryController extends Controller
             ->groupBy('order_items.order_id')
             ->groupByRaw('COALESCE(order_items.actual_product_id, order_items.product_id)');
 
+        $this->applyInventoryProductIdScope($pendingReturnItemsSub, 'COALESCE(order_items.actual_product_id, order_items.product_id)', $request);
         $this->applyPendingReturnEligibleOrderScope($pendingReturnItemsSub, $request);
 
         return DB::query()
@@ -4012,24 +4240,39 @@ class InventoryController extends Controller
             ->all();
     }
 
+    private function inventoryProductIdsFromRequest(Request $request): array
+    {
+        $requestedIds = $request->input('ids', []);
+        if (!is_array($requestedIds)) {
+            $requestedIds = explode(',', (string) $requestedIds);
+        }
+
+        return collect($requestedIds)
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    private function applyInventoryProductIdScope($query, string $column, Request $request): void
+    {
+        $productIds = $this->inventoryProductIdsFromRequest($request);
+        if (empty($productIds)) {
+            return;
+        }
+
+        $target = preg_match('/^[A-Za-z0-9_.]+$/', $column) === 1 ? $column : DB::raw($column);
+        $query->whereIn($target, $productIds);
+    }
+
     private function applyInventoryProductFilters($query, Request $request): void
     {
         if ($request->boolean('trash')) {
             $query->onlyTrashed();
         }
 
-        $requestedIds = $request->input('ids', []);
-        if (!is_array($requestedIds)) {
-            $requestedIds = explode(',', (string) $requestedIds);
-        }
-
-        $productIds = collect($requestedIds)
-            ->map(fn ($id) => (int) $id)
-            ->filter()
-            ->unique()
-            ->values()
-            ->all();
-
+        $productIds = $this->inventoryProductIdsFromRequest($request);
         if (!empty($productIds)) {
             $query->whereIn('products.id', $productIds);
         }
@@ -4937,6 +5180,44 @@ class InventoryController extends Controller
             : $quantity;
     }
 
+    private function productStorageLocationPayload(Product $product): ?array
+    {
+        if (!$product->relationLoaded('storageLocation') || !$product->storageLocation) {
+            return null;
+        }
+
+        $location = $product->storageLocation;
+        if (!$location instanceof ProductStorageLocation) {
+            return null;
+        }
+
+        $shelf = $location->relationLoaded('shelf') ? $location->shelf : null;
+        $warehouse = $shelf?->relationLoaded('warehouse') ? $shelf->warehouse : null;
+        $floorNumber = (int) $location->floor_number;
+        $shelfName = trim((string) ($shelf?->name ?? ''));
+        $shelfCode = trim((string) ($shelf?->code ?? ''));
+        $shelfLabel = $shelfName !== '' ? $shelfName : $shelfCode;
+        $locationCode = $shelfCode !== '' ? "{$shelfCode}-T{$floorNumber}" : '';
+        $locationLabel = $shelfLabel !== '' ? "{$shelfLabel} - Tầng {$floorNumber}" : '';
+
+        return [
+            'id' => (int) $location->id,
+            'product_id' => (int) $location->product_id,
+            'warehouse_shelf_id' => (int) $location->warehouse_shelf_id,
+            'shelf_id' => (int) $location->warehouse_shelf_id,
+            'shelf_name' => $shelfName !== '' ? $shelfName : null,
+            'shelf_code' => $shelfCode !== '' ? $shelfCode : null,
+            'warehouse_id' => $shelf?->warehouse_id ? (int) $shelf->warehouse_id : null,
+            'warehouse_name' => $warehouse?->name,
+            'warehouse_code' => $warehouse?->code,
+            'floor_number' => $floorNumber,
+            'position_note' => $location->position_note,
+            'location_code' => $locationCode,
+            'location_label' => $locationLabel,
+            'updated_at' => $location->updated_at,
+        ];
+    }
+
     private function inventoryProductPayload(Product $product, ?SupplierProductPrice $supplierPrice = null, $supplierPriceMap = null, bool $compact = false): array
     {
         $currentCost = $product->cost_price !== null ? (float) $product->cost_price : null;
@@ -4944,6 +5225,10 @@ class InventoryController extends Controller
         $costSource = $currentCost !== null ? 'current_cost' : ($expectedCost !== null ? 'expected_cost' : 'empty');
         $parentProduct = $product->relationLoaded('parentConfigurable') ? $product->parentConfigurable->first() : null;
         $variantCount = (int) ($product->variant_count ?? ($product->relationLoaded('variations') ? $product->variations->count() : 0));
+        $warehouseSequence = $product->warehouse_sequence !== null && Product::usesWarehouseSequence($product->type) && $variantCount <= 0
+            ? (int) $product->warehouse_sequence
+            : null;
+        $storageLocationPayload = $this->productStorageLocationPayload($product);
         $fallbackSupplierPrice = $supplierPrice;
 
         if (!$fallbackSupplierPrice && $product->relationLoaded('supplierPrices')) {
@@ -5007,6 +5292,9 @@ class InventoryController extends Controller
             'name' => $product->name,
             'inventory_unit_id' => $product->inventory_unit_id ? (int) $product->inventory_unit_id : null,
             'inventory_import_starred' => (bool) ($product->inventory_import_starred ?? false),
+            'warehouse_sequence' => $warehouseSequence,
+            'storage_location' => $storageLocationPayload,
+            'storage_location_label' => $storageLocationPayload['location_label'] ?? null,
             'unit_name' => $product->relationLoaded('unit') ? $product->unit?->name : null,
             'price' => (float) ($product->price ?? 0),
             'stock_quantity' => InventoryQuantity::normalize($product->stock_quantity ?? 0),

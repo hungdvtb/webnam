@@ -6936,6 +6936,10 @@ class ProductController extends Controller
             });
 
             if ($includeVariationMatches) {
+                $attributeQuery->orWhere(function (Builder $directVariationQuery) use ($filterGroups) {
+                    $this->applyVariationAttributeFilterGroups($directVariationQuery, $filterGroups);
+                });
+
                 $attributeQuery->orWhereHas('variations', function (Builder $variationQuery) use ($filterGroups) {
                     $variationQuery->where('products.status', true);
                     $this->applyVariationAttributeFilterGroups($variationQuery, $filterGroups);

@@ -1149,31 +1149,53 @@ const buildProductQuickSetupKey = (attributeId, attributeValue) => {
         ? `${normalizedAttributeId}::${normalizedAttributeValue}`
         : '';
 };
+const sanitizeProductQuickSetupStore = (store = {}) => {
+    if (!store || typeof store !== 'object' || Array.isArray(store)) {
+        return {};
+    }
+
+    return Object.entries(store).reduce((nextStore, [namespace, namespaceStore]) => {
+        if (!namespaceStore || typeof namespaceStore !== 'object' || Array.isArray(namespaceStore)) {
+            return nextStore;
+        }
+
+        const nextNamespaceStore = Object.entries(namespaceStore).reduce((nextItemsByKey, [setupKey, items]) => {
+            if (Array.isArray(items) && items.length > 0) {
+                nextItemsByKey[setupKey] = items;
+            }
+
+            return nextItemsByKey;
+        }, {});
+
+        if (Object.keys(nextNamespaceStore).length > 0) {
+            nextStore[namespace] = nextNamespaceStore;
+        }
+
+        return nextStore;
+    }, {});
+};
 const getStoredProductQuickSetupStore = () => {
     if (typeof window === 'undefined') return {};
 
     try {
         const raw = window.localStorage.getItem(productQuickSetupStorageKey);
         const parsed = raw ? JSON.parse(raw) : {};
-        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+        return sanitizeProductQuickSetupStore(parsed);
     } catch (error) {
         console.error('Unable to read product quick setup store', error);
         return {};
     }
 };
 const hasProductQuickSetupStoreEntries = (store = {}) => (
-    Object.values(store || {}).some((namespaceStore) => (
-        namespaceStore
-        && typeof namespaceStore === 'object'
-        && !Array.isArray(namespaceStore)
-        && Object.keys(namespaceStore).length > 0
-    ))
+    Object.keys(sanitizeProductQuickSetupStore(store)).length > 0
 );
 const persistProductQuickSetupStore = (store = {}) => {
     if (typeof window === 'undefined') return false;
 
     try {
-        if (!hasProductQuickSetupStoreEntries(store)) {
+        const sanitizedStore = sanitizeProductQuickSetupStore(store);
+
+        if (!hasProductQuickSetupStoreEntries(sanitizedStore)) {
             if (window.localStorage.getItem(productQuickSetupStorageKey) === null) {
                 return false;
             }
@@ -1182,7 +1204,7 @@ const persistProductQuickSetupStore = (store = {}) => {
             return true;
         }
 
-        const serializedStore = JSON.stringify(store);
+        const serializedStore = JSON.stringify(sanitizedStore);
         if (window.localStorage.getItem(productQuickSetupStorageKey) === serializedStore) {
             return false;
         }
@@ -1403,6 +1425,8 @@ const normalizeStoredProductQuickSetupBundleItems = (items = []) => (
                 ...resolveInventorySnapshot(item),
                 ...resolveProductSourceFields(item),
                 main_image: String(item?.main_image ?? '').trim(),
+                attribute_values: Array.isArray(item?.attribute_values) ? item.attribute_values : [],
+                parent_attribute_values: Array.isArray(item?.parent_attribute_values) ? item.parent_attribute_values : [],
                 option_label: normalizeCanvasText(item?.option_label || item?.variant_label),
                 variant_name: normalizeCanvasText(item?.variant_name),
             };
@@ -1478,6 +1502,8 @@ const normalizeStoredProductQuickSetupItems = (items = []) => {
                 ...resolveInventorySnapshot(item),
                 ...resolveProductSourceFields(item),
                 main_image: String(item?.main_image ?? '').trim(),
+                attribute_values: Array.isArray(item?.attribute_values) ? item.attribute_values : [],
+                parent_attribute_values: Array.isArray(item?.parent_attribute_values) ? item.parent_attribute_values : [],
                 type: String(item?.type ?? '').trim(),
                 entry_kind: entryKind,
                 parent_product_id: Number.isFinite(parentProductId) && parentProductId > 0 ? parentProductId : null,
@@ -5754,6 +5780,7 @@ const OrderForm = () => {
             && !Array.isArray(namespaceStore)
             && Object.prototype.hasOwnProperty.call(namespaceStore, activeProductQuickSetupKey)
             && Array.isArray(namespaceStore[activeProductQuickSetupKey])
+            && namespaceStore[activeProductQuickSetupKey].length > 0
         ) {
             return {
                 items: namespaceStore[activeProductQuickSetupKey],
@@ -5793,6 +5820,7 @@ const OrderForm = () => {
             && !Array.isArray(namespaceStore)
             && Object.prototype.hasOwnProperty.call(namespaceStore, manualProductQuickSetupKey)
             && Array.isArray(namespaceStore[manualProductQuickSetupKey])
+            && namespaceStore[manualProductQuickSetupKey].length > 0
         ) {
             return {
                 items: namespaceStore[manualProductQuickSetupKey],
@@ -9576,10 +9604,9 @@ const OrderForm = () => {
         });
     }, [currentProductQuickSetupKey, productQuickSetupNamespace]);
 
-    const syncLatestQuickSetupEntriesIntoActiveStore = useCallback((latestEntries = [], options = {}) => {
+    const syncLatestQuickSetupEntriesIntoActiveStore = useCallback((latestEntries = []) => {
         if (!activeProductQuickSetupKey || !productQuickSetupNamespace) return;
 
-        const shouldPruneMissing = Boolean(options?.pruneMissing);
         const latestEntryMap = new Map();
         (Array.isArray(latestEntries) ? latestEntries : []).forEach((entry) => {
             const entryKey = getProductQuickSetupEntryKey(entry);
@@ -9588,7 +9615,7 @@ const OrderForm = () => {
             }
         });
 
-        if (latestEntryMap.size === 0 && !shouldPruneMissing) return;
+        if (latestEntryMap.size === 0) return;
 
         setProductQuickSetupStore((prev) => {
             const namespaceStore = prev?.[productQuickSetupNamespace] || {};
@@ -9601,26 +9628,12 @@ const OrderForm = () => {
             const nextItems = normalizeStoredProductQuickSetupItems(
                 normalizedCurrentItems.map((item) => {
                     const latestEntry = latestEntryMap.get(getProductQuickSetupEntryKey(item));
-                    if (!latestEntry && shouldPruneMissing) {
-                        return null;
-                    }
-
                     return latestEntry || item;
-                }).filter(Boolean)
+                })
             );
 
             if (JSON.stringify(normalizedCurrentItems) === JSON.stringify(nextItems)) {
                 return prev;
-            }
-
-            if (nextItems.length === 0) {
-                return {
-                    ...prev,
-                    [productQuickSetupNamespace]: {
-                        ...namespaceStore,
-                        [activeProductQuickSetupKey]: [],
-                    },
-                };
             }
 
             return {
@@ -9668,6 +9681,8 @@ const OrderForm = () => {
                 ...resolveInventorySnapshot(product),
                 ...resolveProductSourceFields(product),
                 main_image: product.main_image,
+                attribute_values: Array.isArray(product?.attribute_values) ? product.attribute_values : [],
+                parent_attribute_values: Array.isArray(product?.parent_attribute_values) ? product.parent_attribute_values : [],
                 type: product.type,
                 entry_kind: entryKind,
                 parent_product_id: Number(product?.parent_product_id ?? 0) || null,
@@ -10043,7 +10058,7 @@ const OrderForm = () => {
 
                 setProductQuickSetupLatestEntries(latestEntries);
                 setProductQuickSetupLatestEntriesScopeKey(activeProductQuickSetupRefreshScopeKey);
-                syncLatestQuickSetupEntriesIntoActiveStore(latestEntries, { pruneMissing: hasActiveProductQuickFilter });
+                syncLatestQuickSetupEntriesIntoActiveStore(latestEntries);
             } catch (error) {
                 if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
                 console.error('Error refreshing quick setup bundle entries', error);
@@ -10078,6 +10093,20 @@ const OrderForm = () => {
         () => buildStoredQuickSetupSearchEntries(activeProductQuickSetupItems),
         [activeProductQuickSetupItems]
     );
+    const isQuickSetupEntryAllowedByAvailableFilterPayload = useCallback((entry) => {
+        if (!hasActiveProductQuickFilter || activeProductQuickFilterRankCriteria.length === 0) {
+            return true;
+        }
+
+        return activeProductQuickFilterRankCriteria.every((criterion) => {
+            const displayValues = getProductQuickFilterDisplayValues(entry, criterion.attribute);
+            if (displayValues.length === 0) {
+                return true;
+            }
+
+            return productMatchesQuickFilterValue(entry, criterion.attribute, criterion.value);
+        });
+    }, [activeProductQuickFilterRankCriteria, hasActiveProductQuickFilter]);
     const latestQuickModeEntryMap = useMemo(() => {
         const entryMap = new Map();
         (Array.isArray(productQuickSetupLatestEntries) ? productQuickSetupLatestEntries : []).forEach((entry) => {
@@ -10090,21 +10119,29 @@ const OrderForm = () => {
     }, [productQuickSetupLatestEntries]);
     const isProductQuickSetupLatestScopeReady = productQuickSetupLatestEntriesScopeKey === activeProductQuickSetupRefreshScopeKey;
     const quickModeSearchEntries = useMemo(() => {
+        const storedEntries = storedQuickModeSearchEntries
+            .filter(isProductSearchEntrySourceEnabled)
+            .filter(isQuickSetupEntryAllowedByAvailableFilterPayload);
+
         if (!isProductQuickSetupLatestScopeReady) {
-            return [];
+            return storedEntries;
         }
 
         if (latestQuickModeEntryMap.size === 0 && !hasActiveProductQuickFilter) {
-            return storedQuickModeSearchEntries.filter(isProductSearchEntrySourceEnabled);
+            return storedEntries;
         }
 
-        const entries = storedQuickModeSearchEntries
-            .map((entry) => latestQuickModeEntryMap.get(getProductQuickSetupEntryKey(entry)))
+        const entries = storedEntries
+            .map((entry) => {
+                const latestEntry = latestQuickModeEntryMap.get(getProductQuickSetupEntryKey(entry));
+                return latestEntry || entry;
+            })
             .filter(Boolean);
 
         return entries.filter(isProductSearchEntrySourceEnabled);
     }, [
         hasActiveProductQuickFilter,
+        isQuickSetupEntryAllowedByAvailableFilterPayload,
         isProductQuickSetupLatestScopeReady,
         isProductSearchEntrySourceEnabled,
         latestQuickModeEntryMap,
@@ -10132,11 +10169,7 @@ const OrderForm = () => {
         const searchableEntries = shouldUseManualQuickModeEntries
             ? manualQuickModeSearchEntries
             : shouldUseQuickModeEntries
-            ? (
-                searchTerm.trim()
-                    ? mergeProductSearchEntryLists(quickModeSearchEntries, serverSearchEntries)
-                    : quickModeSearchEntries
-            )
+            ? quickModeSearchEntries
             : serverSearchEntries;
         const preparedProducts = searchableEntries
             .map((product) => ({

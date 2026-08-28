@@ -967,6 +967,63 @@ class ProductSearchBehaviorTest extends TestCase
         $this->assertSame([$senVariant->id], $senVariationIds);
     }
 
+    public function test_picker_selected_variation_can_match_attribute_inherited_from_parent(): void
+    {
+        $account = $this->authenticate();
+        $glazeAttribute = $this->createProductAttribute($account, 'Loai men', [
+            'Men lam',
+            'Men ran',
+        ]);
+
+        $parent = $this->createProduct($account, [
+            'name' => 'Luc binh men LAM',
+            'sku' => 'ML80-LUCBINHLAM',
+            'type' => 'configurable',
+        ]);
+        $this->attachProductAttributeValue($parent, $glazeAttribute, 'Men lam');
+
+        $selectedVariant = $this->createProduct($account, [
+            'name' => 'Doi luc binh men LAM cao 50 cm - SEN',
+            'sku' => 'ML80-LUCBINHLAM-50',
+            'price' => 2500000,
+        ]);
+
+        $otherVariant = $this->createProduct($account, [
+            'name' => 'Doi luc binh men LAM cao 35 cm - SEN',
+            'sku' => 'ML80-LUCBINHLAM-35',
+            'price' => 1200000,
+        ]);
+
+        $this->attachVariation($parent, $selectedVariant, ['position' => 0]);
+        $this->attachVariation($parent, $otherVariant, ['position' => 1]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?' . http_build_query([
+                'picker' => 1,
+                'fast_picker' => 1,
+                'allow_variants' => 1,
+                'selected_ids' => (string) $selectedVariant->id,
+                'quick_filter_enabled' => 1,
+                'per_page' => 20,
+                'attributes' => [
+                    $glazeAttribute->id => 'Men lam',
+                ],
+            ]));
+
+        $response->assertOk();
+
+        $returnedIds = collect($response->json('data'))
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        $this->assertSame([$selectedVariant->id], $returnedIds);
+        $response
+            ->assertJsonPath('data.0.entry_kind', 'variation')
+            ->assertJsonPath('data.0.parent_product_id', $parent->id)
+            ->assertJsonPath('data.0.sku', 'ML80-LUCBINHLAM-50');
+    }
     public function test_attribute_filter_matches_only_exact_attribute_values(): void
     {
         $account = $this->authenticate();

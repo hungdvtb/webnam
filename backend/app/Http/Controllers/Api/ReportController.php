@@ -179,7 +179,7 @@ class ReportController extends Controller
                 'revenue_logic' => [
                     'status' => self::DASHBOARD_REVENUE_STATUS_SCOPE,
                     'order_kind' => Order::KIND_OFFICIAL,
-                    'order_type' => Order::TYPE_STANDARD,
+                    'order_type' => Order::STANDARD_REVENUE_TYPES,
                     'date_field' => 'officialized_at',
                     'amount_field' => 'report_revenue_total',
                     'amount_field_fallback' => 'total_price',
@@ -394,7 +394,7 @@ class ReportController extends Controller
                     ->orWhere('order_kind', '');
             })
             ->where(function ($query) {
-                $query->where('order_type', Order::TYPE_STANDARD)
+                $query->whereIn('order_type', Order::STANDARD_REVENUE_TYPES)
                     ->orWhereNull('order_type')
                     ->orWhere('order_type', '');
             });

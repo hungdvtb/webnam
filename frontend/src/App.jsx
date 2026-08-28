@@ -52,6 +52,7 @@ import UserList from './pages/admin/UserList';
 import OrderStatusSettings from './pages/admin/OrderStatusSettings';
 import LeadList from './pages/admin/LeadList';
 import TelesalesCrm from './pages/admin/TelesalesCrm';
+import QuickReplies from './pages/admin/QuickReplies';
 import FixedCostTracker from './pages/admin/FixedCostTracker';
 import FundManagement from './pages/admin/FundManagement';
 import DebtManagement from './pages/admin/DebtManagement';
@@ -123,6 +124,10 @@ function App() {
     );
   }
 
+  const isQuickReplySidebarMode = typeof window !== 'undefined'
+    && window.location.pathname === '/admin/quick-replies'
+    && new URLSearchParams(window.location.search).get('mode') === 'zalo-sidebar';
+
   return (
     <UIProvider>
       <AuthProvider>
@@ -191,6 +196,7 @@ function App() {
                 <Route path="customers" element={<CustomerManagement />} />
                 <Route path="leads" element={<LeadList />} />
                 <Route path="telesales" element={<TelesalesCrm />} />
+                <Route path="quick-replies" element={<QuickReplies />} />
                 <Route path="blog" element={<BlogList />} />
                 <Route path="blog/new" element={<BlogForm />} />
                 <Route path="blog/edit/:id" element={<BlogForm />} />
@@ -215,7 +221,7 @@ function App() {
                 <Route path="orders/:id" element={<OrderDetail />} />
               </Route>
             </Routes>
-            <FloatingContactButtons />
+            {!isQuickReplySidebarMode && <FloatingContactButtons />}
           </BrowserRouter>
         </CartProvider>
       </AuthProvider>

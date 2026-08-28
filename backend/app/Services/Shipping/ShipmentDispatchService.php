@@ -215,6 +215,7 @@ class ShipmentDispatchService
         $carrierFee = $this->extractCarrierFee($response);
         $defaultShippingCost = max(0, round((float) data_get($order, 'internal_shipping_fee', 0), 2));
         $resolvedShippingCost = $carrierFee ?? $defaultShippingCost;
+        $codAmount = $order->shippingCodAmount();
 
         if (!$trackingNumber) {
             Log::error('ViettelPost createOrder response missing tracking number', [
@@ -256,10 +257,10 @@ class ShipmentDispatchService
             'carrier_status_mapped' => 'waiting_pickup',
             'carrier_status_code' => '101',
             'carrier_status_text' => 'Cho lay hang',
-            'cod_amount' => max(0, (float) $order->total_price),
+            'cod_amount' => $codAmount,
             'shipping_cost' => $resolvedShippingCost,
             'service_fee' => 0,
-            'actual_received_amount' => max(0, (float) $order->total_price) - $resolvedShippingCost,
+            'actual_received_amount' => $codAmount - $resolvedShippingCost,
             'created_by' => $userId,
             'shipped_at' => now(),
             'dispatch_payload' => $payload,
@@ -349,6 +350,7 @@ class ShipmentDispatchService
                 'PRODUCT_WEIGHT' => max(1, (int) round(max(1, $productWeight))),
             ];
         })->values()->all();
+        $codAmount = (int) round($order->shippingCodAmount());
 
         $payload = [
             'ORDER_NUMBER' => $order->order_number,
@@ -376,7 +378,7 @@ class ShipmentDispatchService
             'PRODUCT_WIDTH' => 0,
             'PRODUCT_HEIGHT' => 0,
             'PRODUCT_TYPE' => 'HH',
-            'MONEY_COLLECTION' => (int) round((float) $order->total_price),
+            'MONEY_COLLECTION' => $codAmount,
             'EXTRA_MONEY' => 0,
             'CHECK_UNIQUE' => true,
             'LIST_ITEM' => $listItems,

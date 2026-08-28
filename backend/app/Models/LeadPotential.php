@@ -31,11 +31,9 @@ class LeadPotential extends Model
     public static function defaultDefinitions(): array
     {
         return [
-            ['name' => 'Rất tiềm năng', 'code' => 'hot', 'color' => '#ef4444', 'sort_order' => 1, 'is_default' => false, 'counts_as_potential' => true],
-            ['name' => 'Cao', 'code' => 'high', 'color' => '#16a34a', 'sort_order' => 2, 'is_default' => false, 'counts_as_potential' => true],
-            ['name' => 'Trung bình', 'code' => 'medium', 'color' => '#f59e0b', 'sort_order' => 3, 'is_default' => false, 'counts_as_potential' => false],
-            ['name' => 'Thấp', 'code' => 'low', 'color' => '#64748b', 'sort_order' => 4, 'is_default' => false, 'counts_as_potential' => false],
-            ['name' => 'Không tiềm năng', 'code' => 'unqualified', 'color' => '#475569', 'sort_order' => 5, 'is_default' => false, 'counts_as_potential' => false],
+            ['name' => 'Khách tiềm năng', 'code' => 'khach-tiem-nang', 'color' => '#16a34a', 'sort_order' => 1, 'is_default' => false, 'counts_as_potential' => true],
+            ['name' => 'Khách chỉ tham khảo', 'code' => 'khach-chi-tham-khao', 'color' => '#f59e0b', 'sort_order' => 2, 'is_default' => false, 'counts_as_potential' => false],
+            ['name' => 'Khách chê đắt', 'code' => 'khach-che-dat', 'color' => '#ef4444', 'sort_order' => 3, 'is_default' => false, 'counts_as_potential' => false],
         ];
     }
 

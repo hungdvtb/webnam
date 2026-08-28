@@ -218,6 +218,8 @@ class ViettelPostTrackingImportService
     private function syncOrderToShipment(Order $order, string $trackingNumber, float $shippingFee, int $userId): void
     {
         DB::transaction(function () use ($order, $trackingNumber, $shippingFee, $userId) {
+            $codAmount = $order->shippingCodAmount();
+
             // Check if shipment already exists
             $shipment = Shipment::withoutGlobalScope('account_id')
                 ->where('order_id', $order->id)
@@ -240,9 +242,9 @@ class ViettelPostTrackingImportService
                     'customer_address' => $order->shipping_address,
                     'status' => 'waiting_pickup', // Default status after sync
                     'shipment_status' => 'waiting_pickup',
-                    'cod_amount' => $order->total_price,
+                    'cod_amount' => $codAmount,
                     'shipping_cost' => $shippingFee,
-                    'actual_received_amount' => $order->total_price - $shippingFee,
+                    'actual_received_amount' => $codAmount - $shippingFee,
                     'created_by' => $userId,
                 ]);
 
@@ -260,8 +262,9 @@ class ViettelPostTrackingImportService
                     'account_id' => $order->account_id,
                     'carrier_code' => self::CARRIER_CODE,
                     'carrier_name' => $shipment->carrier_name ?: 'Viettel Post',
+                    'cod_amount' => $codAmount,
                     'shipping_cost' => $shippingFee,
-                    'actual_received_amount' => $shipment->cod_amount - $shippingFee,
+                    'actual_received_amount' => $codAmount - $shippingFee,
                 ];
 
                 if (empty($shipment->tracking_number)) {

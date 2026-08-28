@@ -3019,6 +3019,23 @@ const buildVariationDisplayName = (parentName, variationName, optionLabel) => {
 
     return normalizedVariationName || normalizedParentName || 'Biến thể sản phẩm';
 };
+const resolveProductSearchVariationDisplayName = (parentName, variationName, optionLabel, providedDisplayName = '') => {
+    const normalizedParentName = normalizeCanvasText(parentName);
+    const normalizedProvidedDisplayName = normalizeCanvasText(providedDisplayName);
+    const normalizedVariationName = normalizeCanvasText(variationName);
+    const normalizedParentSearch = normalizeProductSearchText(normalizedParentName);
+    const normalizedProvidedSearch = normalizeProductSearchText(normalizedProvidedDisplayName);
+
+    if (normalizedProvidedDisplayName && normalizedParentSearch && normalizedProvidedSearch.includes(normalizedParentSearch)) {
+        return normalizedProvidedDisplayName;
+    }
+
+    return buildVariationDisplayName(
+        normalizedParentName,
+        normalizedProvidedDisplayName || normalizedVariationName,
+        optionLabel
+    );
+};
 const normalizeOrderLineOptions = (options) => {
     if (!options || typeof options !== 'object') {
         return undefined;
@@ -3750,10 +3767,11 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
         const directOptionLabel = normalizeCanvasText(product?.option_label || product?.attribute_summary || buildAttributeValueSummary(product));
         const baseName = normalizeCanvasText(product?.name) || 'Sản phẩm';
         const baseDisplayName = isDirectVariationEntry
-            ? (
-                normalizeCanvasText(product?.display_name)
-                || buildVariationDisplayName(directParentProductName, baseName, directOptionLabel)
-                || baseName
+            ? resolveProductSearchVariationDisplayName(
+                directParentProductName,
+                baseName,
+                directOptionLabel,
+                product?.display_name
             )
             : (normalizeCanvasText(product?.display_name) || baseName);
         const baseSku = normalizeCanvasText(product?.sku);
@@ -3832,7 +3850,12 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
                 parent_product_name: baseEntry.name,
                 parent_product_sku: baseEntry.sku,
                 name: normalizeCanvasText(variation?.name) || baseEntry.name,
-                display_name: normalizeCanvasText(variation?.display_name) || buildVariationDisplayName(baseEntry.name, variation?.name, optionLabel),
+                display_name: resolveProductSearchVariationDisplayName(
+                    baseEntry.name,
+                    variation?.name,
+                    optionLabel,
+                    variation?.display_name
+                ),
                 sku: normalizeCanvasText(variation?.sku),
                 display_sku: normalizeCanvasText(variation?.sku || product?.sku),
                 option_label: optionLabel,
@@ -3996,7 +4019,7 @@ const buildStoredQuickSetupSearchEntries = (items = []) => {
         const displayName = isBundleOptionEntry
             ? (bundleDisplayName || normalizeCanvasText(item?.display_name) || baseName)
             : entryKind === SEARCH_ENTRY_VARIATION
-                ? buildVariationDisplayName(parentProductName, baseName, item?.option_label)
+                ? resolveProductSearchVariationDisplayName(parentProductName, baseName, item?.option_label, item?.display_name)
                 : (normalizeCanvasText(item?.display_name) || baseName);
         const sku = normalizeCanvasText(item?.sku);
         const displaySku = normalizeCanvasText(item?.display_sku) || sku;
@@ -5291,6 +5314,7 @@ const OrderForm = () => {
     const [productQuickSetupProducts, setProductQuickSetupProducts] = useState([]);
     const [productQuickSetupLoading, setProductQuickSetupLoading] = useState(false);
     const [productQuickSetupLatestEntries, setProductQuickSetupLatestEntries] = useState([]);
+    const [productQuickSetupLatestEntriesScopeKey, setProductQuickSetupLatestEntriesScopeKey] = useState('');
     const [productQuickFilterScopeProducts, setProductQuickFilterScopeProducts] = useState([]);
     const [productQuickFilterScopeKey, setProductQuickFilterScopeKey] = useState('');
     const [showProductQuickFilterPanel, setShowProductQuickFilterPanel] = useState(false);
@@ -5463,6 +5487,7 @@ const OrderForm = () => {
         productSearchCacheRef.current.clear();
         productQuickFilterScopeCacheRef.current.clear();
         productQuickSetupCacheRef.current.clear();
+        setProducts([]);
         setProductQuickFilterScopeKey('');
         setShowProductQuickSetupPanel(false);
         setShowSearchDropdown(true);
@@ -5720,13 +5745,28 @@ const OrderForm = () => {
         }
         return key;
     }, [activeProductQuickFilterAttribute, hasActiveProductQuickFilter, normalizedProductQuickFilterValues, activeProductQuickFilterAttribute2, normalizedProductQuickFilterValues2]);
-    const activeProductQuickSetupLookup = useMemo(() => (
-        findProductQuickSetupItems(
+    const activeProductQuickSetupLookup = useMemo(() => {
+        const namespaceStore = productQuickSetupStore?.[productQuickSetupNamespace];
+        if (
+            activeProductQuickSetupKey
+            && namespaceStore
+            && typeof namespaceStore === 'object'
+            && !Array.isArray(namespaceStore)
+            && Object.prototype.hasOwnProperty.call(namespaceStore, activeProductQuickSetupKey)
+            && Array.isArray(namespaceStore[activeProductQuickSetupKey])
+        ) {
+            return {
+                items: namespaceStore[activeProductQuickSetupKey],
+                sourceNamespace: productQuickSetupNamespace,
+            };
+        }
+
+        return findProductQuickSetupItems(
             productQuickSetupStore,
             productQuickSetupNamespace,
             activeProductQuickSetupKey
-        )
-    ), [activeProductQuickSetupKey, productQuickSetupNamespace, productQuickSetupStore]);
+        );
+    }, [activeProductQuickSetupKey, productQuickSetupNamespace, productQuickSetupStore]);
     const activeProductQuickSetupItems = useMemo(() => {
         if (!activeProductQuickSetupKey) return [];
 
@@ -5744,13 +5784,28 @@ const OrderForm = () => {
             ? `manual::search::${normalizedSearchKey}`
             : PRODUCT_MANUAL_QUICK_SETUP_FALLBACK_KEY;
     }, [searchTerm]);
-    const manualProductQuickSetupLookup = useMemo(() => (
-        findProductQuickSetupItems(
+    const manualProductQuickSetupLookup = useMemo(() => {
+        const namespaceStore = productQuickSetupStore?.[productQuickSetupNamespace];
+        if (
+            manualProductQuickSetupKey
+            && namespaceStore
+            && typeof namespaceStore === 'object'
+            && !Array.isArray(namespaceStore)
+            && Object.prototype.hasOwnProperty.call(namespaceStore, manualProductQuickSetupKey)
+            && Array.isArray(namespaceStore[manualProductQuickSetupKey])
+        ) {
+            return {
+                items: namespaceStore[manualProductQuickSetupKey],
+                sourceNamespace: productQuickSetupNamespace,
+            };
+        }
+
+        return findProductQuickSetupItems(
             productQuickSetupStore,
             productQuickSetupNamespace,
             manualProductQuickSetupKey
-        )
-    ), [manualProductQuickSetupKey, productQuickSetupNamespace, productQuickSetupStore]);
+        );
+    }, [manualProductQuickSetupKey, productQuickSetupNamespace, productQuickSetupStore]);
     const manualProductQuickSetupItems = useMemo(() => (
         normalizeStoredProductQuickSetupItems(manualProductQuickSetupLookup.items)
     ), [manualProductQuickSetupLookup]);
@@ -5766,6 +5821,10 @@ const OrderForm = () => {
         () => JSON.stringify(buildProductQuickSetupRefreshTargets(activeProductQuickSetupItems)),
         [activeProductQuickSetupItems]
     );
+    const activeProductQuickSetupRefreshScopeKey = useMemo(() => JSON.stringify({
+        setupKey: activeProductQuickSetupKey,
+        refreshKey: activeProductQuickSetupRefreshKey,
+    }), [activeProductQuickSetupKey, activeProductQuickSetupRefreshKey]);
     useEffect(() => {
         if (!activeProductQuickSetupKey || !productQuickSetupNamespace) return;
         if (!activeProductQuickSetupLookup.sourceNamespace) return;
@@ -9178,6 +9237,7 @@ const OrderForm = () => {
 
         const controller = new AbortController();
         productSearchAbortRef.current = controller;
+        setProducts([]);
 
         try {
             const prodRes = await productApi.getAll(params, controller.signal);
@@ -9351,6 +9411,8 @@ const OrderForm = () => {
         setProductQuickFilterValues([]);
         setProductQuickFilterValues2([]);
         setProductQuickFilterAttributeId2('');
+        productSearchCacheRef.current.clear();
+        setProducts([]);
 
         setShowProductQuickFilterPanel(true);
         setShowProductQuickSetupPanel(false);
@@ -9361,6 +9423,8 @@ const OrderForm = () => {
     const handleProductQuickFilterAttributeChange2 = useCallback((nextAttributeId) => {
         setProductQuickFilterAttributeId2(nextAttributeId);
         setProductQuickFilterValues2([]);
+        productSearchCacheRef.current.clear();
+        setProducts([]);
         setShowProductQuickFilterPanel(true);
         setShowProductQuickSetupPanel(false);
         setShowSearchDropdown(true);
@@ -9381,6 +9445,8 @@ const OrderForm = () => {
 
         const nextValues = normalizedProductQuickFilterValues[0] === normalizedValue ? [] : [normalizedValue];
         setProductQuickFilterValues(nextValues);
+        productSearchCacheRef.current.clear();
+        setProducts([]);
 
         // If primary value is cleared, clear secondary as well
         if (nextValues.length === 0) {
@@ -9400,6 +9466,8 @@ const OrderForm = () => {
 
         const nextValues = normalizedProductQuickFilterValues2[0] === normalizedValue ? [] : [normalizedValue];
         setProductQuickFilterValues2(nextValues);
+        productSearchCacheRef.current.clear();
+        setProducts([]);
         setShowProductQuickFilterPanel(nextValues.length === 0);
         setShowSearchDropdown(true);
         setShowSearchHistory(false);
@@ -9417,6 +9485,7 @@ const OrderForm = () => {
         setShowSearchDropdown(true);
         setShowSearchHistory(false);
         productSearchCacheRef.current.clear();
+        setProducts([]);
 
         if (typeof window !== 'undefined') {
             window.localStorage.removeItem(productQuickFilterStorageKey);
@@ -9507,9 +9576,10 @@ const OrderForm = () => {
         });
     }, [currentProductQuickSetupKey, productQuickSetupNamespace]);
 
-    const syncLatestQuickSetupEntriesIntoActiveStore = useCallback((latestEntries = []) => {
+    const syncLatestQuickSetupEntriesIntoActiveStore = useCallback((latestEntries = [], options = {}) => {
         if (!activeProductQuickSetupKey || !productQuickSetupNamespace) return;
 
+        const shouldPruneMissing = Boolean(options?.pruneMissing);
         const latestEntryMap = new Map();
         (Array.isArray(latestEntries) ? latestEntries : []).forEach((entry) => {
             const entryKey = getProductQuickSetupEntryKey(entry);
@@ -9518,7 +9588,7 @@ const OrderForm = () => {
             }
         });
 
-        if (latestEntryMap.size === 0) return;
+        if (latestEntryMap.size === 0 && !shouldPruneMissing) return;
 
         setProductQuickSetupStore((prev) => {
             const namespaceStore = prev?.[productQuickSetupNamespace] || {};
@@ -9531,12 +9601,26 @@ const OrderForm = () => {
             const nextItems = normalizeStoredProductQuickSetupItems(
                 normalizedCurrentItems.map((item) => {
                     const latestEntry = latestEntryMap.get(getProductQuickSetupEntryKey(item));
+                    if (!latestEntry && shouldPruneMissing) {
+                        return null;
+                    }
+
                     return latestEntry || item;
-                })
+                }).filter(Boolean)
             );
 
             if (JSON.stringify(normalizedCurrentItems) === JSON.stringify(nextItems)) {
                 return prev;
+            }
+
+            if (nextItems.length === 0) {
+                return {
+                    ...prev,
+                    [productQuickSetupNamespace]: {
+                        ...namespaceStore,
+                        [activeProductQuickSetupKey]: [],
+                    },
+                };
             }
 
             return {
@@ -9647,6 +9731,8 @@ const OrderForm = () => {
             setManualProductQuickModeEnabled(false);
         }
         setProductQuickModeEnabled((prev) => !prev);
+        productSearchCacheRef.current.clear();
+        setProducts([]);
         setShowSearchDropdown(true);
         setShowSearchHistory(false);
     }, [isProductQuickModeToggleDisabled, productQuickModeEnabled]);
@@ -9654,6 +9740,8 @@ const OrderForm = () => {
     const disableProductQuickMode = useCallback((event) => {
         event?.stopPropagation?.();
         setProductQuickModeEnabled(false);
+        productSearchCacheRef.current.clear();
+        setProducts([]);
         setShowProductQuickSetupPanel(false);
         setShowSearchDropdown(true);
         setShowSearchHistory(false);
@@ -9887,6 +9975,7 @@ const OrderForm = () => {
 
         if (!isProductQuickModeActive) {
             setProductQuickSetupLatestEntries([]);
+            setProductQuickSetupLatestEntriesScopeKey('');
             return undefined;
         }
 
@@ -9915,6 +10004,7 @@ const OrderForm = () => {
 
         if (selectedProductIds.length === 0 || activeEntryKeys.size === 0) {
             setProductQuickSetupLatestEntries([]);
+            setProductQuickSetupLatestEntriesScopeKey(activeProductQuickSetupRefreshScopeKey);
             return undefined;
         }
 
@@ -9930,11 +10020,15 @@ const OrderForm = () => {
                 const params = {
                     picker: 1,
                     fast_picker: 1,
-                    quick_filter_enabled: 0,
+                    quick_filter_enabled: hasActiveProductQuickFilter ? 1 : 0,
                     allow_variants: 1,
                     selected_ids: selectedProductIds.join(','),
                     per_page: Math.min(Math.max(selectedProductIds.length, 1), 200),
                 };
+                if (hasActiveProductQuickFilter) {
+                    appendProductQuickFilterParams(params, activeProductQuickFilterAttribute, normalizedProductQuickFilterValues);
+                    appendProductQuickFilterParams(params, activeProductQuickFilterAttribute2, normalizedProductQuickFilterValues2);
+                }
                 if (sourceAccountIds.length > 0) {
                     params.source_account_ids = sourceAccountIds.join(',');
                 }
@@ -9948,11 +10042,13 @@ const OrderForm = () => {
                     : [];
 
                 setProductQuickSetupLatestEntries(latestEntries);
-                syncLatestQuickSetupEntriesIntoActiveStore(latestEntries);
+                setProductQuickSetupLatestEntriesScopeKey(activeProductQuickSetupRefreshScopeKey);
+                syncLatestQuickSetupEntriesIntoActiveStore(latestEntries, { pruneMissing: hasActiveProductQuickFilter });
             } catch (error) {
                 if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
                 console.error('Error refreshing quick setup bundle entries', error);
                 setProductQuickSetupLatestEntries([]);
+                setProductQuickSetupLatestEntriesScopeKey(activeProductQuickSetupRefreshScopeKey);
             } finally {
                 if (productQuickSetupRefreshAbortRef.current === controller) {
                     productQuickSetupRefreshAbortRef.current = null;
@@ -9966,9 +10062,15 @@ const OrderForm = () => {
             controller.abort();
         };
     }, [
+        activeProductQuickFilterAttribute,
+        activeProductQuickFilterAttribute2,
         activeProductQuickSetupRefreshKey,
+        activeProductQuickSetupRefreshScopeKey,
         enabledCrossSellAccountIds,
+        hasActiveProductQuickFilter,
         isProductQuickModeActive,
+        normalizedProductQuickFilterValues,
+        normalizedProductQuickFilterValues2,
         syncLatestQuickSetupEntriesIntoActiveStore,
     ]);
 
@@ -9986,16 +10088,28 @@ const OrderForm = () => {
         });
         return entryMap;
     }, [productQuickSetupLatestEntries]);
+    const isProductQuickSetupLatestScopeReady = productQuickSetupLatestEntriesScopeKey === activeProductQuickSetupRefreshScopeKey;
     const quickModeSearchEntries = useMemo(() => {
-        const entries = latestQuickModeEntryMap.size === 0
-            ? storedQuickModeSearchEntries
-            : storedQuickModeSearchEntries.map((entry) => {
-            const latestEntry = latestQuickModeEntryMap.get(getProductQuickSetupEntryKey(entry));
-            return latestEntry || entry;
-        });
+        if (!isProductQuickSetupLatestScopeReady) {
+            return [];
+        }
+
+        if (latestQuickModeEntryMap.size === 0 && !hasActiveProductQuickFilter) {
+            return storedQuickModeSearchEntries.filter(isProductSearchEntrySourceEnabled);
+        }
+
+        const entries = storedQuickModeSearchEntries
+            .map((entry) => latestQuickModeEntryMap.get(getProductQuickSetupEntryKey(entry)))
+            .filter(Boolean);
 
         return entries.filter(isProductSearchEntrySourceEnabled);
-    }, [isProductSearchEntrySourceEnabled, latestQuickModeEntryMap, storedQuickModeSearchEntries]);
+    }, [
+        hasActiveProductQuickFilter,
+        isProductQuickSetupLatestScopeReady,
+        isProductSearchEntrySourceEnabled,
+        latestQuickModeEntryMap,
+        storedQuickModeSearchEntries,
+    ]);
     const manualQuickModeSearchEntries = useMemo(() => (
         buildStoredQuickSetupSearchEntries(manualProductQuickSetupItems)
             .filter(isProductSearchEntrySourceEnabled)
@@ -10123,6 +10237,12 @@ const OrderForm = () => {
             clearTimeout(timerId);
         };
     }, [searchTerm]);
+
+    useEffect(() => {
+        if (searchTerm !== debouncedSearchTerm) {
+            setProducts([]);
+        }
+    }, [debouncedSearchTerm, searchTerm]);
 
     useEffect(() => {
         const timerId = setTimeout(() => {

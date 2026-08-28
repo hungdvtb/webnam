@@ -1,4 +1,5 @@
 export const ORDER_TYPE_STANDARD = 'standard';
+export const ORDER_TYPE_PREPAID_BANK_TRANSFER = 'prepaid_bank_transfer';
 export const ORDER_TYPE_EXCHANGE_RETURN = 'exchange_return';
 export const ORDER_TYPE_PARTIAL_DELIVERY = 'partial_delivery';
 export const SUPPLEMENT_RETURN_STATUS_NOT_RETURNED = 'not_returned';
@@ -11,6 +12,7 @@ export const SUPPLEMENT_RETURN_STATUS_OPTIONS = [
 
 export const ORDER_TYPE_OPTIONS = [
     { value: ORDER_TYPE_STANDARD, label: 'Đơn thường' },
+    { value: ORDER_TYPE_PREPAID_BANK_TRANSFER, label: 'Đơn chuyển khoản trước' },
     { value: ORDER_TYPE_EXCHANGE_RETURN, label: 'Đơn đổi trả' },
     { value: ORDER_TYPE_PARTIAL_DELIVERY, label: 'Đơn giao hàng 1 phần' },
 ];
@@ -20,6 +22,14 @@ export const ORDER_TYPE_META = {
         value: ORDER_TYPE_STANDARD,
         label: 'Đơn thường',
         shortLabel: 'Thường',
+        sectionTitle: '',
+        sectionDescription: '',
+        settlementLabel: 'Chênh lệch tiền',
+    },
+    [ORDER_TYPE_PREPAID_BANK_TRANSFER]: {
+        value: ORDER_TYPE_PREPAID_BANK_TRANSFER,
+        label: 'Đơn chuyển khoản trước',
+        shortLabel: 'CK trước',
         sectionTitle: '',
         sectionDescription: '',
         settlementLabel: 'Chênh lệch tiền',
@@ -42,11 +52,16 @@ export const ORDER_TYPE_META = {
     },
 };
 
+const SUPPLEMENT_WORKFLOW_ORDER_TYPES = new Set([
+    ORDER_TYPE_EXCHANGE_RETURN,
+    ORDER_TYPE_PARTIAL_DELIVERY,
+]);
+
 export const normalizeOrderType = (value) => (
     ORDER_TYPE_META[String(value || '').trim()]?.value || ORDER_TYPE_STANDARD
 );
 
-export const isSpecialOrderType = (value) => normalizeOrderType(value) !== ORDER_TYPE_STANDARD;
+export const isSpecialOrderType = (value) => SUPPLEMENT_WORKFLOW_ORDER_TYPES.has(normalizeOrderType(value));
 
 export const getOrderTypeMeta = (value) => ORDER_TYPE_META[normalizeOrderType(value)] || ORDER_TYPE_META[ORDER_TYPE_STANDARD];
 

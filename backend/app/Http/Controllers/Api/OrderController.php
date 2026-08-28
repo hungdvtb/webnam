@@ -71,6 +71,7 @@ class OrderController extends Controller
     private const ORDER_KIND_TEMPLATE = Order::KIND_TEMPLATE;
     private const ORDER_KIND_DRAFT = Order::KIND_DRAFT;
     private const ORDER_TYPE_STANDARD = Order::TYPE_STANDARD;
+    private const ORDER_TYPE_PREPAID_BANK_TRANSFER = Order::TYPE_PREPAID_BANK_TRANSFER;
     private const ORDER_TYPE_EXCHANGE_RETURN = Order::TYPE_EXCHANGE_RETURN;
     private const ORDER_TYPE_PARTIAL_DELIVERY = Order::TYPE_PARTIAL_DELIVERY;
     private const RETURN_STATUS_NOT_RETURNED = 'not_returned';
@@ -102,6 +103,7 @@ class OrderController extends Controller
     ];
     private const ORDER_TYPE_LABELS = [
         self::ORDER_TYPE_STANDARD => 'ÄÆ¡n thÆ°á»ng',
+        self::ORDER_TYPE_PREPAID_BANK_TRANSFER => 'Đơn chuyển khoản trước',
         self::ORDER_TYPE_EXCHANGE_RETURN => 'ÄÆ¡n Ä‘á»•i tráº£',
         self::ORDER_TYPE_PARTIAL_DELIVERY => 'ÄÆ¡n giao hÃ ng 1 pháº§n',
     ];
@@ -1353,11 +1355,12 @@ class OrderController extends Controller
 
     private function normalizeOrderType(?string $orderType): string
     {
-        $normalized = Str::lower(trim((string) $orderType));
+        return Order::normalizeType($orderType);
+    }
 
-        return in_array($normalized, Order::TYPES, true)
-            ? $normalized
-            : self::ORDER_TYPE_STANDARD;
+    private function isSupplementWorkflowOrderType(?string $orderType): bool
+    {
+        return Order::isSupplementWorkflowType($orderType);
     }
 
     private function extractRequestedOrderTypes(mixed $orderTypes): Collection
@@ -1793,6 +1796,16 @@ class OrderController extends Controller
             return;
         }
 
+        if (!$this->orderTableHasColumn('order_type')) {
+            throw ValidationException::withMessages([
+                'order_type' => 'Môi trường hiện tại chưa hỗ trợ phân loại đơn hàng. Cần chạy migration đồng bộ trước khi lưu.',
+            ]);
+        }
+
+        if (!$this->isSupplementWorkflowOrderType($orderType)) {
+            return;
+        }
+
         $requiredColumns = [
             'order_type',
             'settlement_delta',
@@ -1831,7 +1844,7 @@ class OrderController extends Controller
     ): array {
         $normalizedOrderType = $this->normalizeOrderType($orderType);
 
-        if ($normalizedOrderType === self::ORDER_TYPE_STANDARD) {
+        if (!$this->isSupplementWorkflowOrderType($normalizedOrderType)) {
             return [
                 'return_tracking_code' => null,
                 'return_status' => self::RETURN_STATUS_NOT_RETURNED,
@@ -2811,21 +2824,22 @@ class OrderController extends Controller
     ): void
     {
         $normalizedOrderType = $this->normalizeOrderType($orderType ?? (string) $order->order_type);
+        $isSupplementWorkflowOrder = $this->isSupplementWorkflowOrderType($normalizedOrderType);
         $basePaymentTotal = round(
             $itemRevenue - (float) ($order->discount ?? 0),
             2
         );
 
         $baseCostTotal = round($costTotal, 2);
-        $effectiveSettlementDelta = $normalizedOrderType === self::ORDER_TYPE_STANDARD
-            ? 0
-            : round((float) ($settlementDelta ?? $order->settlement_delta ?? 0), 2);
-        $effectiveSupplementTotalPrice = $normalizedOrderType === self::ORDER_TYPE_STANDARD
-            ? 0
-            : round((float) ($supplementTotalPrice ?? $order->supplement_items_total_price ?? 0), 2);
-        $effectiveSupplementCostTotal = $normalizedOrderType === self::ORDER_TYPE_STANDARD
-            ? 0
-            : round((float) ($supplementCostTotal ?? $order->supplement_items_cost_total ?? 0), 2);
+        $effectiveSettlementDelta = $isSupplementWorkflowOrder
+            ? round((float) ($settlementDelta ?? $order->settlement_delta ?? 0), 2)
+            : 0;
+        $effectiveSupplementTotalPrice = $isSupplementWorkflowOrder
+            ? round((float) ($supplementTotalPrice ?? $order->supplement_items_total_price ?? 0), 2)
+            : 0;
+        $effectiveSupplementCostTotal = $isSupplementWorkflowOrder
+            ? round((float) ($supplementCostTotal ?? $order->supplement_items_cost_total ?? 0), 2)
+            : 0;
         $exchangeNetRevenueTotal = round($basePaymentTotal - $effectiveSupplementTotalPrice + $effectiveSettlementDelta, 2);
         $paymentTotal = $normalizedOrderType === self::ORDER_TYPE_EXCHANGE_RETURN
             ? round(max(0, $exchangeNetRevenueTotal), 2)
@@ -2837,13 +2851,13 @@ class OrderController extends Controller
             self::ORDER_TYPE_STANDARD => $paymentTotal,
             default => $paymentTotal,
         };
-        $reportCostTotal = $normalizedOrderType === self::ORDER_TYPE_STANDARD
-            ? $baseCostTotal
-            : round($baseCostTotal - $effectiveSupplementCostTotal, 2);
+        $reportCostTotal = $isSupplementWorkflowOrder
+            ? round($baseCostTotal - $effectiveSupplementCostTotal, 2)
+            : $baseCostTotal;
         $reportProfitTotal = round($reportRevenueTotal - $reportCostTotal, 2);
-        $profitTotal = $normalizedOrderType === self::ORDER_TYPE_STANDARD
-            ? $baseProfitTotal
-            : $reportProfitTotal;
+        $profitTotal = $isSupplementWorkflowOrder
+            ? $reportProfitTotal
+            : $baseProfitTotal;
 
         $order->forceFill($this->filterPersistableOrderData([
             'order_type' => $normalizedOrderType,
@@ -3047,9 +3061,9 @@ class OrderController extends Controller
                     })->all()
                     : [];
 
-                $supplementSummary = $this->normalizeOrderType((string) $newOrder->order_type) === self::ORDER_TYPE_STANDARD
-                    ? $this->syncSupplementItems($newOrder, [])
-                    : $this->syncSupplementItems($newOrder, $rawSupplementItems);
+                $supplementSummary = $this->isSupplementWorkflowOrderType((string) $newOrder->order_type)
+                    ? $this->syncSupplementItems($newOrder, $rawSupplementItems)
+                    : $this->syncSupplementItems($newOrder, []);
                 $this->recalculateOrderTotals(
                     $newOrder,
                     (float) ($summary['total_price'] ?? 0),
@@ -5550,7 +5564,7 @@ class OrderController extends Controller
         $validated = $request->validate([
             'lead_id' => 'nullable|integer|exists:leads,id',
             'order_kind' => 'nullable|string|in:official,template,draft',
-            'order_type' => 'nullable|string|in:standard,exchange_return,partial_delivery',
+            'order_type' => 'nullable|string|in:standard,prepaid_bank_transfer,exchange_return,partial_delivery',
             'region_type' => 'nullable|string|in:new,old',
             'settlement_delta' => 'nullable|numeric',
             'return_tracking_code' => 'nullable|string|max:120',
@@ -5636,7 +5650,7 @@ class OrderController extends Controller
                 'shipment_status' => $request->shipment_status,
                 'shipping_fee' => $request->shipping_fee ?? 0,
                 'discount' => $request->discount ?? 0,
-                'settlement_delta' => $orderType === self::ORDER_TYPE_STANDARD ? 0 : (float) ($request->settlement_delta ?? 0),
+                'settlement_delta' => $this->isSupplementWorkflowOrderType($orderType) ? (float) ($request->settlement_delta ?? 0) : 0,
                 'cost_total' => 0,
                 'profit_total' => 0,
                 'supplement_items_total_price' => 0,
@@ -5652,9 +5666,9 @@ class OrderController extends Controller
                 $orderKind,
                 $this->shouldManageInventory($orderKind)
             );
-            $supplementSummary = $orderType === self::ORDER_TYPE_STANDARD
-                ? $this->syncSupplementItems($order, [])
-                : $this->syncSupplementItems($order, (array) $request->input('supplement_items', []));
+            $supplementSummary = $this->isSupplementWorkflowOrderType($orderType)
+                ? $this->syncSupplementItems($order, (array) $request->input('supplement_items', []))
+                : $this->syncSupplementItems($order, []);
             $this->syncPartialDeliveryAdjustmentState(
                 $order,
                 $request,
@@ -5903,9 +5917,9 @@ class OrderController extends Controller
             }
         }
         $data['order_type'] = $requestedOrderType;
-        $data['settlement_delta'] = $requestedOrderType === self::ORDER_TYPE_STANDARD
-            ? 0
-            : (float) $request->input('settlement_delta', $order->settlement_delta ?? 0);
+        $data['settlement_delta'] = $this->isSupplementWorkflowOrderType($requestedOrderType)
+            ? (float) $request->input('settlement_delta', $order->settlement_delta ?? 0)
+            : 0;
         $data = array_merge(
             $data,
             $this->supplementReturnTrackingPayload(
@@ -5947,12 +5961,12 @@ class OrderController extends Controller
             $costTotal = (float) $order->items()->sum('cost_total');
         }
 
-        $supplementSummary = $request->has('supplement_items') || $requestedOrderType === self::ORDER_TYPE_STANDARD
+        $supplementSummary = $request->has('supplement_items') || !$this->isSupplementWorkflowOrderType($requestedOrderType)
             ? $this->syncSupplementItems(
                 $order,
-                $requestedOrderType === self::ORDER_TYPE_STANDARD
-                    ? []
-                    : (array) $request->input('supplement_items', [])
+                $this->isSupplementWorkflowOrderType($requestedOrderType)
+                    ? (array) $request->input('supplement_items', [])
+                    : []
             )
             : [
                 'total_price' => (float) ($order->supplement_items_total_price ?? 0),
@@ -6020,7 +6034,7 @@ class OrderController extends Controller
             'source' => 'nullable|string|max:80',
             'custom_attributes' => 'nullable|array',
             'order_kind' => 'nullable|string|in:official,template,draft',
-            'order_type' => 'nullable|string|in:standard,exchange_return,partial_delivery',
+            'order_type' => 'nullable|string|in:standard,prepaid_bank_transfer,exchange_return,partial_delivery',
             'region_type' => 'nullable|string|in:new,old',
             'settlement_delta' => 'nullable|numeric',
             'return_tracking_code' => 'nullable|string|max:120',

@@ -79,7 +79,7 @@ class FinDailyProfitReportController extends Controller
             'date_filter_mode' => 'created',
             'status' => [self::MONTHLY_REPORT_INCLUDED_STATUS],
             'status_exclude' => [],
-            'order_type' => [Order::TYPE_STANDARD],
+            'order_type' => Order::STANDARD_REVENUE_TYPES,
         ],
         'cost_actual' => [
             'label' => 'Tiền hàng thực tế',
@@ -87,7 +87,7 @@ class FinDailyProfitReportController extends Controller
             'date_filter_mode' => 'created',
             'status' => [self::MONTHLY_REPORT_INCLUDED_STATUS],
             'status_exclude' => [],
-            'order_type' => [Order::TYPE_STANDARD],
+            'order_type' => Order::STANDARD_REVENUE_TYPES,
         ],
         'shipping_fee' => [
             'label' => 'Tiền ship hàng',
@@ -1637,7 +1637,7 @@ class FinDailyProfitReportController extends Controller
     {
         return $this->successfulOrdersForMonthlyReport($startDate, $endDate, $filters)
             ->where(function ($query) {
-                $query->where('order_type', Order::TYPE_STANDARD)
+                $query->whereIn('order_type', Order::STANDARD_REVENUE_TYPES)
                     ->orWhereNull('order_type')
                     ->orWhere('order_type', '');
             });
@@ -2078,7 +2078,7 @@ class FinDailyProfitReportController extends Controller
         $status = strtolower(trim((string) $order->status));
         $orderType = strtolower(trim((string) $order->order_type));
         $isStandardOrder = $orderType === ''
-            || $orderType === Order::TYPE_STANDARD;
+            || Order::isStandardRevenueType($orderType);
 
         return $status === self::MONTHLY_REPORT_INCLUDED_STATUS && $isStandardOrder;
     }
@@ -2094,7 +2094,7 @@ class FinDailyProfitReportController extends Controller
         $status = strtolower(trim((string) $order->status));
         $orderType = strtolower(trim((string) $order->order_type));
         $isMonthlyStandardOrder = $orderType === ''
-            || $orderType === Order::TYPE_STANDARD;
+            || Order::isStandardRevenueType($orderType);
 
         if ($dailyIncluded && !$monthlyIncluded) {
             if ($status !== self::MONTHLY_REPORT_INCLUDED_STATUS) {

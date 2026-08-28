@@ -13,6 +13,7 @@ class Order extends Model
     public const KIND_TEMPLATE = 'template';
     public const KIND_DRAFT = 'draft';
     public const TYPE_STANDARD = 'standard';
+    public const TYPE_PREPAID_BANK_TRANSFER = 'prepaid_bank_transfer';
     public const TYPE_EXCHANGE_RETURN = 'exchange_return';
     public const TYPE_PARTIAL_DELIVERY = 'partial_delivery';
     public const SALES_CHANNEL_ONLINE = 'online';
@@ -26,6 +27,17 @@ class Order extends Model
 
     public const TYPES = [
         self::TYPE_STANDARD,
+        self::TYPE_PREPAID_BANK_TRANSFER,
+        self::TYPE_EXCHANGE_RETURN,
+        self::TYPE_PARTIAL_DELIVERY,
+    ];
+
+    public const STANDARD_REVENUE_TYPES = [
+        self::TYPE_STANDARD,
+        self::TYPE_PREPAID_BANK_TRANSFER,
+    ];
+
+    public const SUPPLEMENT_WORKFLOW_TYPES = [
         self::TYPE_EXCHANGE_RETURN,
         self::TYPE_PARTIAL_DELIVERY,
     ];
@@ -175,11 +187,48 @@ class Order extends Model
 
     public function getNormalizedOrderType(): string
     {
-        $value = strtolower(trim((string) $this->order_type));
+        return self::normalizeType($this->order_type);
+    }
+
+    public static function normalizeType(?string $orderType): string
+    {
+        $value = strtolower(trim((string) $orderType));
 
         return in_array($value, self::TYPES, true)
             ? $value
             : self::TYPE_STANDARD;
+    }
+
+    public static function isStandardRevenueType(?string $orderType): bool
+    {
+        return in_array(self::normalizeType($orderType), self::STANDARD_REVENUE_TYPES, true);
+    }
+
+    public static function isSupplementWorkflowType(?string $orderType): bool
+    {
+        return in_array(self::normalizeType($orderType), self::SUPPLEMENT_WORKFLOW_TYPES, true);
+    }
+
+    public function isStandardRevenueOrder(): bool
+    {
+        return self::isStandardRevenueType($this->order_type);
+    }
+
+    public function isSupplementWorkflowOrder(): bool
+    {
+        return self::isSupplementWorkflowType($this->order_type);
+    }
+
+    public function shouldCollectCashOnDelivery(): bool
+    {
+        return $this->getNormalizedOrderType() !== self::TYPE_PREPAID_BANK_TRANSFER;
+    }
+
+    public function shippingCodAmount(): float
+    {
+        return $this->shouldCollectCashOnDelivery()
+            ? max(0, round((float) ($this->total_price ?? 0), 2))
+            : 0.0;
     }
 
     public function managesInventory(): bool

@@ -43,7 +43,8 @@ const AdminLayout = () => {
         location.pathname.startsWith('/admin/shipments') ||
         location.pathname.startsWith('/admin/pending-orders') ||
         location.pathname.startsWith('/admin/leads') ||
-        location.pathname.startsWith('/admin/telesales');
+        location.pathname.startsWith('/admin/telesales') ||
+        location.pathname.startsWith('/admin/quick-replies');
     const isDesignRoute =
         location.pathname.startsWith('/admin/categories') ||
         location.pathname.startsWith('/admin/reviews') ||
@@ -289,6 +290,8 @@ const AdminLayout = () => {
     const canAccessLeadBoard = canAccess('orders') || canAccess('customers') || canAccess('leads');
     const isLeadRoute = location.pathname === '/admin/leads' || location.pathname === '/admin/pending-orders';
     const isTelesalesRoute = location.pathname === '/admin/telesales';
+    const isQuickRepliesRoute = location.pathname === '/admin/quick-replies';
+    const isQuickRepliesSidebarMode = isQuickRepliesRoute && new URLSearchParams(location.search).get('mode') === 'zalo-sidebar';
     const sidebarCollapsedWidth = '5.75rem';
     const sidebarExpandedWidth = '19rem';
     const mobileSidebarWidth = 'min(19rem, calc(100vw - 1rem))';
@@ -306,6 +309,7 @@ const AdminLayout = () => {
         if (path.startsWith('/admin/product-faqs')) return 'products';
         if (path.startsWith('/admin/categories')) return 'categories';
         if (path.startsWith('/admin/telesales')) return 'leads';
+        if (path.startsWith('/admin/quick-replies')) return 'leads';
         if (path.startsWith('/admin/leads')) return 'leads';
         if (path.startsWith('/admin/orders')) return 'orders';
         if (path.startsWith('/admin/customers')) return 'customers';
@@ -327,6 +331,27 @@ const AdminLayout = () => {
         if (path.startsWith('/admin/users')) return 'users';
         return null;
     };
+
+    if (isQuickRepliesSidebarMode) {
+        const permNeeded = getCurrentPermId();
+        if (permNeeded && !canAccess(permNeeded)) {
+            return (
+                <div className="flex h-screen items-center justify-center bg-background-light">
+                    <div className="max-w-sm rounded-sm border border-brick/40 bg-white p-8 text-center shadow-xl">
+                        <span className="material-symbols-outlined mb-4 text-5xl text-brick">gpp_maybe</span>
+                        <h1 className="mb-2 text-xl font-sans font-bold uppercase tracking-wide text-brick">Truy cập bị từ chối</h1>
+                        <p className="text-sm font-sans text-stone">Tài khoản của bạn chưa được cấp quyền xem phân hệ này.</p>
+                    </div>
+                </div>
+            );
+        }
+
+        return (
+            <div className="h-screen overflow-hidden bg-[#eef3f8]">
+                <Outlet />
+            </div>
+        );
+    }
 
     const topLevelLabelClass = 'font-sans text-sm font-medium tracking-[0.06em] leading-none text-left';
     const submenuLabelClass = 'font-sans text-[11px] font-medium tracking-[0.01em] leading-5 text-left';
@@ -583,6 +608,18 @@ const AdminLayout = () => {
                                             </SidebarText>
                                         </Link>
                                     )}
+                                    {canAccess('orders') && (
+                                        <Link
+                                            to="/admin/orders"
+                                            title="Đơn hàng"
+                                            className={`group flex items-center gap-4 rounded-sm p-3 transition-colors ${location.pathname === '/admin/orders' ? 'bg-gold/10 text-gold' : 'text-stone hover:bg-white/5 hover:text-white'}`}
+                                        >
+                                            <span className={`material-symbols-outlined w-6 shrink-0 text-center text-[20px] ${location.pathname === '/admin/orders' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>receipt_long</span>
+                                            <SidebarText isExpanded={isSidebarExpanded} className={submenuLabelClass}>
+                                                Đơn hàng
+                                            </SidebarText>
+                                        </Link>
+                                    )}
                                     {canAccessLeadBoard && (
                                         <Link
                                             to="/admin/telesales"
@@ -595,29 +632,29 @@ const AdminLayout = () => {
                                             </SidebarText>
                                         </Link>
                                     )}
+                                    {canAccessLeadBoard && (
+                                        <Link
+                                            to="/admin/quick-replies"
+                                            title="Trả lời nhanh"
+                                            className={`group flex items-center gap-4 rounded-sm p-3 transition-colors ${isQuickRepliesRoute ? 'bg-gold/10 text-gold' : 'text-stone hover:bg-white/5 hover:text-white'}`}
+                                        >
+                                            <span className={`material-symbols-outlined w-6 shrink-0 text-center text-[20px] ${isQuickRepliesRoute ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>quickreply</span>
+                                            <SidebarText isExpanded={isSidebarExpanded} className={submenuLabelClass}>
+                                                Trả lời nhanh
+                                            </SidebarText>
+                                        </Link>
+                                    )}
                                     {canAccess('orders') && (
-                                        <>
-                                            <Link
-                                                to="/admin/orders"
-                                                title="Đơn hàng"
-                                                className={`group flex items-center gap-4 rounded-sm p-3 transition-colors ${location.pathname === '/admin/orders' ? 'bg-gold/10 text-gold' : 'text-stone hover:bg-white/5 hover:text-white'}`}
-                                            >
-                                                <span className={`material-symbols-outlined w-6 shrink-0 text-center text-[20px] ${location.pathname === '/admin/orders' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>receipt_long</span>
-                                                <SidebarText isExpanded={isSidebarExpanded} className={submenuLabelClass}>
-                                                    Đơn hàng
-                                                </SidebarText>
-                                            </Link>
-                                            <Link
-                                                to="/admin/shipments"
-                                                title="Vận đơn"
-                                                className={`group flex items-center gap-4 rounded-sm p-3 transition-colors ${location.pathname === '/admin/shipments' ? 'bg-gold/10 text-gold' : 'text-stone hover:bg-white/5 hover:text-white'}`}
-                                            >
-                                                <span className={`material-symbols-outlined w-6 shrink-0 text-center text-[20px] ${location.pathname === '/admin/shipments' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>local_shipping</span>
-                                                <SidebarText isExpanded={isSidebarExpanded} className={submenuLabelClass}>
-                                                    Vận đơn
-                                                </SidebarText>
-                                            </Link>
-                                        </>
+                                        <Link
+                                            to="/admin/shipments"
+                                            title="Vận đơn"
+                                            className={`group flex items-center gap-4 rounded-sm p-3 transition-colors ${location.pathname === '/admin/shipments' ? 'bg-gold/10 text-gold' : 'text-stone hover:bg-white/5 hover:text-white'}`}
+                                        >
+                                            <span className={`material-symbols-outlined w-6 shrink-0 text-center text-[20px] ${location.pathname === '/admin/shipments' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>local_shipping</span>
+                                            <SidebarText isExpanded={isSidebarExpanded} className={submenuLabelClass}>
+                                                Vận đơn
+                                            </SidebarText>
+                                        </Link>
                                     )}
                                     {canAccess('customers') && (
                                         <Link
@@ -923,7 +960,7 @@ const AdminLayout = () => {
                         </button>
                     </div>
                 )}
-                <div className={`relative flex-grow min-h-0 ${isOrderForm ? 'h-full overflow-auto p-0' : location.pathname === '/admin/leads' || location.pathname === '/admin/telesales' ? 'overflow-auto p-0' : location.pathname === '/admin/finance/funds' ? 'overflow-auto p-0 sm:p-4 md:p-6 lg:p-8' : isInventoryRoute ? 'overflow-auto p-4 md:p-5' : 'overflow-auto p-8'}`}>
+                <div className={`relative flex-grow min-h-0 ${isOrderForm ? 'h-full overflow-auto p-0' : location.pathname === '/admin/leads' || location.pathname === '/admin/telesales' || location.pathname === '/admin/quick-replies' ? 'overflow-auto p-0' : location.pathname === '/admin/finance/funds' ? 'overflow-auto p-0 sm:p-4 md:p-6 lg:p-8' : isInventoryRoute ? 'overflow-auto p-4 md:p-5' : 'overflow-auto p-8'}`}>
                     {(() => {
                         const permNeeded = getCurrentPermId();
                         if (permNeeded && !canAccess(permNeeded)) {

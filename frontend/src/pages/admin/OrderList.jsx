@@ -14,6 +14,7 @@ import {
     SUPPLEMENT_RETURN_STATUS_NOT_RETURNED,
     getSupplementReturnStatusLabel,
     getOrderTypeMeta,
+    isSpecialOrderType,
     normalizeOrderType,
 } from '../../config/orderTypes';
 import {
@@ -322,6 +323,7 @@ const shouldScopeOrderSearchToCustomerName = (searchTerms = []) => {
 
 const ORDER_TYPE_BADGE_CLASSNAMES = {
     standard: 'border-primary/15 bg-primary/[0.03] text-primary/60',
+    prepaid_bank_transfer: 'border-emerald-200 bg-emerald-50 text-emerald-700',
     exchange_return: 'border-amber-200 bg-amber-50 text-amber-800',
     partial_delivery: 'border-sky-200 bg-sky-50 text-sky-700',
 };
@@ -7747,7 +7749,7 @@ const OrderList = () => {
                                                     <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] ${getOrderSourceBadgeClassName(sourceMeta.value)}`}>
                                                         {sourceMeta.label}
                                                     </span>
-                                                    {normalizeOrderType(o.order_type) !== ORDER_TYPE_STANDARD && (
+                                                    {isSpecialOrderType(o.order_type) && (
                                                         <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] ${getPartialReturnStatusBadgeClassName(o.return_status)}`}>
                                                             {getSupplementReturnStatusLabel(o.return_status)}
                                                         </span>
@@ -7959,7 +7961,7 @@ const OrderList = () => {
                                                         <span className={`mt-1 inline-flex w-fit items-center rounded-sm border px-1.5 py-0.5 text-[10px] font-black uppercase tracking-[0.12em] ${ORDER_TYPE_BADGE_CLASSNAMES[normalizeOrderType(o.order_type)] || ORDER_TYPE_BADGE_CLASSNAMES[ORDER_TYPE_STANDARD]}`}>
                                                             {getOrderTypeMeta(o.order_type).shortLabel}
                                                         </span>
-                                                        {normalizeOrderType(o.order_type) !== ORDER_TYPE_STANDARD && (
+                                                        {isSpecialOrderType(o.order_type) && (
                                                             <span className={`mt-1 inline-flex w-fit items-center rounded-sm border px-1.5 py-0.5 text-[10px] font-black uppercase tracking-[0.12em] ${getPartialReturnStatusBadgeClassName(o.return_status)}`}>
                                                                 {getSupplementReturnStatusLabel(o.return_status)}
                                                             </span>

@@ -89,8 +89,9 @@ class ViettelPostExportService
                 $order->province,
             ]));
 
-            $isExchange = $order->getNormalizedOrderType() === \App\Models\Order::TYPE_EXCHANGE_RETURN 
+            $isExchange = $order->getNormalizedOrderType() === Order::TYPE_EXCHANGE_RETURN
                 && $order->supplementItems()->exists();
+            $codAmount = (int) round($order->shippingCodAmount());
 
             $rows[] = [
                 $stt++,                              // STT
@@ -102,7 +103,7 @@ class ViettelPostExportService
                 1,                                   // Số lượng (always 1 package)
                 1000,                                // Trọng lượng - placeholder, user fills in later
                 (int) ($order->total_price ?? 0),    // Giá trị hàng
-                (int) ($order->total_price ?? 0),    // Tiền thu hộ COD
+                $codAmount,                          // Tiền thu hộ COD
                 'Bưu kiện',                          // Loại hàng hóa - Mặc định là bưu kiện
                 '',                                  // Tính chất đặc biệt
                 'VBK',                               // Dịch vụ code (VBK = Tiêu chuẩn)

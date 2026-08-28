@@ -76,8 +76,8 @@ class TelesalesLeadController extends Controller
 
     private const TASK_TYPE_LABELS = [
         LeadFollowUpTask::TYPE_NEW => 'Số mới',
-        LeadFollowUpTask::TYPE_THREE_DAYS => 'Gọi lại 3 ngày',
-        LeadFollowUpTask::TYPE_SEVEN_DAYS => 'Gọi lại 7 ngày',
+        LeadFollowUpTask::TYPE_THREE_DAYS => 'Số 3 ngày trước',
+        LeadFollowUpTask::TYPE_SEVEN_DAYS => 'Số 7 ngày trước',
     ];
 
     public function __construct(private readonly LeadCaptureService $leadCaptureService)
@@ -336,6 +336,8 @@ class TelesalesLeadController extends Controller
         ]);
 
         $activityType = (string) ($validated['activity_type'] ?? 'note');
+        $this->ensureLeadFollowUpTasks($lead);
+        $taskToComplete = $this->currentDueTaskForLead($lead);
         $status = null;
         $hasExplicitFollowUpAt = array_key_exists('next_follow_up_at', $validated);
 
@@ -420,11 +422,23 @@ class TelesalesLeadController extends Controller
 
         $noteContent = trim((string) ($validated['note'] ?? ''));
         $shouldCompleteTask = (bool) ($validated['complete_current_task'] ?? false)
-            || in_array($activityType, ['call', 'zalo', 'status', 'schedule'], true)
-            || $noteContent !== '';
+            || in_array($activityType, ['status', 'schedule'], true);
 
         if (!$lead->do_not_call && $shouldCompleteTask) {
-            $this->completeCurrentTaskForLead($lead, $activityType);
+            if ($taskToComplete) {
+                $freshTask = LeadFollowUpTask::withoutGlobalScopes()
+                    ->where('account_id', $lead->account_id)
+                    ->where('lead_id', $lead->id)
+                    ->where('id', $taskToComplete->id)
+                    ->where('status', LeadFollowUpTask::STATUS_PENDING)
+                    ->first();
+
+                if ($freshTask) {
+                    $this->completeTaskRecord($freshTask, $activityType);
+                }
+            } else {
+                $this->completeCurrentTaskForLead($lead, $activityType);
+            }
         }
 
         if ($noteContent !== '' || $activityType !== 'note') {
@@ -554,6 +568,15 @@ class TelesalesLeadController extends Controller
 
     private function applyFilters(Builder $query, Request $request): void
     {
+        $this->applyFilterControls($query, $request);
+
+        if (!$request->boolean('include_stopped') && (string) $request->input('queue', 'today') !== 'all') {
+            $this->applyActiveFollowUpScope($query);
+        }
+    }
+
+    private function applyFilterControls(Builder $query, Request $request): void
+    {
         if ($request->filled('search')) {
             $search = trim((string) $request->input('search'));
             $query->where(function (Builder $builder) use ($search) {
@@ -596,10 +619,6 @@ class TelesalesLeadController extends Controller
             }
 
             $this->whereAddedBetween($query, $start, $end);
-        }
-
-        if (!$request->boolean('include_stopped') && (string) $request->input('queue', 'today') !== 'all') {
-            $this->applyActiveFollowUpScope($query);
         }
     }
 
@@ -765,12 +784,23 @@ class TelesalesLeadController extends Controller
         $tasks[] = [LeadFollowUpTask::TYPE_SEVEN_DAYS, $baseDate->copy()->addDays(7)];
 
         foreach ($tasks as [$taskType, $dueDate]) {
-            LeadFollowUpTask::withoutGlobalScopes()->firstOrCreate([
+            $dueDateString = $dueDate->toDateString();
+            $exists = LeadFollowUpTask::withoutGlobalScopes()
+                ->where('account_id', $lead->account_id)
+                ->where('lead_id', $lead->id)
+                ->where('task_type', $taskType)
+                ->whereDate('due_date', $dueDateString)
+                ->exists();
+
+            if ($exists) {
+                continue;
+            }
+
+            LeadFollowUpTask::withoutGlobalScopes()->create([
                 'account_id' => $lead->account_id,
                 'lead_id' => $lead->id,
                 'task_type' => $taskType,
-                'due_date' => $dueDate->toDateString(),
-            ], [
+                'due_date' => $dueDateString,
                 'status' => LeadFollowUpTask::STATUS_PENDING,
             ]);
         }
@@ -793,14 +823,7 @@ class TelesalesLeadController extends Controller
 
     private function completeCurrentTaskForLead(Lead $lead, string $activityType): ?LeadFollowUpTask
     {
-        $task = LeadFollowUpTask::withoutGlobalScopes()
-            ->where('account_id', $lead->account_id)
-            ->where('lead_id', $lead->id)
-            ->where('status', LeadFollowUpTask::STATUS_PENDING)
-            ->where('due_date', '<=', now()->toDateString())
-            ->orderBy('due_date')
-            ->orderBy('id')
-            ->first();
+        $task = $this->currentDueTaskForLead($lead);
 
         if (!$task) {
             return null;
@@ -809,6 +832,18 @@ class TelesalesLeadController extends Controller
         $this->completeTaskRecord($task, $activityType);
 
         return $task;
+    }
+
+    private function currentDueTaskForLead(Lead $lead): ?LeadFollowUpTask
+    {
+        return LeadFollowUpTask::withoutGlobalScopes()
+            ->where('account_id', $lead->account_id)
+            ->where('lead_id', $lead->id)
+            ->where('status', LeadFollowUpTask::STATUS_PENDING)
+            ->where('due_date', '<=', now()->toDateString())
+            ->orderBy('due_date')
+            ->orderBy('id')
+            ->first();
     }
 
     private function completeTaskRecord(LeadFollowUpTask $task, string $activityType): void
@@ -821,10 +856,21 @@ class TelesalesLeadController extends Controller
         ])->save();
     }
 
-    private function pendingTaskLeadCount(int $accountId, ?string $taskType = null, bool $overdueOnly = false): int
+    private function filteredStatsBaseQuery(Request $request): Builder
     {
-        $query = Lead::withoutGlobalScopes()
-            ->where('account_id', $accountId);
+        $query = $this->scopedLeadQuery($request);
+        $this->applyFilterControls($query, $request);
+
+        return $query;
+    }
+
+    private function pendingTaskLeadCount(Request $request, ?string $taskType = null, bool $overdueOnly = false): int
+    {
+        $query = $this->filteredStatsBaseQuery($request);
+
+        if (!$request->boolean('include_stopped')) {
+            $this->applyActiveFollowUpScope($query);
+        }
 
         $this->whereHasCurrentDueTask($query, $taskType, $overdueOnly);
 
@@ -849,12 +895,11 @@ class TelesalesLeadController extends Controller
     private function stats(Request $request): array
     {
         $accountId = $this->accountId($request);
-        $this->ensureFollowUpTasksForAccount($accountId);
 
-        $base = $this->scopedLeadQuery($request);
+        $base = $this->filteredStatsBaseQuery($request);
         $highPotential = clone $base;
         $unassigned = clone $base;
-        $total = $this->scopedLeadQuery($request)->count();
+        $total = (clone $base)->count();
         $potentialCodes = LeadPotential::ensureDefaultsForAccount($accountId)
             ->where('counts_as_potential', true)
             ->pluck('code')
@@ -888,11 +933,11 @@ class TelesalesLeadController extends Controller
 
         return [
             'total' => $total,
-            'today_due' => $this->pendingTaskLeadCount($accountId),
-            'new_today' => $this->pendingTaskLeadCount($accountId, LeadFollowUpTask::TYPE_NEW),
-            'three_day_due' => $this->pendingTaskLeadCount($accountId, LeadFollowUpTask::TYPE_THREE_DAYS),
-            'seven_day_due' => $this->pendingTaskLeadCount($accountId, LeadFollowUpTask::TYPE_SEVEN_DAYS),
-            'overdue' => $this->pendingTaskLeadCount($accountId, null, true),
+            'today_due' => $this->pendingTaskLeadCount($request),
+            'new_today' => $this->pendingTaskLeadCount($request, LeadFollowUpTask::TYPE_NEW),
+            'three_day_due' => $this->pendingTaskLeadCount($request, LeadFollowUpTask::TYPE_THREE_DAYS),
+            'seven_day_due' => $this->pendingTaskLeadCount($request, LeadFollowUpTask::TYPE_SEVEN_DAYS),
+            'overdue' => $this->pendingTaskLeadCount($request, null, true),
             'high_potential' => !empty($potentialCodes) ? $highPotential->whereIn('potential_level', $potentialCodes)->count() : 0,
             'unassigned' => $unassigned->whereNull('assigned_staff_id')->count(),
             'conversion' => [

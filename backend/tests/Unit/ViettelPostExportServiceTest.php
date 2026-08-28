@@ -71,6 +71,39 @@ class ViettelPostExportServiceTest extends TestCase
         }
     }
 
+    public function test_export_sets_cod_to_zero_for_prepaid_bank_transfer_orders(): void
+    {
+        $path = tempnam(sys_get_temp_dir(), 'vtp-export-prepaid-');
+        if ($path === false) {
+            throw new RuntimeException('Unable to create temporary file.');
+        }
+
+        $xlsxPath = $path . '.xlsx';
+        @unlink($path);
+
+        try {
+            $order = new Order([
+                'order_number' => 'DH002',
+                'customer_name' => 'Nguyen Van B',
+                'customer_phone' => '0987654321',
+                'shipping_address' => '2 Main',
+                'total_price' => '1600000.00',
+                'order_type' => Order::TYPE_PREPAID_BANK_TRANSFER,
+            ]);
+
+            $service = new ViettelPostExportService(new SimpleXlsxService());
+            $service->export(new Collection([$order]), 'gom su', $xlsxPath);
+
+            [$worksheetXml] = $this->readWorkbookParts($xlsxPath);
+            $cells = $this->worksheetCells($worksheetXml);
+
+            $this->assertSame('1600000', $cells['I7']['value']);
+            $this->assertSame('0', $cells['J7']['value']);
+        } finally {
+            @unlink($xlsxPath);
+        }
+    }
+
     /**
      * @return array{0: string, 1: string}
      */

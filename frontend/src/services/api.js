@@ -815,6 +815,48 @@ export const telesalesApi = {
     deletePotential: (id) => api.delete(`/lead-potentials/${id}`),
 };
 
+export const quickReplyApi = {
+    bootstrap: () => api.get('/quick-replies/bootstrap'),
+    getAll: (params, signal) => api.get('/quick-replies', { params, signal }),
+    store: (data) => api.post('/quick-replies', data),
+    importPancake: (data) => api.post('/quick-replies/import-pancake', data, multipartConfig(data)),
+    splitZalo: (data = {}) => api.post('/quick-replies/split-zalo', data),
+    getZaloMirrorScreenshot: (params = {}) => api.get('/quick-replies/zalo-mirror/screenshot', { params, responseType: 'blob' }),
+    clickZaloMirror: (data = {}) => api.post('/quick-replies/zalo-mirror/click', data),
+    typeZaloMirror: (data = {}) => api.post('/quick-replies/zalo-mirror/type', data),
+    update: (id, data) => api.put(`/quick-replies/${id}`, data),
+    destroy: (id) => api.delete(`/quick-replies/${id}`),
+    bulkDelete: (data) => api.post('/quick-replies/bulk-delete', data),
+    restore: (id) => api.post(`/quick-replies/${id}/restore`),
+    bulkRestore: (data) => api.post('/quick-replies/bulk-restore', data),
+    gallery: (params, signal) => api.get('/quick-replies/gallery', { params, signal }),
+    createGalleryFolder: (data) => api.post('/quick-replies/gallery/folders', data),
+    updateGalleryFolder: (id, data) => api.put(`/quick-replies/gallery/folders/${id}`, data),
+    deleteGalleryFolder: (id) => api.delete(`/quick-replies/gallery/folders/${id}`),
+    uploadGalleryImages: (data, config = {}) => {
+        const uploadConfig = multipartConfig(data) || {};
+        return api.post('/quick-replies/gallery/images', data, {
+            ...uploadConfig,
+            ...config,
+            headers: {
+                ...(uploadConfig.headers || {}),
+                ...(config.headers || {}),
+            },
+        });
+    },
+    updateGalleryImage: (id, data) => api.put(`/quick-replies/gallery/images/${id}`, data),
+    deleteGalleryImage: (id) => api.delete(`/quick-replies/gallery/images/${id}`),
+    copyGalleryImages: (data) => api.post('/quick-replies/gallery/images/copy', data),
+    sendGalleryImagesToZalo: (data) => api.post('/quick-replies/gallery/images/send-to-zalo', data),
+    duplicate: (id) => api.post(`/quick-replies/${id}/duplicate`),
+    recordUse: (id) => api.post(`/quick-replies/${id}/use`),
+    copyImages: (id, data = {}) => api.post(`/quick-replies/${id}/copy-images`, data),
+    sendToZalo: (id, data = {}) => api.post(`/quick-replies/${id}/send-to-zalo`, data),
+    createTopic: (data) => api.post('/quick-reply-topics', data),
+    updateTopic: (id, data) => api.put(`/quick-reply-topics/${id}`, data),
+    deleteTopic: (id) => api.delete(`/quick-reply-topics/${id}`),
+};
+
 export const orderStatusApi = {
     getAll: (params) => api.get('/order-statuses', params ? { params } : {}),
     getOne: (id) => api.get(`/order-statuses/${id}`),

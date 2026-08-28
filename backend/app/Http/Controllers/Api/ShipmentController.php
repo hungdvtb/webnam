@@ -339,7 +339,7 @@ class ShipmentController extends Controller
                 $carrierName = $carrier ? $carrier->name : $request->carrier_code;
             }
 
-            $codAmount = $request->cod_amount ?? $order->total_price;
+            $codAmount = $request->cod_amount ?? $order->shippingCodAmount();
             $shippingCost = $request->filled('shipping_cost')
                 ? (float) $request->shipping_cost
                 : max(0, round((float) data_get($order, 'internal_shipping_fee', 0), 2));

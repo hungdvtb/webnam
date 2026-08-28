@@ -734,7 +734,7 @@ class FinanceReadService
 
             $revenue = round((float) $dayOrders->sum(
                 fn (Order $order) => (float) (
-                    $order->getNormalizedOrderType() === Order::TYPE_STANDARD
+                    $order->isStandardRevenueOrder()
                         ? ($order->total_price ?? 0)
                         : ($order->report_revenue_total ?? 0)
                 )
@@ -742,7 +742,7 @@ class FinanceReadService
             $orderCount = (int) $dayOrders->count();
             $costGoods = round((float) $dayOrders->sum(
                 fn (Order $order) => (float) (
-                    $order->getNormalizedOrderType() === Order::TYPE_STANDARD
+                    $order->isStandardRevenueOrder()
                         ? ($order->cost_total ?? 0)
                         : ($order->report_cost_total ?? 0)
                 )

@@ -4,6 +4,7 @@ namespace Database\Seeders;
 
 use App\Models\Account;
 use App\Models\Lead;
+use App\Models\LeadFollowUpTask;
 use App\Models\LeadNote;
 use App\Models\LeadPotential;
 use App\Models\LeadStaff;
@@ -11,11 +12,12 @@ use App\Models\LeadStatus;
 use Carbon\Carbon;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Schema;
 
 class TelesalesDemoSeeder extends Seeder
 {
     private const DEMO_TAG = 'CRM-DEMO-TEST';
-    private const PER_ACCOUNT_COUNT = 50;
+    private const PER_ACCOUNT_COUNT = 80;
 
     public function run(): void
     {
@@ -39,28 +41,24 @@ class TelesalesDemoSeeder extends Seeder
 
     private function seedAccount(int $accountId): int
     {
-        Lead::withoutGlobalScopes()
-            ->where('account_id', $accountId)
-            ->where('tag', self::DEMO_TAG)
-            ->get()
-            ->each(fn (Lead $lead) => $lead->forceDelete());
+        $this->clearExistingDemoLeads($accountId);
 
         $statuses = LeadStatus::ensureDefaultsForAccount($accountId)->keyBy('code');
-        LeadPotential::ensureDefaultsForAccount($accountId);
+        $potentials = LeadPotential::ensureDefaultsForAccount($accountId);
         $staffs = $this->ensureStaffs($accountId);
         $now = now();
         $created = 0;
 
         for ($index = 1; $index <= self::PER_ACCOUNT_COUNT; $index++) {
-            $status = $this->statusForIndex($statuses, $index);
-            $staff = $staffs[($index - 1) % $staffs->count()] ?? null;
-            $daysBack = $this->daysBackForIndex($index);
-            $placedAt = $now->copy()->subDays($daysBack)->setTime(8 + ($index % 9), ($index * 7) % 60);
-            $stopped = $this->isStoppedStatus($status);
-            $followUpAt = $stopped ? null : $this->followUpAtForIndex($now, $index);
-            $intervalDays = $followUpAt ? ($index % 2 === 0 ? 7 : 3) : null;
-            $potential = $this->potentialForIndex($index);
-            $convertedAt = $this->isClosedStatus($status) ? $placedAt->copy()->addDays(min(2, max(0, $daysBack)))->setTime(16, 0) : null;
+            $case = $this->caseForIndex($index);
+            $status = $this->statusForCase($statuses, $case);
+            $staff = $staffs[($index - 1) % max(1, $staffs->count())] ?? null;
+            $placedAt = $this->placedAtForCase($now, $case, $index);
+            $potential = $this->potentialForIndex($potentials, $index);
+            $stopped = (bool) ($case['stopped'] ?? false) || $this->isStoppedStatus($status);
+            $convertedAt = $this->isClosedStatus($status)
+                ? $this->safeCompletedAt($placedAt->copy()->addDay()->setTime(16, 0), $now)
+                : null;
 
             $lead = Lead::withoutGlobalScopes()->create([
                 'account_id' => $accountId,
@@ -68,31 +66,32 @@ class TelesalesDemoSeeder extends Seeder
                 'lead_status_id' => $status?->id,
                 'assigned_staff_id' => $staff?->id,
                 'potential_level' => $potential,
-                'next_follow_up_at' => $followUpAt,
-                'follow_up_script' => $intervalDays ? ($intervalDays === 7 ? '7_days' : '3_days') : null,
-                'follow_up_interval_days' => $intervalDays,
-                'last_contacted_at' => $index % 4 === 0 ? null : $placedAt->copy()->addHours(2),
+                'next_follow_up_at' => $this->nextFollowUpForCase($placedAt, $case, $stopped),
+                'follow_up_script' => $this->scriptForCase($case, $stopped),
+                'follow_up_interval_days' => $this->intervalForCase($case, $stopped),
+                'last_contacted_at' => $this->lastContactForCase($placedAt, $case, $now),
                 'do_not_call' => $stopped,
-                'customer_name' => $this->customerName($index),
-                'phone' => sprintf('09%02d%06d', $accountId % 100, 1000 + $index),
-                'zalo_phone' => $index % 5 === 0 ? sprintf('08%02d%06d', $accountId % 100, 1000 + $index) : sprintf('09%02d%06d', $accountId % 100, 1000 + $index),
+                'customer_name' => $this->customerName($index, $case),
+                'phone' => $this->phoneForIndex($accountId, $index),
+                'zalo_phone' => $index % 6 === 0 ? $this->phoneForIndex($accountId, $index + 120) : $this->phoneForIndex($accountId, $index),
                 'email' => null,
                 'address' => $this->addressForIndex($index),
                 'product_name' => 'Tu van CRM demo',
                 'product_summary' => $this->productSummaryForIndex($index),
                 'product_summary_short' => 'CRM demo',
-                'message' => 'Du lieu demo CRM telesales de test trang thai, nhac lai, ghi chu va tao don.',
+                'message' => $this->messageForCase($case),
                 'source' => $this->sourceForIndex($index),
                 'tag' => self::DEMO_TAG,
                 'status' => $status?->code ?? 'don-moi',
                 'placed_at' => $placedAt,
                 'converted_at' => $convertedAt,
-                'status_changed_at' => $placedAt->copy()->addHours(1),
+                'status_changed_at' => $this->safeCompletedAt($placedAt->copy()->addMinutes(40), $now),
                 'notes' => null,
                 'payload_snapshot' => [
                     'demo_seed' => true,
-                    'days_back' => $daysBack,
-                    'follow_up_case' => $followUpAt?->toDateTimeString(),
+                    'demo_case' => $case['key'],
+                    'days_back' => (int) $case['days_back'],
+                    'workflow_hint' => $case['hint'],
                 ],
                 'conversion_data' => $convertedAt ? ['demo_converted' => true] : [],
             ]);
@@ -102,7 +101,9 @@ class TelesalesDemoSeeder extends Seeder
                 'updated_at' => $placedAt,
             ])->save();
 
-            $latestNote = $this->createDemoNotes($lead, $status, $staff, $placedAt, $potential, $followUpAt, $index);
+            $this->createFollowUpTasks($lead, $placedAt, $case, $now);
+
+            $latestNote = $this->createDemoNotes($lead, $status, $staff, $placedAt, $potential, $case, $now, $index);
             $lead->forceFill([
                 'latest_note_excerpt' => mb_strimwidth($latestNote->content, 0, 180, '...'),
                 'last_noted_at' => $latestNote->created_at,
@@ -113,6 +114,33 @@ class TelesalesDemoSeeder extends Seeder
         }
 
         return $created;
+    }
+
+    private function clearExistingDemoLeads(int $accountId): void
+    {
+        $demoLeadIds = Lead::withoutGlobalScopes()
+            ->where('account_id', $accountId)
+            ->where('tag', self::DEMO_TAG)
+            ->pluck('id');
+
+        if ($demoLeadIds->isEmpty()) {
+            return;
+        }
+
+        LeadNote::withoutGlobalScopes()
+            ->whereIn('lead_id', $demoLeadIds)
+            ->delete();
+
+        if (Schema::hasTable('lead_follow_up_tasks')) {
+            LeadFollowUpTask::withoutGlobalScopes()
+                ->whereIn('lead_id', $demoLeadIds)
+                ->delete();
+        }
+
+        Lead::withoutGlobalScopes()
+            ->whereIn('id', $demoLeadIds)
+            ->get()
+            ->each(fn (Lead $lead) => $lead->forceDelete());
     }
 
     private function ensureStaffs(int $accountId): Collection
@@ -131,53 +159,157 @@ class TelesalesDemoSeeder extends Seeder
             ->values();
     }
 
-    private function statusForIndex(Collection $statuses, int $index): ?LeadStatus
+    private function caseForIndex(int $index): array
     {
-        $codes = [
-            'don-moi',
-            'hen-goi-lai',
-            'knm1',
-            'cho-xem-lai',
-            'da-chot',
-            'huy-don',
-            'da-tao-don',
-            'sai-sdt',
-            'knm2',
-            'knm3',
+        $cases = [
+            ['key' => 'new_today', 'status' => 'don-moi', 'days_back' => 0, 'current' => 'new', 'done' => [], 'stopped' => false, 'hint' => 'So moi hom nay, can goi lan dau.'],
+            ['key' => 'new_yesterday', 'status' => 'don-moi', 'days_back' => 1, 'current' => 'new', 'done' => [], 'stopped' => false, 'hint' => 'So moi tu hom qua chua xu ly, van nam trong viec hom nay.'],
+            ['key' => 'new_overdue', 'status' => 'don-moi', 'days_back' => 5, 'current' => 'new', 'done' => [], 'stopped' => false, 'hint' => 'So moi qua han de test tab Qua han.'],
+            ['key' => 'three_today', 'status' => 'hen-goi-lai', 'days_back' => 3, 'current' => '3_days', 'done' => ['new'], 'stopped' => false, 'hint' => 'Den lich 3 ngay, cot Trang thai hien So 3 ngay truoc.'],
+            ['key' => 'three_overdue', 'status' => 'knm1', 'days_back' => 4, 'current' => '3_days', 'done' => ['new'], 'stopped' => false, 'hint' => 'Lich 3 ngay bi tre 1 ngay.'],
+            ['key' => 'three_overdue_more', 'status' => 'cho-xem-lai', 'days_back' => 6, 'current' => '3_days', 'done' => ['new'], 'stopped' => false, 'hint' => 'Lich 3 ngay bi tre nhieu ngay.'],
+            ['key' => 'seven_today', 'status' => 'hen-goi-lai', 'days_back' => 7, 'current' => '7_days', 'done' => ['new', '3_days'], 'stopped' => false, 'hint' => 'Den lich 7 ngay, cot Trang thai hien So 7 ngay truoc.'],
+            ['key' => 'seven_overdue', 'status' => 'knm2', 'days_back' => 9, 'current' => '7_days', 'done' => ['new', '3_days'], 'stopped' => false, 'hint' => 'Lich 7 ngay qua han.'],
+            ['key' => 'future_3_days', 'status' => 'hen-goi-lai', 'days_back' => 2, 'current' => 'future', 'done' => ['new'], 'stopped' => false, 'hint' => 'Da goi, chua den lich 3 ngay nen chi thay trong tab Tat ca.'],
+            ['key' => 'done_all_called', 'status' => 'hen-goi-lai', 'days_back' => 12, 'current' => 'done', 'done' => ['new', '3_days', '7_days'], 'stopped' => false, 'hint' => 'Da xu ly het cac luot nhac.'],
+            ['key' => 'closed', 'status' => 'da-chot', 'days_back' => 8, 'current' => 'done', 'done' => ['new', '3_days', '7_days'], 'stopped' => false, 'hint' => 'Da chot de test tao don.'],
+            ['key' => 'order_created', 'status' => 'da-tao-don', 'days_back' => 10, 'current' => 'stopped', 'done' => ['new', '3_days'], 'stopped' => true, 'hint' => 'Da tao don, chan nut tao don va dung nhac.'],
+            ['key' => 'no_need', 'status' => 'huy-don', 'days_back' => 11, 'current' => 'stopped', 'done' => ['new'], 'stopped' => true, 'hint' => 'Khong nhu cau, dung nhac va an khoi viec hom nay.'],
+            ['key' => 'wrong_phone', 'status' => 'sai-sdt', 'days_back' => 13, 'current' => 'stopped', 'done' => ['new'], 'stopped' => true, 'hint' => 'Sai so dien thoai, test loc trang thai.'],
+            ['key' => 'knm3_seven', 'status' => 'knm3', 'days_back' => 14, 'current' => '7_days', 'done' => ['new', '3_days'], 'stopped' => false, 'hint' => 'Khong nghe may lan 3 nhung van den luot 7 ngay.'],
+            ['key' => 'potential_three', 'status' => 'cho-xem-lai', 'days_back' => 3, 'current' => '3_days', 'done' => ['new'], 'stopped' => false, 'hint' => 'Khach tiem nang den lich 3 ngay.'],
         ];
 
-        return $statuses->get($codes[($index - 1) % count($codes)])
-            ?: $statuses->values()->get(($index - 1) % max(1, $statuses->count()));
+        return $cases[($index - 1) % count($cases)];
     }
 
-    private function daysBackForIndex(int $index): int
+    private function statusForCase(Collection $statuses, array $case): ?LeadStatus
     {
-        $days = [0, 1, 2, 3, 3, 4, 5, 7, 7, 10, 10, 12, 14, 16, 18, 20];
-
-        return $days[($index - 1) % count($days)];
+        return $statuses->get($case['status'])
+            ?: $statuses->get('don-moi')
+            ?: $statuses->values()->first();
     }
 
-    private function followUpAtForIndex(Carbon $now, int $index): ?Carbon
+    private function placedAtForCase(Carbon $now, array $case, int $index): Carbon
     {
-        return match ($index % 12) {
-            0 => $now->copy()->subDays(10)->setTime(9, 0),
-            1 => $now->copy()->subDays(7)->setTime(9, 0),
-            2 => $now->copy()->subDays(3)->setTime(9, 0),
-            3 => $now->copy()->subDay()->setTime(9, 0),
-            4 => $now->copy()->setTime(9, 0),
-            5 => $now->copy()->setTime(14, 0),
-            6 => $now->copy()->addDays(3)->setTime(9, 0),
-            7 => $now->copy()->addDays(7)->setTime(9, 0),
-            8 => $now->copy()->addDays(10)->setTime(9, 0),
+        $date = $now->copy()
+            ->startOfDay()
+            ->subDays((int) $case['days_back'])
+            ->addHours(8 + ($index % 10))
+            ->addMinutes(($index * 7) % 50);
+
+        if ($date->gte($now)) {
+            $date = $now->copy()->subMinutes(10 + $index);
+        }
+
+        return $date;
+    }
+
+    private function potentialForIndex(Collection $potentials, int $index): ?string
+    {
+        $active = $potentials
+            ->filter(fn (LeadPotential $potential) => $potential->is_active !== false)
+            ->values();
+
+        if ($active->isEmpty()) {
+            return null;
+        }
+
+        return $active[($index - 1) % $active->count()]->code;
+    }
+
+    private function nextFollowUpForCase(Carbon $placedAt, array $case, bool $stopped): ?Carbon
+    {
+        if ($stopped || $case['current'] === 'done') {
+            return null;
+        }
+
+        return match ($case['current']) {
+            'new' => $placedAt->copy()->startOfDay(),
+            '3_days' => $placedAt->copy()->startOfDay()->addDays(3)->setTime(9, 0),
+            '7_days' => $placedAt->copy()->startOfDay()->addDays(7)->setTime(9, 0),
+            'future' => $placedAt->copy()->startOfDay()->addDays(3)->setTime(9, 0),
             default => null,
         };
     }
 
-    private function potentialForIndex(int $index): ?string
+    private function scriptForCase(array $case, bool $stopped): ?string
     {
-        $potentials = ['hot', 'high', 'medium', 'low', 'unqualified', null];
+        if ($stopped || $case['current'] === 'done') {
+            return null;
+        }
 
-        return $potentials[($index - 1) % count($potentials)];
+        return match ($case['current']) {
+            'new', '3_days', 'future' => '3_days',
+            '7_days' => '7_days',
+            default => null,
+        };
+    }
+
+    private function intervalForCase(array $case, bool $stopped): ?int
+    {
+        if ($stopped || $case['current'] === 'done') {
+            return null;
+        }
+
+        return $case['current'] === '7_days' ? 7 : 3;
+    }
+
+    private function lastContactForCase(Carbon $placedAt, array $case, Carbon $now): ?Carbon
+    {
+        if (in_array('new', $case['done'], true) || $case['current'] === 'done') {
+            return $this->safeCompletedAt($placedAt->copy()->addHours(2), $now);
+        }
+
+        return null;
+    }
+
+    private function createFollowUpTasks(Lead $lead, Carbon $placedAt, array $case, Carbon $now): void
+    {
+        if (!Schema::hasTable('lead_follow_up_tasks')) {
+            return;
+        }
+
+        $baseDate = $placedAt->copy()->startOfDay();
+        $definitions = [
+            LeadFollowUpTask::TYPE_NEW => $baseDate->copy(),
+            LeadFollowUpTask::TYPE_THREE_DAYS => $baseDate->copy()->addDays(3),
+            LeadFollowUpTask::TYPE_SEVEN_DAYS => $baseDate->copy()->addDays(7),
+        ];
+
+        foreach ($definitions as $type => $dueDate) {
+            $status = LeadFollowUpTask::STATUS_PENDING;
+            $completedAt = null;
+            $completedActivityType = null;
+
+            if (in_array($type, $case['done'], true)) {
+                $status = LeadFollowUpTask::STATUS_COMPLETED;
+                $completedAt = $this->safeCompletedAt($dueDate->copy()->setTime(10, 0), $now);
+                $completedActivityType = 'status';
+            }
+
+            if ($case['current'] === 'stopped' && !in_array($type, $case['done'], true)) {
+                $status = LeadFollowUpTask::STATUS_STOPPED;
+                $completedAt = $this->safeCompletedAt($placedAt->copy()->addHours(3), $now);
+                $completedActivityType = 'schedule';
+            }
+
+            $task = LeadFollowUpTask::withoutGlobalScopes()->create([
+                'account_id' => $lead->account_id,
+                'lead_id' => $lead->id,
+                'task_type' => $type,
+                'due_date' => $dueDate->toDateString(),
+                'status' => $status,
+                'completed_at' => $completedAt,
+                'completed_by' => null,
+                'completed_activity_type' => $completedActivityType,
+            ]);
+
+            $task->forceFill([
+                'created_at' => $placedAt,
+                'updated_at' => $completedAt ?: $placedAt,
+            ])->save();
+        }
     }
 
     private function createDemoNotes(
@@ -186,31 +318,31 @@ class TelesalesDemoSeeder extends Seeder
         ?LeadStaff $staff,
         Carbon $placedAt,
         ?string $potential,
-        ?Carbon $followUpAt,
+        array $case,
+        Carbon $now,
         int $index
     ): LeadNote {
         $notes = [
             [
-                'content' => 'Nhap khach demo tu danh sach test CRM telesales.',
+                'content' => "Nhap demo {$case['key']}: {$case['hint']}",
                 'activity_type' => 'import',
                 'created_at' => $placedAt->copy()->addMinutes(5),
             ],
             [
-                'content' => $index % 3 === 0
-                    ? 'Khach chua nghe may, can goi lai theo lich.'
-                    : 'Da goi tu van nhanh, ghi nhan nhu cau va phan loai khach.',
-                'activity_type' => 'call',
+                'content' => $this->workflowNoteForCase($case, $status),
+                'activity_type' => in_array('new', $case['done'], true) ? 'call' : 'note',
                 'created_at' => $placedAt->copy()->addHours(2),
             ],
             [
-                'content' => $this->latestNoteForStatus($status, $index),
+                'content' => $this->latestNoteForStatus($status, $case, $index),
                 'activity_type' => $index % 4 === 0 ? 'zalo' : 'note',
-                'created_at' => $placedAt->copy()->addHours(5 + ($index % 4)),
+                'created_at' => $placedAt->copy()->addHours(4 + ($index % 3)),
             ],
         ];
 
         $latest = null;
         foreach ($notes as $noteData) {
+            $createdAt = $this->safeCompletedAt($noteData['created_at'], $now);
             $latest = LeadNote::withoutGlobalScopes()->create([
                 'account_id' => $lead->account_id,
                 'lead_id' => $lead->id,
@@ -218,40 +350,56 @@ class TelesalesDemoSeeder extends Seeder
                 'staff_name' => $staff?->name ?? 'Sale demo',
                 'content' => $noteData['content'],
                 'activity_type' => $noteData['activity_type'],
-                'next_follow_up_at' => $followUpAt,
+                'next_follow_up_at' => $lead->next_follow_up_at,
                 'potential_level' => $potential,
                 'lead_status_id' => $status?->id,
                 'assigned_staff_id' => $staff?->id,
             ]);
             $latest->forceFill([
-                'created_at' => $noteData['created_at'],
-                'updated_at' => $noteData['created_at'],
+                'created_at' => $createdAt,
+                'updated_at' => $createdAt,
             ])->save();
         }
 
         return $latest;
     }
 
-    private function latestNoteForStatus(?LeadStatus $status, int $index): string
+    private function workflowNoteForCase(array $case, ?LeadStatus $status): string
     {
-        $name = $status?->name ?: 'Chua chon';
-
-        return match ($status?->code) {
-            'don-moi' => 'Khach moi can cham lan dau, uu tien goi trong hom nay.',
-            'hen-goi-lai' => 'Da goi va hen khach xem mau, tiep tuc bam sat nhu cau.',
-            'knm1', 'knm2', 'knm3' => "Trang thai {$name}, can test loc qua han va nhac lai.",
-            'cho-xem-lai' => 'Khach co nhu cau that, dang can bao gia va hinh anh san pham.',
-            'da-chot' => 'Khach da chot, bam Tao don de test luong sang bang tao don.',
-            'da-tao-don' => 'Da tao don demo, dung de test trang thai chan tao don.',
-            'huy-don' => 'Khach khong co nhu cau, dung nhac lai de test an khoi viec hom nay.',
-            'sai-sdt' => 'Sai so dien thoai, dung nhac lai va test loc trang thai.',
-            default => "Ghi chu moi nhat demo #{$index} cho trang thai {$name}.",
+        return match ($case['current']) {
+            'new' => 'Chua xu ly luot so moi. Sale doi trang thai sang Da goi sau khi goi xong.',
+            '3_days' => 'Da xu ly luot moi, hien dang can goi lai theo moc 3 ngay.',
+            '7_days' => 'Da xu ly luot 3 ngay, hien dang can goi lai theo moc 7 ngay.',
+            'future' => 'Da goi lan dau, chua den lich 3 ngay nen chi thay trong tab Tat ca.',
+            'done' => 'Da xu ly het cac luot nhac, dung de test lich su va tab Tat ca.',
+            'stopped' => 'Da dung nhac theo trang thai ' . ($status?->name ?: 'dung cham soc') . '.',
+            default => 'Ghi chu demo workflow telesales.',
         };
+    }
+
+    private function latestNoteForStatus(?LeadStatus $status, array $case, int $index): string
+    {
+        return match ($status?->code) {
+            'don-moi' => "Demo #{$index}: so moi can goi, case {$case['key']}.",
+            'hen-goi-lai' => "Demo #{$index}: da goi truoc do, cho luot nhac tiep theo.",
+            'knm1', 'knm2', 'knm3' => "Demo #{$index}: khong nghe may, test loc qua han va trang thai.",
+            'cho-xem-lai' => "Demo #{$index}: khach co nhu cau, can bam sat.",
+            'da-chot' => "Demo #{$index}: khach da chot, bam Tao don de test luong sang don hang.",
+            'da-tao-don' => "Demo #{$index}: da tao don, test chan tao don va dung nhac.",
+            'huy-don' => "Demo #{$index}: khong nhu cau, test khach dung nhac.",
+            'sai-sdt' => "Demo #{$index}: sai so, test loc va an khoi viec.",
+            default => "Demo #{$index}: ghi chu moi nhat cho {$case['key']}.",
+        };
+    }
+
+    private function safeCompletedAt(Carbon $value, Carbon $now): Carbon
+    {
+        return $value->gt($now) ? $now->copy()->subMinutes(3) : $value;
     }
 
     private function isStoppedStatus(?LeadStatus $status): bool
     {
-        return in_array($status?->code, ['huy-don', 'sai-sdt'], true);
+        return in_array($status?->code, ['huy-don', 'sai-sdt', 'da-tao-don'], true);
     }
 
     private function isClosedStatus(?LeadStatus $status): bool
@@ -259,7 +407,7 @@ class TelesalesDemoSeeder extends Seeder
         return in_array($status?->code, ['da-chot', 'da-tao-don'], true);
     }
 
-    private function customerName(int $index): string
+    private function customerName(int $index, array $case): string
     {
         $names = [
             'Nguyen Thi Lan',
@@ -274,7 +422,16 @@ class TelesalesDemoSeeder extends Seeder
             'Test pancake',
         ];
 
-        return $names[($index - 1) % count($names)] . ' #' . str_pad((string) $index, 2, '0', STR_PAD_LEFT);
+        return $names[($index - 1) % count($names)] . ' #' . str_pad((string) $index, 2, '0', STR_PAD_LEFT) . ' - ' . $case['key'];
+    }
+
+    private function phoneForIndex(int $accountId, int $index): string
+    {
+        $prefixes = ['098', '034', '091', '094', '090', '093', '070', '076', '056', '058', '099', '087', '055'];
+        $prefix = $prefixes[($index - 1) % count($prefixes)];
+        $tail = (($accountId % 90) * 100000) + ($index % 100000);
+
+        return $prefix . str_pad((string) $tail, 7, '0', STR_PAD_LEFT);
     }
 
     private function addressForIndex(int $index): string
@@ -311,5 +468,10 @@ class TelesalesDemoSeeder extends Seeder
         ];
 
         return $summaries[($index - 1) % count($summaries)];
+    }
+
+    private function messageForCase(array $case): string
+    {
+        return 'Du lieu demo CRM telesales - ' . $case['hint'];
     }
 }

@@ -489,23 +489,29 @@ class ShipmentStatusSyncService
         $baseManualDiscount = $this->resolveManualDiscountBase($order, $currentSystemAdjustment);
         $baseCostTotal = round((float) ($order->cost_total ?? 0), 2);
         $normalizedOrderType = $order->getNormalizedOrderType();
-        $settlementDelta = $normalizedOrderType === Order::TYPE_STANDARD
-            ? 0.0
-            : round((float) ($order->settlement_delta ?? 0), 2);
-        $supplementTotalPrice = $normalizedOrderType === Order::TYPE_STANDARD
-            ? 0.0
-            : round((float) ($order->supplement_items_total_price ?? 0), 2);
-        $supplementCostTotal = $normalizedOrderType === Order::TYPE_STANDARD
-            ? 0.0
-            : round((float) ($order->supplement_items_cost_total ?? 0), 2);
+        $isSupplementWorkflowOrder = Order::isSupplementWorkflowType($normalizedOrderType);
+        $isPrepaidBankTransferOrder = $normalizedOrderType === Order::TYPE_PREPAID_BANK_TRANSFER;
+        $settlementDelta = $isSupplementWorkflowOrder
+            ? round((float) ($order->settlement_delta ?? 0), 2)
+            : 0.0;
+        $supplementTotalPrice = $isSupplementWorkflowOrder
+            ? round((float) ($order->supplement_items_total_price ?? 0), 2)
+            : 0.0;
+        $supplementCostTotal = $isSupplementWorkflowOrder
+            ? round((float) ($order->supplement_items_cost_total ?? 0), 2)
+            : 0.0;
         $exchangeNetRevenueTotal = round($itemRevenue - $baseManualDiscount - $supplementTotalPrice + $settlementDelta, 2);
-        $targetTotalPrice = $normalizedOrderType === Order::TYPE_EXCHANGE_RETURN
-            ? round(max(0, $exchangeNetRevenueTotal), 2)
-            : round((float) ($shipment->cod_amount ?? 0), 2);
-        $targetDiscount = $normalizedOrderType === Order::TYPE_EXCHANGE_RETURN
-            ? $baseManualDiscount
-            : round($itemRevenue - $targetTotalPrice, 2);
-        $systemAdjustment = $normalizedOrderType === Order::TYPE_EXCHANGE_RETURN
+        if ($isPrepaidBankTransferOrder) {
+            $targetTotalPrice = round((float) ($order->total_price ?? 0), 2);
+            $targetDiscount = round((float) ($order->discount ?? 0), 2);
+        } elseif ($normalizedOrderType === Order::TYPE_EXCHANGE_RETURN) {
+            $targetTotalPrice = round(max(0, $exchangeNetRevenueTotal), 2);
+            $targetDiscount = $baseManualDiscount;
+        } else {
+            $targetTotalPrice = round((float) ($shipment->cod_amount ?? 0), 2);
+            $targetDiscount = round($itemRevenue - $targetTotalPrice, 2);
+        }
+        $systemAdjustment = $normalizedOrderType === Order::TYPE_EXCHANGE_RETURN || $isPrepaidBankTransferOrder
             ? 0.0
             : round($targetDiscount - $baseManualDiscount, 2);
         $baseProfitTotal = round($targetTotalPrice - $baseCostTotal, 2);
@@ -515,18 +521,18 @@ class ShipmentStatusSyncService
             Order::TYPE_STANDARD => $targetTotalPrice,
             default => $targetTotalPrice,
         };
-        $reportCostTotal = $normalizedOrderType === Order::TYPE_STANDARD
-            ? $baseCostTotal
-            : round($baseCostTotal - $supplementCostTotal, 2);
+        $reportCostTotal = $isSupplementWorkflowOrder
+            ? round($baseCostTotal - $supplementCostTotal, 2)
+            : $baseCostTotal;
         $reportProfitTotal = round($reportRevenueTotal - $reportCostTotal, 2);
-        $profitTotal = $normalizedOrderType === Order::TYPE_STANDARD
-            ? $baseProfitTotal
-            : $reportProfitTotal;
+        $profitTotal = $isSupplementWorkflowOrder
+            ? $reportProfitTotal
+            : $baseProfitTotal;
         $notes = $this->resolveOrderCodAdjustmentNotes(
             $order,
             $shipment,
             $systemAdjustment,
-            abs($baseManualDiscount) >= 0.01
+            !$isPrepaidBankTransferOrder && abs($baseManualDiscount) >= 0.01
         );
         $notes = OrderExchangeRefundSystemNote::sync(
             $notes,
@@ -552,7 +558,7 @@ class ShipmentStatusSyncService
             return [];
         }
 
-        $targetCodAmount = round((float) ($order->total_price ?? 0), 2);
+        $targetCodAmount = round($order->shippingCodAmount(), 2);
         $targetActualReceivedAmount = round(
             $targetCodAmount
             - (float) ($shipment->shipping_cost ?? 0)

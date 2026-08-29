@@ -15,6 +15,12 @@ const queueTabs = [
 
 const TELESALES_RETURN_STATE_KEY = 'webnam.telesales.return_state';
 const perPageOptions = [20, 50, 100];
+const workStatusOptions = [
+    { value: 'all', label: 'Tất cả xử lý' },
+    { value: 'pending', label: 'Chưa xử lý' },
+    { value: 'completed', label: 'Đã xử lý' },
+];
+const workStatusValues = new Set(workStatusOptions.map((option) => option.value));
 const queueValues = new Set(queueTabs.map((tab) => tab.value));
 const returnStateParamKeys = [
     'crm_restore',
@@ -25,6 +31,7 @@ const returnStateParamKeys = [
     'page',
     'per_page',
     'search',
+    'work_status',
     'staff_id',
     'status_id',
     'potential_level',
@@ -102,6 +109,7 @@ const stopFollowUpStatusPatterns = [
 const formatNumber = (value) => new Intl.NumberFormat('vi-VN').format(Number(value) || 0);
 const formatPercent = (value) => `${new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 1 }).format(Number(value) || 0)}%`;
 const isCanceledRequest = (error) => error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError';
+const isNotFoundRequest = (error) => Number(error?.response?.status) === 404;
 const firstFilledValue = (...values) => values.find((value) => value !== undefined && value !== null && value !== '');
 const parsePositiveInteger = (value, fallback) => {
     const parsed = Number.parseInt(value, 10);
@@ -114,6 +122,7 @@ const normalizePerPage = (value) => {
 };
 
 const normalizeQueue = (value) => (queueValues.has(value) ? value : 'all');
+const normalizeWorkStatus = (value) => (workStatusValues.has(value) ? value : 'all');
 
 const readStoredReturnState = () => {
     if (typeof window === 'undefined' || !window.sessionStorage) return null;
@@ -167,6 +176,7 @@ const buildInitialViewState = (searchString = '') => {
         page,
         perPage,
         search: String(firstFilledValue(params.get('search'), storedFilters.search, '') || ''),
+        workStatus: normalizeWorkStatus(firstFilledValue(params.get('work_status'), storedFilters.workStatus)),
         staffFilter: String(firstFilledValue(params.get('staff_id'), storedFilters.staffFilter, '') || ''),
         statusFilter: String(firstFilledValue(params.get('status_id'), storedFilters.statusFilter, '') || ''),
         potentialFilter: String(firstFilledValue(params.get('potential_level'), storedFilters.potentialFilter, '') || ''),
@@ -242,11 +252,15 @@ const formatDateTimeLocalLabel = (value) => {
     }).format(date);
 };
 
-const resolveApiMessage = (error, fallback) => (
-    error?.response?.data?.message
-    || error?.message
-    || fallback
-);
+const resolveApiMessage = (error, fallback) => {
+    if (isNotFoundRequest(error)) {
+        return 'Khách này không còn tồn tại hoặc không thuộc gian hàng hiện tại.';
+    }
+
+    return error?.response?.data?.message
+        || error?.message
+        || fallback;
+};
 
 const createImportRow = (overrides = {}) => ({
     local_id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -333,7 +347,8 @@ const buildZaloUrl = (phone) => {
 };
 
 const labelForReminder = (lead) => {
-    if (lead?.current_task?.label) return lead.current_task.label;
+    const task = lead?.work_task || lead?.current_task;
+    if (task?.label) return task.label;
     if (lead?.care_bucket_label) return lead.care_bucket_label;
     if (lead?.do_not_call || lead?.due_bucket === 'stopped') return 'Đã dừng nhắc';
     if (lead?.due_bucket === 'overdue') return 'Quá hạn';
@@ -346,6 +361,16 @@ const getTaskStatusDisplay = (task) => {
     if (!task || task.status !== 'pending' || !task.is_due) return null;
 
     return taskStatusDisplayMap[task.task_type] || null;
+};
+
+const leadMatchesWorkStatusFilter = (lead, filter) => {
+    if (filter === 'all') return true;
+
+    const task = lead?.work_task || lead?.current_task;
+    if (filter === 'completed') return task?.status === 'completed';
+    if (filter === 'pending') return task?.status === 'pending' && task?.is_due;
+
+    return true;
 };
 
 const normalizeStatusDraft = (status) => ({
@@ -406,6 +431,7 @@ const TelesalesCrm = () => {
     const [perPage, setPerPage] = useState(initialViewState.perPage);
     const [queue, setQueue] = useState(initialViewState.queue);
     const [search, setSearch] = useState(initialViewState.search);
+    const [workStatus, setWorkStatus] = useState(initialViewState.workStatus);
     const [staffFilter, setStaffFilter] = useState(initialViewState.staffFilter);
     const [statusFilter, setStatusFilter] = useState(initialViewState.statusFilter);
     const [potentialFilter, setPotentialFilter] = useState(initialViewState.potentialFilter);
@@ -529,6 +555,7 @@ const TelesalesCrm = () => {
         const nextPerPage = overrides.perPage ?? perPage;
         const nextQueue = overrides.queue ?? queue;
         const nextSearch = overrides.search ?? search;
+        const nextWorkStatus = overrides.workStatus ?? workStatus;
         const nextStaffFilter = overrides.staffFilter ?? staffFilter;
         const nextStatusFilter = overrides.statusFilter ?? statusFilter;
         const nextPotentialFilter = overrides.potentialFilter ?? potentialFilter;
@@ -544,6 +571,7 @@ const TelesalesCrm = () => {
                 per_page: nextPerPage,
                 queue: nextQueue,
                 search: String(nextSearch || '').trim() || undefined,
+                work_status: nextWorkStatus !== 'all' ? nextWorkStatus : undefined,
                 staff_id: nextStaffFilter || undefined,
                 status_id: nextStatusFilter || undefined,
                 potential_level: nextPotentialFilter || undefined,
@@ -568,7 +596,39 @@ const TelesalesCrm = () => {
         } finally {
             setLoading(false);
         }
-    }, [buildStatsParams, dateFrom, dateTo, page, perPage, potentialFilter, queue, search, staffFilter, statusFilter]);
+    }, [buildStatsParams, dateFrom, dateTo, page, perPage, potentialFilter, queue, search, staffFilter, statusFilter, workStatus]);
+
+    const forgetLeadFromCurrentView = useCallback((leadId) => {
+        const normalizedLeadId = String(leadId || '');
+        if (!normalizedLeadId) return;
+
+        setLeads((prev) => prev.filter((lead) => String(lead.id) !== normalizedLeadId));
+        setHistoryOpenIds((prev) => {
+            const next = { ...prev };
+            delete next[normalizedLeadId];
+            return next;
+        });
+        setHistoryDetails((prev) => {
+            const next = { ...prev };
+            delete next[normalizedLeadId];
+            return next;
+        });
+        setHistoryLoadingIds((prev) => {
+            const next = { ...prev };
+            delete next[normalizedLeadId];
+            return next;
+        });
+        setInlineNoteDrafts((prev) => {
+            const next = { ...prev };
+            delete next[normalizedLeadId];
+            return next;
+        });
+        setInlineSavingIds((prev) => {
+            const next = { ...prev };
+            delete next[normalizedLeadId];
+            return next;
+        });
+    }, []);
 
     const refreshLeadHistory = useCallback(async (leadId) => {
         if (!leadId) return null;
@@ -580,6 +640,13 @@ const TelesalesCrm = () => {
             setHistoryDetails((prev) => ({ ...prev, [leadId]: detail }));
             return detail;
         } catch (error) {
+            if (isNotFoundRequest(error)) {
+                forgetLeadFromCurrentView(leadId);
+                setErrorMessage('');
+                setToast('Khách này không còn tồn tại hoặc không thuộc gian hàng hiện tại.');
+                return null;
+            }
+
             if (!isCanceledRequest(error)) {
                 setErrorMessage(resolveApiMessage(error, 'Không tải được lịch sử ghi chú.'));
             }
@@ -587,7 +654,7 @@ const TelesalesCrm = () => {
         } finally {
             setHistoryLoadingIds((prev) => ({ ...prev, [leadId]: false }));
         }
-    }, []);
+    }, [forgetLeadFromCurrentView]);
 
     useEffect(() => {
         fetchBootstrap().catch((error) => {
@@ -701,8 +768,17 @@ const TelesalesCrm = () => {
         setPage(1);
     };
 
-    const handleInlineLeadUpdate = async (lead, payload, successMessage = 'Đã cập nhật khách.') => {
+    const handleInlineLeadUpdate = async (lead, payload, options = 'Đã cập nhật khách.') => {
         if (!lead?.id) return null;
+
+        const updateOptions = typeof options === 'string'
+            ? { successMessage: options }
+            : (options || {});
+        const {
+            successMessage = 'Đã cập nhật khách.',
+            silent = false,
+            refreshList = true,
+        } = updateOptions;
 
         setInlineSaving(lead.id, true);
         setErrorMessage('');
@@ -717,15 +793,24 @@ const TelesalesCrm = () => {
             }
 
             setStats((prev) => ({ ...emptyStats, ...(response.data?.stats || prev) }));
-            setToast(successMessage);
+            if (!silent && successMessage) {
+                setToast(successMessage);
+            }
 
             if (historyOpenIds[lead.id]) {
                 await refreshLeadHistory(lead.id);
             }
-
-            await fetchLeads(page);
+            if (refreshList) {
+                await fetchLeads(page);
+            }
             return nextLead || null;
         } catch (error) {
+            if (isNotFoundRequest(error)) {
+                forgetLeadFromCurrentView(lead.id);
+                setToast('Khách này không còn tồn tại hoặc không thuộc gian hàng hiện tại.');
+                return null;
+            }
+
             setErrorMessage(resolveApiMessage(error, 'Không lưu được cập nhật trực tiếp.'));
             return null;
         } finally {
@@ -742,17 +827,24 @@ const TelesalesCrm = () => {
         }, 'Đã cập nhật sale phụ trách.');
     };
 
-    const handleInlineStatusChange = (lead, nextStatusId) => {
+    const handleInlineStatusChange = async (lead, nextStatusId) => {
         if (String(nextStatusId || '').startsWith('__task_')) return;
 
         const nextStatus = bootstrap.statuses.find((status) => Number(status.id) === Number(nextStatusId)) || null;
         const shouldStopFollowUp = statusStopsFollowUp(nextStatus);
 
-        handleInlineLeadUpdate(lead, {
+        const nextLead = await handleInlineLeadUpdate(lead, {
             lead_status_id: nextStatusId || null,
             do_not_call: shouldStopFollowUp,
             activity_type: 'status',
-        }, 'Đã cập nhật trạng thái và xử lý lượt hiện tại.');
+        }, {
+            silent: true,
+            refreshList: false,
+        });
+
+        if (nextLead && !leadMatchesWorkStatusFilter(nextLead, workStatus)) {
+            forgetLeadFromCurrentView(nextLead.id);
+        }
     };
 
     const handleInlinePotentialChange = (lead, nextPotential) => {
@@ -825,6 +917,12 @@ const TelesalesCrm = () => {
 
             await fetchLeads(page);
         } catch (error) {
+            if (isNotFoundRequest(error)) {
+                forgetLeadFromCurrentView(lead.id);
+                setToast('Khách này không còn tồn tại hoặc không thuộc gian hàng hiện tại.');
+                return;
+            }
+
             setErrorMessage(resolveApiMessage(error, 'Không xóa được ghi chú.'));
         } finally {
             setInlineSaving(lead.id, false);
@@ -853,6 +951,7 @@ const TelesalesCrm = () => {
             page,
             perPage,
             search,
+            workStatus,
             staffFilter,
             statusFilter,
             potentialFilter,
@@ -875,6 +974,7 @@ const TelesalesCrm = () => {
         params.set('table_scroll', String(Math.round(tableScrollTop)));
 
         if (filters.search.trim()) params.set('search', filters.search.trim());
+        if (filters.workStatus && filters.workStatus !== 'all') params.set('work_status', filters.workStatus);
         if (filters.staffFilter) params.set('staff_id', filters.staffFilter);
         if (filters.statusFilter) params.set('status_id', filters.statusFilter);
         if (filters.potentialFilter) params.set('potential_level', filters.potentialFilter);
@@ -936,6 +1036,7 @@ const TelesalesCrm = () => {
         const filterReset = {
             queue: 'all',
             search: nextSearch,
+            workStatus: 'all',
             staffFilter: '',
             statusFilter: '',
             potentialFilter: '',
@@ -945,6 +1046,7 @@ const TelesalesCrm = () => {
 
         setQueue(filterReset.queue);
         setSearch(filterReset.search);
+        setWorkStatus(filterReset.workStatus);
         setStaffFilter(filterReset.staffFilter);
         setStatusFilter(filterReset.statusFilter);
         setPotentialFilter(filterReset.potentialFilter);
@@ -1884,7 +1986,7 @@ const TelesalesCrm = () => {
 
                 <div className="min-w-0 overflow-hidden rounded-sm border border-slate-200 bg-white shadow-sm">
                     <div className="border-b border-slate-200 p-3">
-                        <div className="grid grid-cols-1 gap-2 xl:grid-cols-[136px_minmax(180px,1fr)_156px_128px_132px_160px_180px_180px_152px] xl:items-center">
+                        <div className="grid grid-cols-1 gap-2 xl:grid-cols-[136px_minmax(150px,1fr)_150px_156px_128px_132px_160px_180px_180px_152px] xl:items-center">
                             <button type="button" onClick={() => setImportOpen(true)} className={primaryButtonClassName}>
                                 <span className="material-symbols-outlined text-[18px]">add</span>
                                 Nhập khách
@@ -1901,6 +2003,22 @@ const TelesalesCrm = () => {
                                     className={`${inputClassName} pl-10`}
                                     placeholder="Tìm tên khách, SĐT, mã lead, ghi chú..."
                                 />
+                            </div>
+                            <div className="relative min-w-0">
+                                <span className="material-symbols-outlined pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-slate-500">fact_check</span>
+                                <select
+                                    value={workStatus}
+                                    onChange={(event) => {
+                                        setWorkStatus(event.target.value);
+                                        setPage(1);
+                                    }}
+                                    className={`${selectClassName} pl-10`}
+                                    aria-label="Lọc trạng thái xử lý"
+                                >
+                                    {workStatusOptions.map((option) => (
+                                        <option key={option.value} value={option.value}>{option.label}</option>
+                                    ))}
+                                </select>
                             </div>
 
                             <div className="relative">
@@ -2085,11 +2203,13 @@ const TelesalesCrm = () => {
                                     const customerAddedLabel = formatDateTimeLocalLabel(leadAddedAt) || lead.added_label || lead.placed_label || '';
                                     const reminderAddedDateLabel = formatDateOnlyLabel(leadAddedAt);
                                     const currentTask = lead.current_task || null;
+                                    const workTask = lead.work_task || currentTask;
+                                    const reminderProcessed = workTask?.status === 'completed';
                                     const taskStatusDisplay = getTaskStatusDisplay(currentTask);
                                     const currentStatusOption = activeStatuses.find((status) => String(status.id) === String(statusValue));
                                     const statusSelectValue = taskStatusDisplay ? taskStatusDisplay.value : (currentStatusOption ? statusValue : '');
                                     const currentStatusColor = taskStatusDisplay?.color || currentStatusOption?.color || '#64748b';
-                                    const currentTaskDue = currentTask?.due_label || '';
+                                    const currentTaskDue = workTask?.due_label || '';
                                     const rowWasRestored = String(restoredLeadId || '') === String(lead.id);
 
                                     return (
@@ -2201,15 +2321,18 @@ const TelesalesCrm = () => {
                                                 </td> : null}
 
                                                 {visibleColumns.reminder ? <td className="border border-slate-200 px-3 py-3 align-middle">
-                                                    <div className={`rounded-sm border px-2.5 py-2 ${lead.do_not_call ? 'border-slate-200 bg-slate-50' : 'border-teal-200 bg-teal-50'}`}>
+                                                    <div className={`rounded-sm border px-2.5 py-2 ${reminderProcessed ? 'border-emerald-200 bg-emerald-50' : lead.do_not_call ? 'border-slate-200 bg-slate-50' : 'border-teal-200 bg-teal-50'}`}>
                                                         <div className="flex items-start justify-between gap-2">
-                                                            <div className={`text-[12px] font-black ${lead.do_not_call ? 'text-slate-600' : currentTask?.is_overdue ? 'text-red-700' : 'text-teal-800'}`}>
+                                                            <div className={`text-[12px] font-black ${reminderProcessed ? 'text-emerald-700' : lead.do_not_call ? 'text-slate-600' : workTask?.is_overdue ? 'text-red-700' : 'text-teal-800'}`}>
                                                                 {labelForReminder(lead)}
                                                             </div>
+                                                            {reminderProcessed ? (
+                                                                <span className="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-black text-emerald-700">Đã xử lý</span>
+                                                            ) : null}
                                                         </div>
-                                                        {currentTask ? (
+                                                        {workTask ? (
                                                             <div className="mt-1 text-[11px] font-semibold text-slate-600">
-                                                                {currentTask.status_label}{currentTaskDue ? ` - hạn ${currentTaskDue}` : ''}
+                                                                {workTask.status_label}{currentTaskDue ? ` - hạn ${currentTaskDue}` : ''}
                                                             </div>
                                                         ) : null}
                                                         {reminderAddedDateLabel ? (

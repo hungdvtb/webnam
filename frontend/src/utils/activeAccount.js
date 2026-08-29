@@ -7,7 +7,7 @@ export const readActiveAccountId = () => {
 
     const storedValue = String(window.localStorage.getItem('activeAccountId') || '').trim();
 
-    if (!storedValue || storedValue === 'all') {
+    if (!storedValue || ['all', 'default', '0'].includes(storedValue)) {
         return '';
     }
 

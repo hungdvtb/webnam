@@ -226,6 +226,13 @@ class InventoryController extends Controller
         return response()->json($response);
     }
 
+    public function productSummaryForRequest(Request $request): array
+    {
+        $query = $this->buildInventoryProductsQuery($request, false);
+
+        return $this->inventoryProductSummary($query);
+    }
+
     private function fastInventoryProductPage(
         Request $request,
         int $perPage,
@@ -513,6 +520,19 @@ class InventoryController extends Controller
         $scopedRequest->setRouteResolver($request->getRouteResolver());
 
         return $scopedRequest;
+    }
+
+    private function requestWithoutInventoryProductIds(Request $request): Request
+    {
+        $queryInput = $request->query->all();
+        $bodyInput = $request->request->all();
+        unset($queryInput['ids'], $bodyInput['ids']);
+
+        $unscopedRequest = $request->duplicate($queryInput, $bodyInput);
+        $unscopedRequest->setUserResolver($request->getUserResolver());
+        $unscopedRequest->setRouteResolver($request->getRouteResolver());
+
+        return $unscopedRequest;
     }
 
     public function storeProduct(Request $request)
@@ -3248,6 +3268,9 @@ class InventoryController extends Controller
         $compactSearch = preg_replace('/[^a-z0-9]+/', '', $normalizedSearch);
         $compactPhraseLike = $compactSearch !== '' ? '%' . $escapeLike($compactSearch) . '%' : null;
         $compactPrefixLike = $compactSearch !== '' ? $escapeLike($compactSearch) . '%' : null;
+        $focusedNamePrefix = $this->focusedInventoryProductNamePrefix($normalizedSearch);
+        $focusedNamePrefixLike = $focusedNamePrefix !== null ? $escapeLike($focusedNamePrefix) . '%' : null;
+        $normalizedNamePrefixExpr = $this->normalizedInventoryProductNamePrefixExpression();
         $strictTokenMatchParts = [];
         $strictTokenMatchBindings = [];
 
@@ -3293,6 +3316,11 @@ class InventoryController extends Controller
         if ($compactPrefixLike !== null) {
             $searchRankingParts[] = "CASE WHEN {$compactSkuExpr} ILIKE immutable_unaccent(?) THEN 900 ELSE 0 END";
             $searchRankingBindings[] = $compactPrefixLike;
+        }
+
+        if ($focusedNamePrefixLike !== null) {
+            $searchRankingParts[] = "CASE WHEN {$normalizedNamePrefixExpr} LIKE ? THEN 1100 ELSE 0 END";
+            $searchRankingBindings[] = $focusedNamePrefixLike;
         }
 
         if (!empty($strictTokenMatchParts)) {
@@ -3378,6 +3406,65 @@ class InventoryController extends Controller
                     }
 
                     $priceQuery->whereRaw("immutable_unaccent(COALESCE(supplier_product_code, '')) ILIKE immutable_unaccent(?)", [$phraseLike]);
+                });
+        });
+
+        if ($focusedNamePrefixLike !== null) {
+            $focusedSearchQuery = clone $query;
+            $this->whereInventoryProductOrRelatedNameStartsWith($focusedSearchQuery, $focusedNamePrefixLike);
+
+            if ($focusedSearchQuery->exists()) {
+                $this->whereInventoryProductOrRelatedNameStartsWith($query, $focusedNamePrefixLike);
+            }
+        }
+    }
+
+    private function focusedInventoryProductNamePrefix(string $normalizedSearch): ?string
+    {
+        $tokens = collect(preg_split('/\s+/', $normalizedSearch, -1, PREG_SPLIT_NO_EMPTY))
+            ->map(fn ($token) => trim((string) $token))
+            ->filter(fn ($token) => $token !== '')
+            ->values();
+
+        if ($tokens->count() < 2) {
+            return null;
+        }
+
+        $leadingNameTokens = [];
+        foreach ($tokens as $token) {
+            if (preg_match('/\d/', $token)) {
+                break;
+            }
+
+            if (mb_strlen($token) < 2) {
+                continue;
+            }
+
+            $leadingNameTokens[] = $token;
+        }
+
+        if (count($leadingNameTokens) < 2) {
+            return null;
+        }
+
+        return implode(' ', array_slice($leadingNameTokens, 0, 5));
+    }
+
+    private function normalizedInventoryProductNamePrefixExpression(string $column = 'products.name'): string
+    {
+        return "BTRIM(LOWER(REGEXP_REPLACE(immutable_unaccent(COALESCE({$column}, '')), '[^a-zA-Z0-9]+', ' ', 'g')))";
+    }
+
+    private function whereInventoryProductOrRelatedNameStartsWith(Builder $query, string $prefixLike): void
+    {
+        $query->where(function (Builder $nameQuery) use ($prefixLike) {
+            $nameQuery
+                ->whereRaw($this->normalizedInventoryProductNamePrefixExpression() . ' LIKE ?', [$prefixLike])
+                ->orWhereHas('variations', function (Builder $variationQuery) use ($prefixLike) {
+                    $variationQuery->whereRaw($this->normalizedInventoryProductNamePrefixExpression() . ' LIKE ?', [$prefixLike]);
+                })
+                ->orWhereHas('parentConfigurable', function (Builder $parentQuery) use ($prefixLike) {
+                    $parentQuery->whereRaw($this->normalizedInventoryProductNamePrefixExpression() . ' LIKE ?', [$prefixLike]);
                 });
         });
     }
@@ -3497,6 +3584,8 @@ class InventoryController extends Controller
         $pendingOutboundQtySub = $this->buildPendingOutboundQuantitySubquery($request);
         $pendingReturnQtySub = $this->buildPendingReturnQuantitySubquery($request);
         $recentOutboundQtySub = $this->buildRecentOutboundQuantitySubquery($request, self::INVENTORY_TRACKING_WINDOW_DAYS);
+        $variantRollupRequest = $this->requestWithoutInventoryProductIds($request);
+        $variantInventoryRollupSub = $this->buildVariantInventoryRollupSubquery($variantRollupRequest);
 
         $query->leftJoinSub($importQtySub, 'import_totals', function ($join) {
             $join->on('import_totals.product_id', '=', 'products.id');
@@ -3530,6 +3619,9 @@ class InventoryController extends Controller
         });
         $query->leftJoinSub($recentOutboundQtySub, 'recent_outbound', function ($join) {
             $join->on('recent_outbound.product_id', '=', 'products.id');
+        });
+        $query->leftJoinSub($variantInventoryRollupSub, 'variant_inventory_rollups', function ($join) {
+            $join->on('variant_inventory_rollups.product_id', '=', 'products.id');
         });
 
         $importQtySql = 'COALESCE(import_totals.total_imported, 0)';
@@ -3573,12 +3665,68 @@ class InventoryController extends Controller
             . ' * 1000) + GREATEST(0 - '
             . $actualStockSql
             . ', 0))';
+        $variantImportQtySql = 'COALESCE(variant_inventory_rollups.total_imported, 0)';
+        $variantExportQtySql = 'COALESCE(variant_inventory_rollups.total_exported, 0)';
+        $variantReturnQtySql = 'COALESCE(variant_inventory_rollups.total_returned, 0)';
+        $variantDamagedQtySql = 'COALESCE(variant_inventory_rollups.total_damaged, 0)';
+        $variantAdjustmentQtySql = 'COALESCE(variant_inventory_rollups.total_adjusted, 0)';
+        $variantComputedStockSql = 'COALESCE(variant_inventory_rollups.computed_stock, 0)';
+        $variantPendingExportQtySql = 'COALESCE(variant_inventory_rollups.pending_export_quantity, 0)';
+        $variantPendingReturnQtySql = 'COALESCE(variant_inventory_rollups.pending_return_quantity, 0)';
+        $variantActualStockSql = 'COALESCE(variant_inventory_rollups.actual_stock, 0)';
+        $variantInventoryValueSql = 'COALESCE(variant_inventory_rollups.inventory_value, 0)';
+        $variantRecentOutboundQtySql = 'COALESCE(variant_inventory_rollups.recent_outbound_quantity, 0)';
+        $variantTrackingDemandQtySql = 'COALESCE(variant_inventory_rollups.tracking_demand_quantity, 0)';
+        $variantTrackingDailyAverageSql = '(' . $variantTrackingDemandQtySql . ' / ' . self::INVENTORY_TRACKING_WINDOW_DAYS . '.0)';
+        $variantPositiveActualStockSql = 'GREATEST(' . $variantActualStockSql . ', 0)';
+        $variantTrackingCoverageDaysSql = '(CASE WHEN ' . $variantTrackingDailyAverageSql . ' > 0 THEN ' . $variantPositiveActualStockSql . ' / ' . $variantTrackingDailyAverageSql . ' ELSE NULL END)';
+        $variantTrackingNeedsRestockSql = '(CASE WHEN ' . $variantTrackingDemandQtySql . ' > 0 AND ('
+            . $variantActualStockSql
+            . ' <= 0 OR ('
+            . $variantTrackingDailyAverageSql
+            . ' > 0 AND '
+            . $variantTrackingCoverageDaysSql
+            . ' < 7)) THEN 1 ELSE 0 END)';
+        $variantTrackingPriorityScoreSql = '(('
+            . $variantTrackingNeedsRestockSql
+            . ' * 1000000) + ('
+            . $variantTrackingDemandQtySql
+            . ' * 1000) + GREATEST(0 - '
+            . $variantActualStockSql
+            . ', 0))';
+        $displayActualStockSql = '(CASE WHEN COALESCE(variant_links.variant_count, 0) > 0 THEN '
+            . $variantActualStockSql
+            . ' ELSE '
+            . $actualStockSql
+            . ' END)';
+        $displayTrackingDemandQtySql = '(CASE WHEN COALESCE(variant_links.variant_count, 0) > 0 THEN '
+            . $variantTrackingDemandQtySql
+            . ' ELSE '
+            . $trackingDemandQtySql
+            . ' END)';
+        $displayTrackingDailyAverageSql = '(' . $displayTrackingDemandQtySql . ' / ' . self::INVENTORY_TRACKING_WINDOW_DAYS . '.0)';
 
         if ($compact) {
             $query = $query
                 ->selectRaw('COALESCE(variant_links.variant_count, 0) as variant_count')
                 ->selectRaw('parent_links.parent_product_id as parent_product_id')
                 ->selectRaw('COALESCE(products.cost_price, products.expected_cost, 0) as display_cost')
+                ->selectRaw($variantImportQtySql . ' as variant_total_imported')
+                ->selectRaw($variantExportQtySql . ' as variant_total_exported')
+                ->selectRaw($variantReturnQtySql . ' as variant_total_returned')
+                ->selectRaw($variantDamagedQtySql . ' as variant_total_damaged')
+                ->selectRaw($variantAdjustmentQtySql . ' as variant_total_adjusted')
+                ->selectRaw($variantComputedStockSql . ' as variant_computed_stock')
+                ->selectRaw($variantPendingExportQtySql . ' as variant_pending_export_quantity')
+                ->selectRaw($variantPendingReturnQtySql . ' as variant_pending_return_quantity')
+                ->selectRaw($variantActualStockSql . ' as variant_actual_stock')
+                ->selectRaw($variantInventoryValueSql . ' as variant_inventory_value')
+                ->selectRaw($variantRecentOutboundQtySql . ' as variant_recent_outbound_quantity')
+                ->selectRaw($variantTrackingDemandQtySql . ' as variant_tracking_demand_quantity')
+                ->selectRaw($variantTrackingDailyAverageSql . ' as variant_tracking_daily_average')
+                ->selectRaw($variantTrackingCoverageDaysSql . ' as variant_tracking_stock_coverage_days')
+                ->selectRaw($variantTrackingNeedsRestockSql . ' as variant_tracking_needs_restock')
+                ->selectRaw($variantTrackingPriorityScoreSql . ' as variant_tracking_priority_score')
                 ->selectRaw($computedStockSql . ' as computed_stock')
                 ->selectRaw($pendingExportQtySql . ' as pending_export_quantity')
                 ->selectRaw($pendingReturnQtySql . ' as pending_return_quantity')
@@ -3592,7 +3740,7 @@ class InventoryController extends Controller
                 ->selectRaw($trackingPriorityScoreSql . ' as tracking_priority_score');
 
             $this->applyInventoryProductFilters($query, $request);
-            $this->applyInventoryTrackingFilter($query, $request, $trackingDemandQtySql, $trackingDailyAverageSql);
+            $this->applyInventoryTrackingFilter($query, $request, $displayTrackingDemandQtySql, $displayTrackingDailyAverageSql);
 
             return $query;
         }
@@ -3606,6 +3754,22 @@ class InventoryController extends Controller
             ->selectRaw('COALESCE(variant_links.variant_count, 0) as variant_count')
             ->selectRaw('parent_links.parent_product_id as parent_product_id')
             ->selectRaw('COALESCE(products.cost_price, products.expected_cost, 0) as display_cost')
+            ->selectRaw($variantImportQtySql . ' as variant_total_imported')
+            ->selectRaw($variantExportQtySql . ' as variant_total_exported')
+            ->selectRaw($variantReturnQtySql . ' as variant_total_returned')
+            ->selectRaw($variantDamagedQtySql . ' as variant_total_damaged')
+            ->selectRaw($variantAdjustmentQtySql . ' as variant_total_adjusted')
+            ->selectRaw($variantComputedStockSql . ' as variant_computed_stock')
+            ->selectRaw($variantPendingExportQtySql . ' as variant_pending_export_quantity')
+            ->selectRaw($variantPendingReturnQtySql . ' as variant_pending_return_quantity')
+            ->selectRaw($variantActualStockSql . ' as variant_actual_stock')
+            ->selectRaw($variantInventoryValueSql . ' as variant_inventory_value')
+            ->selectRaw($variantRecentOutboundQtySql . ' as variant_recent_outbound_quantity')
+            ->selectRaw($variantTrackingDemandQtySql . ' as variant_tracking_demand_quantity')
+            ->selectRaw($variantTrackingDailyAverageSql . ' as variant_tracking_daily_average')
+            ->selectRaw($variantTrackingCoverageDaysSql . ' as variant_tracking_stock_coverage_days')
+            ->selectRaw($variantTrackingNeedsRestockSql . ' as variant_tracking_needs_restock')
+            ->selectRaw($variantTrackingPriorityScoreSql . ' as variant_tracking_priority_score')
             ->selectRaw($computedStockSql . ' as computed_stock')
             ->selectRaw($pendingExportQtySql . ' as pending_export_quantity')
             ->selectRaw($pendingReturnQtySql . ' as pending_return_quantity')
@@ -3622,24 +3786,24 @@ class InventoryController extends Controller
 
         $stockAlerts = array_values(array_intersect($this->requestStringList($request, 'stock_alert'), ['low', 'out', 'available']));
         if (!empty($stockAlerts)) {
-            $query->where(function ($stockQuery) use ($stockAlerts, $actualStockSql) {
+            $query->where(function ($stockQuery) use ($stockAlerts, $displayActualStockSql) {
                 if (in_array('low', $stockAlerts, true)) {
-                    $stockQuery->orWhere(function ($itemQuery) use ($actualStockSql) {
+                    $stockQuery->orWhere(function ($itemQuery) use ($displayActualStockSql) {
                         $itemQuery
-                            ->whereRaw($actualStockSql . ' > 0')
-                            ->whereRaw($actualStockSql . ' <= 5');
+                            ->whereRaw($displayActualStockSql . ' > 0')
+                            ->whereRaw($displayActualStockSql . ' <= 5');
                     });
                 }
                 if (in_array('out', $stockAlerts, true)) {
-                    $stockQuery->orWhereRaw($actualStockSql . ' <= 0');
+                    $stockQuery->orWhereRaw($displayActualStockSql . ' <= 0');
                 }
                 if (in_array('available', $stockAlerts, true)) {
-                    $stockQuery->orWhereRaw($actualStockSql . ' > 5');
+                    $stockQuery->orWhereRaw($displayActualStockSql . ' > 5');
                 }
             });
         }
 
-        $this->applyInventoryTrackingFilter($query, $request, $trackingDemandQtySql, $trackingDailyAverageSql);
+        $this->applyInventoryTrackingFilter($query, $request, $displayTrackingDemandQtySql, $displayTrackingDailyAverageSql);
 
         return $query;
     }
@@ -3758,6 +3922,97 @@ class InventoryController extends Controller
             ->selectRaw('product_links.linked_product_id as variant_id')
             ->selectRaw('product_links.product_id as parent_product_id')
             ->where('product_links.link_type', 'super_link');
+    }
+
+    private function buildVariantInventoryRollupSubquery(Request $request)
+    {
+        $importQtySub = $this->buildImportQuantitySubquery($request);
+        $exportQtySub = $this->buildExportQuantitySubquery($request);
+        $exportAdjustmentQtySub = $this->buildExportAdjustmentQuantitySubquery($request);
+        $returnQtySub = $this->buildReturnQuantitySubquery($request);
+        $damagedQtySub = $this->buildDamagedQuantitySubquery($request);
+        $adjustmentQtySub = $this->buildStockAdjustmentQuantitySubquery($request);
+        $pendingOutboundQtySub = $this->buildPendingOutboundQuantitySubquery($request);
+        $pendingReturnQtySub = $this->buildPendingReturnQuantitySubquery($request);
+        $recentOutboundQtySub = $this->buildRecentOutboundQuantitySubquery($request, self::INVENTORY_TRACKING_WINDOW_DAYS);
+
+        $query = DB::table('product_links as inventory_rollup_links')
+            ->join('products as inventory_rollup_children', 'inventory_rollup_children.id', '=', 'inventory_rollup_links.linked_product_id')
+            ->where('inventory_rollup_links.link_type', 'super_link');
+
+        if (Schema::hasColumn('products', 'deleted_at')) {
+            $query->whereNull('inventory_rollup_children.deleted_at');
+        }
+
+        $query
+            ->leftJoinSub($importQtySub, 'inventory_rollup_import_totals', function ($join) {
+                $join->on('inventory_rollup_import_totals.product_id', '=', 'inventory_rollup_children.id');
+            })
+            ->leftJoinSub($exportQtySub, 'inventory_rollup_export_totals', function ($join) {
+                $join->on('inventory_rollup_export_totals.product_id', '=', 'inventory_rollup_children.id');
+            })
+            ->leftJoinSub($exportAdjustmentQtySub, 'inventory_rollup_export_adjustments', function ($join) {
+                $join->on('inventory_rollup_export_adjustments.product_id', '=', 'inventory_rollup_children.id');
+            })
+            ->leftJoinSub($returnQtySub, 'inventory_rollup_return_totals', function ($join) {
+                $join->on('inventory_rollup_return_totals.product_id', '=', 'inventory_rollup_children.id');
+            })
+            ->leftJoinSub($damagedQtySub, 'inventory_rollup_damaged_totals', function ($join) {
+                $join->on('inventory_rollup_damaged_totals.product_id', '=', 'inventory_rollup_children.id');
+            })
+            ->leftJoinSub($adjustmentQtySub, 'inventory_rollup_stock_adjustments', function ($join) {
+                $join->on('inventory_rollup_stock_adjustments.product_id', '=', 'inventory_rollup_children.id');
+            })
+            ->leftJoinSub($pendingOutboundQtySub, 'inventory_rollup_pending_outbound', function ($join) {
+                $join->on('inventory_rollup_pending_outbound.product_id', '=', 'inventory_rollup_children.id');
+            })
+            ->leftJoinSub($pendingReturnQtySub, 'inventory_rollup_pending_returns', function ($join) {
+                $join->on('inventory_rollup_pending_returns.product_id', '=', 'inventory_rollup_children.id');
+            })
+            ->leftJoinSub($recentOutboundQtySub, 'inventory_rollup_recent_outbound', function ($join) {
+                $join->on('inventory_rollup_recent_outbound.product_id', '=', 'inventory_rollup_children.id');
+            });
+
+        $importQtySql = 'COALESCE(inventory_rollup_import_totals.total_imported, 0)';
+        $exportQtySql = 'COALESCE(inventory_rollup_export_totals.total_exported, 0)';
+        $exportAdjustmentQtySql = 'COALESCE(inventory_rollup_export_adjustments.total_export_adjusted, 0)';
+        $returnQtySql = 'COALESCE(inventory_rollup_return_totals.total_returned, 0)';
+        $damagedQtySql = 'COALESCE(inventory_rollup_damaged_totals.total_damaged, 0)';
+        $adjustmentQtySql = 'COALESCE(inventory_rollup_stock_adjustments.total_adjusted, 0)';
+        $pendingExportQtySql = 'COALESCE(inventory_rollup_pending_outbound.pending_export_quantity, 0)';
+        $pendingReturnQtySql = 'COALESCE(inventory_rollup_pending_returns.pending_return_quantity, 0)';
+        $recentOutboundQtySql = 'COALESCE(inventory_rollup_recent_outbound.recent_outbound_quantity, 0)';
+        $correctedExportQtySql = '(' . $exportQtySql . ' + ' . $exportAdjustmentQtySql . ')';
+        $computedStockSql = '('
+            . $importQtySql
+            . ' - '
+            . $correctedExportQtySql
+            . ' + '
+            . $returnQtySql
+            . ' - '
+            . $damagedQtySql
+            . ' + '
+            . $adjustmentQtySql
+            . ')';
+        $actualStockSql = '(' . $computedStockSql . ' - ' . $pendingExportQtySql . ')';
+        $inventoryValueSql = '(GREATEST(' . $actualStockSql . ', 0) * COALESCE(inventory_rollup_children.cost_price, inventory_rollup_children.expected_cost, 0))';
+        $trackingDemandQtySql = '(' . $recentOutboundQtySql . ' + ' . $pendingExportQtySql . ')';
+
+        return $query
+            ->selectRaw('inventory_rollup_links.product_id')
+            ->selectRaw('COALESCE(SUM(' . $importQtySql . '), 0) as total_imported')
+            ->selectRaw('COALESCE(SUM(' . $correctedExportQtySql . '), 0) as total_exported')
+            ->selectRaw('COALESCE(SUM(' . $returnQtySql . '), 0) as total_returned')
+            ->selectRaw('COALESCE(SUM(' . $damagedQtySql . '), 0) as total_damaged')
+            ->selectRaw('COALESCE(SUM(' . $adjustmentQtySql . '), 0) as total_adjusted')
+            ->selectRaw('COALESCE(SUM(' . $computedStockSql . '), 0) as computed_stock')
+            ->selectRaw('COALESCE(SUM(' . $pendingExportQtySql . '), 0) as pending_export_quantity')
+            ->selectRaw('COALESCE(SUM(' . $pendingReturnQtySql . '), 0) as pending_return_quantity')
+            ->selectRaw('COALESCE(SUM(' . $actualStockSql . '), 0) as actual_stock')
+            ->selectRaw('COALESCE(SUM(' . $inventoryValueSql . '), 0) as inventory_value')
+            ->selectRaw('COALESCE(SUM(' . $recentOutboundQtySql . '), 0) as recent_outbound_quantity')
+            ->selectRaw('COALESCE(SUM(' . $trackingDemandQtySql . '), 0) as tracking_demand_quantity')
+            ->groupBy('inventory_rollup_links.product_id');
     }
 
     private function buildExportQuantitySubquery(Request $request)
@@ -5241,29 +5496,48 @@ class InventoryController extends Controller
         $supplierComparisons = $compact ? [] : $this->productSupplierComparisons($product);
         $supplierPayload = $compact ? [] : $this->productSupplierPayload($product);
         $supplierIds = $compact ? [] : $this->productSupplierIds($product);
-        $totalImported = InventoryQuantity::normalize($product->total_imported ?? 0);
-        $totalExported = InventoryQuantity::normalize($product->total_exported ?? 0);
-        $totalReturned = InventoryQuantity::normalize($product->total_returned ?? 0);
-        $totalDamaged = InventoryQuantity::normalize($product->total_damaged ?? 0);
-        $totalAdjusted = InventoryQuantity::normalize($product->total_adjusted ?? 0);
-        $computedStock = $product->computed_stock !== null
-            ? InventoryQuantity::normalize($product->computed_stock)
-            : ($totalImported - $totalExported + $totalReturned - $totalDamaged + $totalAdjusted);
-        $pendingExportQuantity = InventoryQuantity::normalize($product->pending_export_quantity ?? 0);
-        $pendingReturnQuantity = InventoryQuantity::normalize($product->pending_return_quantity ?? 0);
-        $actualStock = $product->actual_stock !== null
-            ? InventoryQuantity::normalize($product->actual_stock)
-            : ($computedStock - $pendingExportQuantity);
-        $recentOutboundQuantity = InventoryQuantity::normalize($product->recent_outbound_quantity ?? 0);
-        $trackingDemandQuantity = InventoryQuantity::normalize($product->tracking_demand_quantity ?? ($recentOutboundQuantity + $pendingExportQuantity));
-        $trackingDailyAverage = round((float) ($product->tracking_daily_average ?? ($trackingDemandQuantity / self::INVENTORY_TRACKING_WINDOW_DAYS)), 3);
-        $trackingStockCoverageDays = $product->tracking_stock_coverage_days !== null
-            ? round((float) $product->tracking_stock_coverage_days, 1)
-            : ($trackingDailyAverage > 0 ? round(max($actualStock, 0) / $trackingDailyAverage, 1) : null);
-        $trackingNeedsRestock = (bool) (int) ($product->tracking_needs_restock ?? (
-            $trackingDemandQuantity > 0
-            && ($actualStock <= 0 || ($trackingStockCoverageDays !== null && $trackingStockCoverageDays < 7))
-        ));
+        $hasVariantRollupMetrics = array_key_exists('variant_computed_stock', $product->getAttributes());
+        $usesVariantRollupMetrics = $variantCount > 0 && $hasVariantRollupMetrics;
+        $totalImported = InventoryQuantity::normalize($usesVariantRollupMetrics ? ($product->variant_total_imported ?? 0) : ($product->total_imported ?? 0));
+        $totalExported = InventoryQuantity::normalize($usesVariantRollupMetrics ? ($product->variant_total_exported ?? 0) : ($product->total_exported ?? 0));
+        $totalReturned = InventoryQuantity::normalize($usesVariantRollupMetrics ? ($product->variant_total_returned ?? 0) : ($product->total_returned ?? 0));
+        $totalDamaged = InventoryQuantity::normalize($usesVariantRollupMetrics ? ($product->variant_total_damaged ?? 0) : ($product->total_damaged ?? 0));
+        $totalAdjusted = InventoryQuantity::normalize($usesVariantRollupMetrics ? ($product->variant_total_adjusted ?? 0) : ($product->total_adjusted ?? 0));
+        $computedStock = $usesVariantRollupMetrics
+            ? InventoryQuantity::normalize($product->variant_computed_stock ?? 0)
+            : ($product->computed_stock !== null
+                ? InventoryQuantity::normalize($product->computed_stock)
+                : ($totalImported - $totalExported + $totalReturned - $totalDamaged + $totalAdjusted));
+        $pendingExportQuantity = InventoryQuantity::normalize($usesVariantRollupMetrics ? ($product->variant_pending_export_quantity ?? 0) : ($product->pending_export_quantity ?? 0));
+        $pendingReturnQuantity = InventoryQuantity::normalize($usesVariantRollupMetrics ? ($product->variant_pending_return_quantity ?? 0) : ($product->pending_return_quantity ?? 0));
+        $actualStock = $usesVariantRollupMetrics
+            ? InventoryQuantity::normalize($product->variant_actual_stock ?? ($computedStock - $pendingExportQuantity))
+            : ($product->actual_stock !== null
+                ? InventoryQuantity::normalize($product->actual_stock)
+                : ($computedStock - $pendingExportQuantity));
+        $recentOutboundQuantity = InventoryQuantity::normalize($usesVariantRollupMetrics ? ($product->variant_recent_outbound_quantity ?? 0) : ($product->recent_outbound_quantity ?? 0));
+        $trackingDemandQuantity = InventoryQuantity::normalize($usesVariantRollupMetrics
+            ? ($product->variant_tracking_demand_quantity ?? ($recentOutboundQuantity + $pendingExportQuantity))
+            : ($product->tracking_demand_quantity ?? ($recentOutboundQuantity + $pendingExportQuantity)));
+        $trackingDailyAverage = round((float) ($usesVariantRollupMetrics
+            ? ($product->variant_tracking_daily_average ?? ($trackingDemandQuantity / self::INVENTORY_TRACKING_WINDOW_DAYS))
+            : ($product->tracking_daily_average ?? ($trackingDemandQuantity / self::INVENTORY_TRACKING_WINDOW_DAYS))), 3);
+        $trackingStockCoverageDays = $usesVariantRollupMetrics
+            ? ($product->variant_tracking_stock_coverage_days !== null
+                ? round((float) $product->variant_tracking_stock_coverage_days, 1)
+                : ($trackingDailyAverage > 0 ? round(max($actualStock, 0) / $trackingDailyAverage, 1) : null))
+            : ($product->tracking_stock_coverage_days !== null
+                ? round((float) $product->tracking_stock_coverage_days, 1)
+                : ($trackingDailyAverage > 0 ? round(max($actualStock, 0) / $trackingDailyAverage, 1) : null));
+        $trackingNeedsRestock = (bool) (int) ($usesVariantRollupMetrics
+            ? ($product->variant_tracking_needs_restock ?? (
+                $trackingDemandQuantity > 0
+                && ($actualStock <= 0 || ($trackingStockCoverageDays !== null && $trackingStockCoverageDays < 7))
+            ))
+            : ($product->tracking_needs_restock ?? (
+                $trackingDemandQuantity > 0
+                && ($actualStock <= 0 || ($trackingStockCoverageDays !== null && $trackingStockCoverageDays < 7))
+            )));
         if ($trackingDemandQuantity <= 0) {
             $trackingLevel = 'slow';
             $trackingLevelLabel = "B\u{00E1}n ch\u{1EAD}m";
@@ -5278,9 +5552,11 @@ class InventoryController extends Controller
             $trackingLevelLabel = "Theo d\u{00F5}i";
         }
         $displayCost = round((float) ($product->display_cost ?? ($currentCost ?? $expectedCost ?? 0)), 2);
-        $inventoryValue = $product->inventory_value !== null
-            ? round((float) $product->inventory_value, 2)
-            : round(max($actualStock, 0) * $displayCost, 2);
+        $inventoryValue = $usesVariantRollupMetrics
+            ? round((float) ($product->variant_inventory_value ?? 0), 2)
+            : ($product->inventory_value !== null
+                ? round((float) $product->inventory_value, 2)
+                : round(max($actualStock, 0) * $displayCost, 2));
         $stockAlert = $actualStock <= 0
             ? 'out'
             : ($actualStock <= 5 ? 'low' : 'available');
@@ -5344,13 +5620,15 @@ class InventoryController extends Controller
             'tracking_needs_restock' => $trackingNeedsRestock,
             'tracking_level' => $trackingLevel,
             'tracking_level_label' => $trackingLevelLabel,
-            'tracking_priority_score' => round((float) ($product->tracking_priority_score ?? 0), 3),
+            'tracking_priority_score' => round((float) ($usesVariantRollupMetrics ? ($product->variant_tracking_priority_score ?? 0) : ($product->tracking_priority_score ?? 0)), 3),
             'stock_alert' => $stockAlert,
             'stock_alert_label' => match ($stockAlert) {
                 'out' => "H\u{1EBF}t h\u{00E0}ng",
                 'low' => "S\u{1EAF}p h\u{1EBF}t",
                 default => "An to\u{00E0}n",
             },
+            'is_parent_product' => $variantCount > 0,
+            'stock_rollup_source' => $usesVariantRollupMetrics ? 'children' : 'self',
             'has_variants' => $variantCount > 0,
             'variant_count' => $variantCount,
             'is_variant' => $parentProduct !== null || !empty($product->parent_product_id),

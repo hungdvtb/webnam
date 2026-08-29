@@ -616,7 +616,11 @@ const OrderSupplementItemsSection = ({
 
         const timeoutId = window.setTimeout(async () => {
             try {
-                const response = await productApi.getAll({ search: trimmedSearch, per_page: 40 }, controller.signal);
+                const response = await productApi.getAll({
+                    supplement_picker: 1,
+                    search: trimmedSearch,
+                    per_page: 40,
+                }, controller.signal);
                 if (controller.signal.aborted) return;
                 const rawData = Array.isArray(response?.data?.data) ? response.data.data : [];
                 setSearchResults(buildSearchResults(rawData, trimmedSearch));

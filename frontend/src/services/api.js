@@ -219,8 +219,8 @@ api.interceptors.request.use((config) => {
         config.headers.Authorization = `Bearer ${token}`;
     }
 
-    const activeAccountId = localStorage.getItem('activeAccountId');
-    if (activeAccountId && activeAccountId !== 'all') {
+    const activeAccountId = String(localStorage.getItem('activeAccountId') || '').trim();
+    if (activeAccountId && !['all', 'default', '0'].includes(activeAccountId)) {
         config.headers['X-Account-Id'] = activeAccountId;
     }
 
@@ -1003,6 +1003,8 @@ export const financeApi = {
     getReports: (params) => api.get('/finance/reports', { params }),
     // New Fund Management (Sổ cái) endpoints
     getFundSummary: () => api.get('/finance/funds/summary'),
+    getFundAssetSummary: () => api.get('/finance/funds/asset-summary'),
+    saveFundAssetSummarySettings: (data) => api.put('/finance/funds/asset-summary/settings', data),
     getFundAccounts: () => api.get('/finance/funds/accounts'),
     saveFundAccount: (data) => api.post('/finance/funds/accounts', data),
     deleteFundAccount: (id) => api.delete(`/finance/funds/accounts/${id}`),

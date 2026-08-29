@@ -446,6 +446,7 @@ class QuickReplyController extends Controller
             ->findOrFail($id);
 
         $validated = $request->validate([
+            'zalo_target' => ['sometimes', 'nullable', 'in:pc,web'],
             'contents' => ['sometimes', 'array', 'max:10'],
             'contents.*.id' => ['nullable', 'integer'],
             'contents.*.body' => ['nullable', 'string', 'max:60000'],
@@ -466,10 +467,11 @@ class QuickReplyController extends Controller
         if ($steps === []) {
             return response()->json(['message' => 'Mẫu này chưa có nội dung hoặc ảnh để gửi.'], 422);
         }
+        $zaloTarget = $this->zaloTarget($request);
 
         try {
             $this->pruneClipboardTempDirectories();
-            $this->sendReplyToOpenZaloChat($steps);
+            $this->sendReplyToOpenZaloChat($steps, $zaloTarget);
 
             $reply->forceFill([
                 'use_count' => ((int) $reply->use_count) + 1,
@@ -528,10 +530,12 @@ class QuickReplyController extends Controller
             File::ensureDirectoryExists($root);
             $outputPath = $root . DIRECTORY_SEPARATOR . 'zalo-' . now()->format('Ymd-His') . '-' . Str::lower(Str::random(8)) . '.bmp';
 
+            $zaloTarget = $this->zaloTarget($request);
             $this->runZaloMirrorHelper([
                 'action' => 'screenshot',
                 'output_path' => $outputPath,
-                'window_keywords' => $this->zaloWindowKeywords(),
+                'zalo_target' => $zaloTarget,
+                'window_keywords' => $this->zaloWindowKeywords($zaloTarget),
             ]);
 
             if (!is_file($outputPath)) {
@@ -564,9 +568,11 @@ class QuickReplyController extends Controller
         ]);
 
         try {
+            $zaloTarget = $this->zaloTarget($request);
             $result = $this->runZaloMirrorHelper([
                 'action' => 'click',
-                'window_keywords' => $this->zaloWindowKeywords(),
+                'zalo_target' => $zaloTarget,
+                'window_keywords' => $this->zaloWindowKeywords($zaloTarget),
                 'x_ratio' => (float) $validated['x_ratio'],
                 'y_ratio' => (float) $validated['y_ratio'],
                 'double' => (bool) ($validated['double'] ?? false),
@@ -603,9 +609,11 @@ class QuickReplyController extends Controller
         }
 
         try {
+            $zaloTarget = $this->zaloTarget($request);
             $result = $this->runZaloMirrorHelper([
                 'action' => 'type',
-                'window_keywords' => $this->zaloWindowKeywords(),
+                'zalo_target' => $zaloTarget,
+                'window_keywords' => $this->zaloWindowKeywords($zaloTarget),
                 'text' => $text,
                 'enter' => $enter,
             ]);
@@ -692,12 +700,15 @@ class QuickReplyController extends Controller
             return response()->json(['message' => 'Chưa chọn cửa hàng để import câu trả lời nhanh.'], 400);
         }
 
-        $request->validate([
+        $validated = $request->validate([
             'file' => ['required', 'file', 'mimes:xlsx', 'max:30720'],
+            'mode' => ['nullable', Rule::in(['merge', 'replace'])],
         ], [
             'file.required' => 'Chọn file Excel Pancake cần import.',
             'file.mimes' => 'File import phải là định dạng .xlsx.',
+            'mode.in' => 'Chọn đúng chế độ import Pancake.',
         ]);
+        $importMode = $validated['mode'] ?? 'merge';
 
         try {
             $filePath = $request->file('file')->getRealPath();
@@ -727,10 +738,33 @@ class QuickReplyController extends Controller
             ], 422);
         }
 
-        $summary = DB::transaction(fn () => $this->applyPancakeImport($accountId, $topics, $records));
+        $summary = DB::transaction(function () use ($accountId, $topics, $records, $importMode) {
+            $trashedBeforeImport = 0;
+
+            if ($importMode === 'replace') {
+                $trashedBeforeImport = QuickReply::query()
+                    ->where('account_id', $accountId)
+                    ->count();
+
+                QuickReply::query()
+                    ->where('account_id', $accountId)
+                    ->delete();
+            }
+
+            return array_merge(
+                $this->applyPancakeImport($accountId, $topics, $records),
+                [
+                    'mode' => $importMode,
+                    'trashed_before_import' => $trashedBeforeImport,
+                ]
+            );
+        });
 
         $message = sprintf(
-            'Import Pancake xong: %d tạo mới, %d cập nhật, %d khôi phục từ thùng rác, %d nội dung, %d ảnh, %d chủ đề.',
+            '%sImport Pancake xong: %d tạo mới, %d cập nhật, %d khôi phục từ thùng rác, %d nội dung, %d ảnh, %d chủ đề.',
+            $importMode === 'replace'
+                ? sprintf('Đã chuyển %d mẫu cũ vào thùng rác. ', $summary['trashed_before_import'])
+                : '',
             $summary['created'],
             $summary['updated'],
             $summary['restored'],
@@ -1571,7 +1605,7 @@ class QuickReplyController extends Controller
         return sprintf('%02d-%s.%s', $index + 1, Str::limit($base, 70, ''), $extension);
     }
 
-    private function sendReplyToOpenZaloChat(array $steps): void
+    private function sendReplyToOpenZaloChat(array $steps, string $zaloTarget = 'pc'): void
     {
         $steps = collect($steps)
             ->map(function (array $step) {
@@ -1595,7 +1629,8 @@ class QuickReplyController extends Controller
         $payloadPath = $root . DIRECTORY_SEPARATOR . 'zalo-payload-' . Str::lower(Str::random(12)) . '.json';
         $payload = [
             'steps' => $steps,
-            'window_keywords' => $this->zaloWindowKeywords(),
+            'zalo_target' => $zaloTarget,
+            'window_keywords' => $this->zaloWindowKeywords($zaloTarget),
             'text_paste_delay_ms' => (int) env('QUICK_REPLY_ZALO_TEXT_PASTE_DELAY_MS', 250),
             'after_text_send_delay_ms' => (int) env('QUICK_REPLY_ZALO_AFTER_TEXT_DELAY_MS', 700),
             'image_paste_delay_ms' => (int) env('QUICK_REPLY_ZALO_IMAGE_PASTE_DELAY_MS', 1600),
@@ -1632,8 +1667,10 @@ class QuickReplyController extends Controller
         $payloadPath = $root . DIRECTORY_SEPARATOR . 'split-zalo-payload-' . Str::lower(Str::random(12)) . '.json';
         $mode = $request->input('mode') === 'sidebar' ? 'sidebar' : 'split';
         $browserRatio = (float) $request->input('browser_ratio', env('QUICK_REPLY_SPLIT_BROWSER_RATIO', 0.58));
+        $zaloTarget = $this->zaloTarget($request);
         $payload = [
-            'zalo_window_keywords' => $this->zaloWindowKeywords(),
+            'zalo_target' => $zaloTarget,
+            'zalo_window_keywords' => $this->zaloWindowKeywords($zaloTarget),
             'browser_window_keywords' => $this->requestWindowKeywords($request->input('browser_window_keywords'), $this->browserWindowKeywords()),
             'mode' => $mode,
             'browser_ratio' => min(max($browserRatio, 0.35), 0.72),
@@ -1704,16 +1741,31 @@ class QuickReplyController extends Controller
         return is_array($decoded) ? $decoded : [];
     }
 
-    private function zaloWindowKeywords(): array
+    private function zaloWindowKeywords(string $target = 'pc'): array
     {
-        $raw = trim((string) env('QUICK_REPLY_ZALO_WINDOW_KEYWORDS', 'Zalo'));
+        $target = $this->normalizeZaloTarget($target);
+        $raw = $target === 'web'
+            ? trim((string) env('QUICK_REPLY_ZALO_WEB_WINDOW_KEYWORDS', 'Zalo - Google Chrome,My Z.com - Google Chrome,chat.zalo.me - Google Chrome,web.zalo.me - Google Chrome'))
+            : trim((string) env('QUICK_REPLY_ZALO_WINDOW_KEYWORDS', 'Zalo'));
         $keywords = preg_split('/[,;|]+/', $raw) ?: [];
 
         return collect($keywords)
             ->map(fn ($keyword) => trim((string) $keyword))
             ->filter()
             ->values()
-            ->all() ?: ['Zalo'];
+            ->all() ?: ($target === 'web' ? ['Zalo - Google Chrome', 'My Z.com - Google Chrome'] : ['Zalo']);
+    }
+
+    private function zaloTarget(Request $request): string
+    {
+        return $this->normalizeZaloTarget($request->input('zalo_target', $request->input('target', 'pc')));
+    }
+
+    private function normalizeZaloTarget($target): string
+    {
+        $normalized = Str::lower(trim((string) $target));
+
+        return in_array($normalized, ['web', 'chrome', 'zalo_web', 'zalo-web'], true) ? 'web' : 'pc';
     }
 
     private function browserWindowKeywords(): array
@@ -1963,18 +2015,28 @@ keybd_event = user32.keybd_event
 keybd_event.argtypes = [wintypes.BYTE, wintypes.BYTE, wintypes.DWORD, wintypes.ULONG]
 keybd_event.restype = None
 
-BROWSER_TITLE_PARTS = [
+WEB_BROWSER_TITLE_PARTS = [
     "google chrome",
     "chrome",
     "microsoft edge",
     "edge",
     "firefox",
     "coc coc",
+]
+
+QUICK_REPLY_TITLE_PARTS = [
     "trả lời nhanh",
     "tra loi nhanh",
     "quick-replies",
     "localhost",
     "sidebar",
+]
+
+ZALO_WEB_TITLE_PARTS = [
+    "zalo",
+    "my z.com",
+    "chat.zalo.me",
+    "web.zalo.me",
 ]
 
 
@@ -1995,15 +2057,26 @@ def window_text(hwnd):
     return buffer.value
 
 
+def wants_web_target(target):
+    normalized = str(target or "pc").strip().lower()
+    return normalized in ("web", "chrome", "zalo_web", "zalo-web")
+
+
 def looks_like_browser(title):
     lowered = str(title or "").lower()
-    return any(part in lowered for part in BROWSER_TITLE_PARTS)
+    return any(part in lowered for part in WEB_BROWSER_TITLE_PARTS)
 
 
-def find_zalo_window(keywords):
+def looks_like_quick_reply_window(title):
+    lowered = str(title or "").lower()
+    return any(part in lowered for part in QUICK_REPLY_TITLE_PARTS)
+
+
+def find_zalo_window(keywords, target="pc"):
     needles = [str(keyword).lower() for keyword in keywords if str(keyword).strip()]
+    target_web = wants_web_target(target)
     if not needles:
-        needles = ["zalo"]
+        needles = ["zalo"] if not target_web else ["zalo - google chrome", "my z.com - google chrome", "chat.zalo.me", "web.zalo.me"]
 
     matches = []
     fallback = []
@@ -2018,7 +2091,12 @@ def find_zalo_window(keywords):
         lowered = title.lower()
         if any(needle in lowered for needle in needles):
             item = (hwnd, title)
-            if looks_like_browser(title):
+            if target_web:
+                if looks_like_browser(title) and not looks_like_quick_reply_window(title):
+                    matches.append(item)
+                else:
+                    fallback.append(item)
+            elif looks_like_browser(title):
                 fallback.append(item)
             else:
                 matches.append(item)
@@ -2027,14 +2105,22 @@ def find_zalo_window(keywords):
     EnumWindows(callback, 0)
 
     if not matches:
+        if target_web:
+            if fallback:
+                raise RuntimeError("Đang thấy cửa sổ có chữ Zalo nhưng chưa đúng Zalo Web Chrome. Hãy mở tab Zalo web trên Chrome rồi thử lại.")
+            raise RuntimeError("Không tìm thấy cửa sổ Zalo Web Chrome. Hãy mở Zalo web trên Chrome và mở đúng khung chat khách trước.")
         if fallback:
             raise RuntimeError("Đang chỉ thấy cửa sổ trình duyệt/panel có chữ Zalo, chưa thấy Zalo Desktop. Hãy mở Zalo Desktop rồi thử lại.")
         raise RuntimeError("Không tìm thấy cửa sổ Zalo. Hãy mở Zalo Desktop và mở đúng khung chat khách trước.")
 
+    if target_web:
+        chrome = [item for item in matches if "google chrome" in item[1].lower()]
+        zalo_web = [item for item in matches if any(part in item[1].lower() for part in ZALO_WEB_TITLE_PARTS)]
+        return (chrome or zalo_web or matches)[0]
+
     exact = [item for item in matches if item[1].strip().lower() == "zalo"]
     starts_with_zalo = [item for item in matches if item[1].strip().lower().startswith("zalo")]
     return (exact or starts_with_zalo or matches)[0]
-
 
 def focus_window(hwnd, title):
     ShowWindow(hwnd, SW_RESTORE)
@@ -2188,8 +2274,9 @@ def main():
             "images": payload.get("images") or [],
         }]
     keywords = payload.get("window_keywords") or ["Zalo"]
+    target = payload.get("zalo_target") or payload.get("target") or "pc"
 
-    hwnd, title = find_zalo_window(keywords)
+    hwnd, title = find_zalo_window(keywords, target)
     focus_window(hwnd, title)
     click_chat_input(hwnd)
 
@@ -2522,8 +2609,10 @@ def main():
     browser_ratio = min(max(float(payload.get("browser_ratio", 0.58)), 0.35), 0.72)
     gap = max(int(payload.get("gap", 12)), 0)
     margin = max(int(payload.get("margin", 0)), 0)
+    zalo_target = str(payload.get("zalo_target") or "pc").strip().lower()
+    zalo_label = "Zalo Web Chrome" if zalo_target == "web" else "Zalo"
 
-    zalo_hwnd, zalo_title = find_window(zalo_keywords, "Zalo")
+    zalo_hwnd, zalo_title = find_window(zalo_keywords, zalo_label)
     browser_hwnd = None
     browser_title = ""
     browser_error = ""
@@ -2799,26 +2888,73 @@ def window_text(hwnd):
     return buffer.value
 
 
-def find_zalo_window(keywords):
+WEB_BROWSER_TITLE_PARTS = ["google chrome", "chrome", "microsoft edge", "edge", "firefox", "coc coc"]
+QUICK_REPLY_TITLE_PARTS = ["trả lời nhanh", "tra loi nhanh", "quick-replies", "localhost", "sidebar"]
+ZALO_WEB_TITLE_PARTS = ["zalo", "my z.com", "chat.zalo.me", "web.zalo.me"]
+
+
+def wants_web_target(target):
+    normalized = str(target or "pc").strip().lower()
+    return normalized in ("web", "chrome", "zalo_web", "zalo-web")
+
+
+def looks_like_browser(title):
+    lowered = str(title or "").lower()
+    return any(part in lowered for part in WEB_BROWSER_TITLE_PARTS)
+
+
+def looks_like_quick_reply_window(title):
+    lowered = str(title or "").lower()
+    return any(part in lowered for part in QUICK_REPLY_TITLE_PARTS)
+
+
+def find_zalo_window(keywords, target="pc"):
     needles = [str(keyword).strip().lower() for keyword in keywords if str(keyword).strip()]
+    target_web = wants_web_target(target)
     if not needles:
-        needles = ["zalo"]
+        needles = ["zalo"] if not target_web else ["zalo - google chrome", "my z.com - google chrome", "chat.zalo.me", "web.zalo.me"]
     matches = []
+    fallback = []
 
     @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     def callback(hwnd, _lparam):
         if not IsWindowVisible(hwnd):
             return True
         title = window_text(hwnd)
-        if title and any(needle in title.lower() for needle in needles):
-            matches.append((hwnd, title))
+        if not title:
+            return True
+        lowered = title.lower()
+        if any(needle in lowered for needle in needles):
+            item = (hwnd, title)
+            if target_web:
+                if looks_like_browser(title) and not looks_like_quick_reply_window(title):
+                    matches.append(item)
+                else:
+                    fallback.append(item)
+            elif looks_like_browser(title):
+                fallback.append(item)
+            else:
+                matches.append(item)
         return True
 
     EnumWindows(callback, 0)
     if not matches:
+        if target_web:
+            if fallback:
+                raise RuntimeError("Đang thấy cửa sổ có chữ Zalo nhưng chưa đúng Zalo Web Chrome. Hãy mở tab Zalo web trên Chrome rồi thử lại.")
+            raise RuntimeError("Không tìm thấy cửa sổ Zalo Web Chrome. Hãy mở Zalo web trên Chrome rồi thử lại.")
+        if fallback:
+            raise RuntimeError("Đang chỉ thấy cửa sổ trình duyệt/panel có chữ Zalo, chưa thấy Zalo Desktop. Hãy mở Zalo Desktop rồi thử lại.")
         raise RuntimeError("Không tìm thấy cửa sổ Zalo. Hãy mở Zalo Desktop rồi thử lại.")
+
+    if target_web:
+        chrome = [item for item in matches if "google chrome" in item[1].lower()]
+        zalo_web = [item for item in matches if any(part in item[1].lower() for part in ZALO_WEB_TITLE_PARTS)]
+        return (chrome or zalo_web or matches)[0]
+
     exact = [item for item in matches if item[1].strip().lower() == "zalo"]
-    return (exact or matches)[0]
+    starts_with_zalo = [item for item in matches if item[1].strip().lower().startswith("zalo")]
+    return (exact or starts_with_zalo or matches)[0]
 
 
 def window_rect(hwnd):
@@ -2993,7 +3129,7 @@ def main():
         raise RuntimeError("Usage: zalo_mirror_helper.py <payload.json>")
 
     payload = load_payload(sys.argv[1])
-    hwnd, title = find_zalo_window(payload.get("window_keywords") or ["Zalo"])
+    hwnd, title = find_zalo_window(payload.get("window_keywords") or ["Zalo"], payload.get("zalo_target") or "pc")
     action = payload.get("action")
 
     if action == "screenshot":

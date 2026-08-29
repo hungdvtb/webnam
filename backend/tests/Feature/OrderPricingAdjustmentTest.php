@@ -443,6 +443,122 @@ class OrderPricingAdjustmentTest extends TestCase
         }
     }
 
+    public function test_saved_official_order_keeps_item_price_after_catalog_price_changes(): void
+    {
+        [$account] = $this->authenticate();
+        $product = $this->createProduct($account, [
+            'name' => 'Mam bong men ran',
+            'sku' => 'LOCKED-OFFICIAL-PRICE',
+            'price' => 650000,
+        ]);
+        $this->createBatch($account, $product, 5, 290000, 'locked-official-price');
+
+        $created = $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/orders', [
+                'order_kind' => Order::KIND_OFFICIAL,
+                'customer_name' => 'Khach giu gia don chot',
+                'customer_phone' => '0966666666',
+                'shipping_address' => '12 Duong test',
+                'province' => 'Tinh test',
+                'district' => 'Huyen test',
+                'ward' => 'Xa test',
+                'source' => 'Facebook',
+                'type' => 'Le',
+                'shipment_status' => 'Chua giao',
+                'items' => [[
+                    'product_id' => $product->id,
+                    'quantity' => 1,
+                    'price' => 650000,
+                ]],
+            ])
+            ->assertCreated();
+
+        $orderId = (int) $created->json('id');
+        $storedItem = Order::query()->findOrFail($orderId)->items()->firstOrFail();
+
+        $product->forceFill(['price' => 600000])->save();
+
+        $shown = $this
+            ->withHeaders($this->headers($account))
+            ->getJson("/api/orders/{$orderId}")
+            ->assertOk();
+
+        $this->assertSame(650000.0, (float) data_get($shown->json(), 'items.0.price'));
+
+        $this
+            ->withHeaders($this->headers($account))
+            ->putJson("/api/orders/{$orderId}", [
+                'items' => [[
+                    'order_item_id' => $storedItem->id,
+                    'product_id' => $product->id,
+                    'quantity' => 1,
+                ]],
+            ])
+            ->assertOk()
+            ->assertJsonPath('total_price', 650000);
+
+        $order = Order::query()->with('items')->findOrFail($orderId);
+
+        $this->assertSame(650000.0, (float) $order->total_price);
+        $this->assertSame(650000.0, (float) $order->items->first()->price);
+    }
+
+    public function test_saved_draft_order_keeps_item_price_after_catalog_price_changes(): void
+    {
+        [$account] = $this->authenticate();
+        $product = $this->createProduct($account, [
+            'name' => 'Mam bong men ran draft',
+            'sku' => 'LOCKED-DRAFT-PRICE',
+            'price' => 650000,
+        ]);
+
+        $created = $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/orders', [
+                'order_kind' => Order::KIND_DRAFT,
+                'customer_name' => 'Khach giu gia don nhap',
+                'customer_phone' => '0977777777',
+                'source' => 'Facebook',
+                'type' => 'Le',
+                'items' => [[
+                    'product_id' => $product->id,
+                    'quantity' => 1,
+                    'price' => 650000,
+                ]],
+            ])
+            ->assertCreated();
+
+        $orderId = (int) $created->json('id');
+        $storedItem = Order::query()->findOrFail($orderId)->items()->firstOrFail();
+
+        $product->forceFill(['price' => 600000])->save();
+
+        $shown = $this
+            ->withHeaders($this->headers($account))
+            ->getJson("/api/orders/{$orderId}")
+            ->assertOk();
+
+        $this->assertSame(650000.0, (float) data_get($shown->json(), 'items.0.price'));
+
+        $this
+            ->withHeaders($this->headers($account))
+            ->putJson("/api/orders/{$orderId}", [
+                'items' => [[
+                    'order_item_id' => $storedItem->id,
+                    'product_id' => $product->id,
+                    'quantity' => 1,
+                ]],
+            ])
+            ->assertOk()
+            ->assertJsonPath('total_price', 650000);
+
+        $order = Order::query()->with('items')->findOrFail($orderId);
+
+        $this->assertSame(650000.0, (float) $order->total_price);
+        $this->assertSame(650000.0, (float) $order->items->first()->price);
+    }
+
     public function test_exchange_return_order_caps_customer_payment_at_zero_and_adds_refund_note(): void
     {
         [$account] = $this->authenticate();

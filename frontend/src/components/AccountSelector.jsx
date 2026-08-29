@@ -32,6 +32,19 @@ const persistActiveSiteCode = (accounts, accountId) => {
     localStorage.removeItem('activeSiteCode');
 };
 
+const normalizeAccountId = (value) => String(value || '').trim();
+
+const resolveSelectableAccountId = (accounts, currentId) => {
+    const normalizedId = normalizeAccountId(currentId);
+    const accountList = Array.isArray(accounts) ? accounts : [];
+
+    if (accountList.some((account) => normalizeAccountId(account.id) === normalizedId)) {
+        return normalizedId;
+    }
+
+    return normalizeAccountId(accountList[0]?.id);
+};
+
 const AccountSelector = ({ reloadOnAutoSelect = true }) => {
     const [accounts, setAccounts] = React.useState([]);
     const [activeId, setActiveId] = React.useState(() => readActiveAccountId() || 'all');
@@ -53,30 +66,34 @@ const AccountSelector = ({ reloadOnAutoSelect = true }) => {
         }
     }, []);
 
+    const hydrateAccounts = React.useCallback((nextAccounts) => {
+        const accountList = Array.isArray(nextAccounts) ? nextAccounts : [];
+        const nextActiveId = resolveSelectableAccountId(accountList, activeId);
+
+        setAccounts(accountList);
+
+        if (nextActiveId && nextActiveId !== activeId) {
+            void commitActiveAccount(nextActiveId, reloadOnAutoSelect, accountList);
+            return;
+        }
+
+        if (nextActiveId) {
+            persistActiveSiteCode(accountList, nextActiveId);
+        }
+    }, [activeId, commitActiveAccount, reloadOnAutoSelect]);
+
     React.useEffect(() => {
         const cachedAccounts = sessionStorage.getItem('accounts_list');
         if (cachedAccounts) {
             const parsedAccounts = parseCachedAccounts(cachedAccounts);
-            setAccounts(parsedAccounts);
-            if ((activeId === 'all' || !activeId) && parsedAccounts.length > 0) {
-                const firstId = String(parsedAccounts[0].id || '').trim();
-                void commitActiveAccount(firstId, reloadOnAutoSelect && activeId === 'all', parsedAccounts);
-            } else {
-                persistActiveSiteCode(parsedAccounts, activeId);
-            }
+            hydrateAccounts(parsedAccounts);
         } else {
             accountApi.getAll().then(res => {
                 sessionStorage.setItem('accounts_list', JSON.stringify(res.data));
-                setAccounts(res.data);
-                if ((activeId === 'all' || !activeId) && res.data.length > 0) {
-                    const firstId = String(res.data[0].id || '').trim();
-                    void commitActiveAccount(firstId, reloadOnAutoSelect && activeId === 'all', res.data);
-                } else {
-                    persistActiveSiteCode(res.data, activeId);
-                }
+                hydrateAccounts(res.data);
             }).catch(console.error);
         }
-    }, [activeId, commitActiveAccount, reloadOnAutoSelect]);
+    }, [hydrateAccounts]);
 
     const handleAccountChange = async (e) => {
         const newId = e.target.value;

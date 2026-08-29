@@ -8349,6 +8349,271 @@ class ProductController extends Controller
             ->all();
     }
 
+    protected function supplementPickerIndex(Request $request)
+    {
+        $searchTerm = trim((string) $request->input('search', ''));
+        $perPage = min(max((int) $request->input('per_page', 40), 1), 80);
+
+        $query = Product::query()
+            ->select([
+                'products.id',
+                'products.account_id',
+                'products.sku',
+                'products.name',
+                'products.slug',
+                'products.price',
+                'products.cost_price',
+                'products.expected_cost',
+                'products.stock_quantity',
+                'products.type',
+                'products.category_id',
+                'products.inventory_unit_id',
+                'products.profit_center_id',
+                'products.warehouse_sequence',
+                'products.inventory_import_starred',
+            ])
+            ->withExists('variations')
+            ->with([
+                'unit:id,name',
+                'attributeValues:id,product_id,attribute_id,value',
+                'parentConfigurable' => fn ($parentQuery) => $parentQuery
+                    ->select('products.id', 'products.account_id', 'products.name', 'products.sku', 'products.type', 'products.inventory_unit_id', 'products.profit_center_id', 'products.warehouse_sequence')
+                    ->with(['unit:id,name']),
+            ]);
+
+        if ($searchTerm !== '') {
+            [$searchRankingSql, $searchRankingBindings] = $this->applySupplementPickerSearch($query, $searchTerm);
+            if ($searchRankingSql !== null) {
+                $query->orderByDesc('search_score');
+            }
+        }
+
+        $query
+            ->orderByRaw("CASE WHEN products.type = 'configurable' THEN 1 ELSE 0 END")
+            ->orderBy('products.name')
+            ->orderByDesc('products.id');
+
+        $paginated = $query->simplePaginate($perPage);
+        $paginated->setCollection(
+            $paginated->getCollection()
+                ->map(fn (Product $product) => $this->supplementPickerProductPayload($product))
+        );
+
+        return response()->json($paginated);
+    }
+
+    protected function applySupplementPickerSearch(Builder $query, string $rawSearch): array
+    {
+        $rawSearch = trim($rawSearch);
+        $normalizedName = $this->normalizeNameSearchText($rawSearch);
+        $normalizedCode = $this->normalizeCodeSearchText($rawSearch);
+        $compactSearch = $this->compactSearchText($rawSearch);
+
+        if ($rawSearch === '' || ($normalizedName === '' && $normalizedCode === '' && $compactSearch === '')) {
+            return [null, []];
+        }
+
+        $exactSkuCandidates = collect([
+            $rawSearch,
+            $this->productSkuService->normalize($rawSearch),
+        ])
+            ->filter(fn ($sku) => is_string($sku) && trim($sku) !== '')
+            ->map(fn ($sku) => trim($sku))
+            ->unique(fn ($sku) => Str::lower($sku))
+            ->values()
+            ->all();
+
+        if (!empty($exactSkuCandidates)) {
+            $applyExactSkuFilter = static function (Builder $builder) use ($exactSkuCandidates): void {
+                $builder->where(function (Builder $exactQuery) use ($exactSkuCandidates) {
+                    foreach ($exactSkuCandidates as $index => $sku) {
+                        $method = $index === 0 ? 'where' : 'orWhere';
+                        $exactQuery->{$method}('products.sku', $sku);
+                    }
+                });
+            };
+
+            $exactSkuQuery = clone $query;
+            $exactSkuQuery->setEagerLoads([]);
+            $exactSkuQuery->select('products.id');
+            $applyExactSkuFilter($exactSkuQuery);
+
+            if ($exactSkuQuery->exists()) {
+                $query->selectRaw('2500 AS search_score');
+                $applyExactSkuFilter($query);
+
+                return ['2500', []];
+            }
+        }
+
+        $nameExpr = $this->normalizedWordsExpression('products.name');
+        $skuExpr = $this->loweredSearchExpression('products.sku');
+        $compactNameExpr = $this->compactSearchExpression('products.name');
+        $compactSkuExpr = $this->compactSearchExpression('products.sku');
+        $nameContainsLike = $normalizedName !== '' ? '%' . $this->escapeLike($normalizedName) . '%' : null;
+        $namePrefixLike = $normalizedName !== '' ? $this->escapeLike($normalizedName) . '%' : null;
+        $codeContainsLike = $normalizedCode !== '' ? '%' . $this->escapeLike($normalizedCode) . '%' : null;
+        $codePrefixLike = $normalizedCode !== '' ? $this->escapeLike($normalizedCode) . '%' : null;
+        $compactContainsLike = $compactSearch !== '' ? '%' . $this->escapeLike($compactSearch) . '%' : null;
+        $compactPrefixLike = $compactSearch !== '' ? $this->escapeLike($compactSearch) . '%' : null;
+        $tokens = $this->extractNameSearchTokens($normalizedName, $compactSearch);
+        $tokenLikes = collect($tokens)
+            ->map(fn ($token) => '%' . $this->escapeLike($token) . '%')
+            ->values()
+            ->all();
+
+        $searchRankingParts = [];
+        $searchRankingBindings = [];
+
+        if ($normalizedCode !== '') {
+            $searchRankingParts[] = "CASE WHEN {$skuExpr} = ? THEN 1900 ELSE 0 END";
+            $searchRankingBindings[] = $normalizedCode;
+            $searchRankingParts[] = "CASE WHEN {$skuExpr} LIKE ? ESCAPE '\\' THEN 1250 ELSE 0 END";
+            $searchRankingBindings[] = $codePrefixLike;
+            $searchRankingParts[] = "CASE WHEN {$skuExpr} LIKE ? ESCAPE '\\' THEN 900 ELSE 0 END";
+            $searchRankingBindings[] = $codeContainsLike;
+        }
+
+        if ($normalizedName !== '') {
+            $searchRankingParts[] = "CASE WHEN {$nameExpr} = ? THEN 1800 ELSE 0 END";
+            $searchRankingBindings[] = $normalizedName;
+            $searchRankingParts[] = "CASE WHEN {$nameExpr} LIKE ? ESCAPE '\\' THEN 1150 ELSE 0 END";
+            $searchRankingBindings[] = $namePrefixLike;
+            $searchRankingParts[] = "CASE WHEN {$nameExpr} LIKE ? ESCAPE '\\' THEN 820 ELSE 0 END";
+            $searchRankingBindings[] = $nameContainsLike;
+        }
+
+        if ($compactContainsLike !== null) {
+            $searchRankingParts[] = "CASE WHEN {$compactSkuExpr} = ? THEN 1850 ELSE 0 END";
+            $searchRankingBindings[] = $compactSearch;
+            $searchRankingParts[] = "CASE WHEN {$compactSkuExpr} LIKE ? ESCAPE '\\' THEN 1200 ELSE 0 END";
+            $searchRankingBindings[] = $compactPrefixLike;
+            $searchRankingParts[] = "CASE WHEN {$compactSkuExpr} LIKE ? ESCAPE '\\' THEN 920 ELSE 0 END";
+            $searchRankingBindings[] = $compactContainsLike;
+            $searchRankingParts[] = "CASE WHEN {$compactNameExpr} LIKE ? ESCAPE '\\' THEN 760 ELSE 0 END";
+            $searchRankingBindings[] = $compactContainsLike;
+        }
+
+        foreach ($tokenLikes as $tokenLike) {
+            $searchRankingParts[] = "CASE WHEN {$nameExpr} LIKE ? ESCAPE '\\' THEN 90 ELSE 0 END";
+            $searchRankingBindings[] = $tokenLike;
+            $searchRankingParts[] = "CASE WHEN {$skuExpr} LIKE ? ESCAPE '\\' THEN 120 ELSE 0 END";
+            $searchRankingBindings[] = $tokenLike;
+        }
+
+        if (empty($searchRankingParts)) {
+            return [null, []];
+        }
+
+        $searchRankingSql = '(' . implode(' + ', $searchRankingParts) . ')';
+        $query->selectRaw("{$searchRankingSql} AS search_score", $searchRankingBindings);
+        $query->where(function (Builder $searchQuery) use (
+            $nameExpr,
+            $skuExpr,
+            $compactNameExpr,
+            $compactSkuExpr,
+            $nameContainsLike,
+            $codeContainsLike,
+            $compactContainsLike,
+            $tokenLikes
+        ) {
+            $searchQuery->whereRaw('1 = 0');
+
+            if ($nameContainsLike !== null) {
+                $searchQuery->orWhereRaw("{$nameExpr} LIKE ? ESCAPE '\\'", [$nameContainsLike]);
+            }
+
+            if ($codeContainsLike !== null) {
+                $searchQuery->orWhereRaw("{$skuExpr} LIKE ? ESCAPE '\\'", [$codeContainsLike]);
+            }
+
+            if ($compactContainsLike !== null) {
+                $searchQuery
+                    ->orWhereRaw("{$compactSkuExpr} LIKE ? ESCAPE '\\'", [$compactContainsLike])
+                    ->orWhereRaw("{$compactNameExpr} LIKE ? ESCAPE '\\'", [$compactContainsLike]);
+            }
+
+            if (!empty($tokenLikes)) {
+                $searchQuery->orWhere(function (Builder $tokenQuery) use ($nameExpr, $skuExpr, $compactNameExpr, $compactSkuExpr, $tokenLikes) {
+                    foreach ($tokenLikes as $tokenLike) {
+                        $tokenQuery->where(function (Builder $segmentQuery) use ($nameExpr, $skuExpr, $compactNameExpr, $compactSkuExpr, $tokenLike) {
+                            $segmentQuery
+                                ->whereRaw("{$nameExpr} LIKE ? ESCAPE '\\'", [$tokenLike])
+                                ->orWhereRaw("{$skuExpr} LIKE ? ESCAPE '\\'", [$tokenLike])
+                                ->orWhereRaw("{$compactNameExpr} LIKE ? ESCAPE '\\'", [$tokenLike])
+                                ->orWhereRaw("{$compactSkuExpr} LIKE ? ESCAPE '\\'", [$tokenLike]);
+                        });
+                    }
+                });
+            }
+        });
+
+        return [$searchRankingSql, $searchRankingBindings];
+    }
+
+    protected function supplementPickerProductPayload(Product $product): array
+    {
+        $parentProduct = $product->relationLoaded('parentConfigurable')
+            ? $product->parentConfigurable->first()
+            : null;
+        $attributeSummary = $this->pickerAttributeSummary($product);
+        $displayName = trim((string) $this->buildOrderItemDisplayName($product, $parentProduct));
+
+        if ($displayName === '') {
+            $displayName = $parentProduct && $attributeSummary !== ''
+                ? trim((string) $parentProduct->name . ' - ' . $attributeSummary)
+                : (string) $product->name;
+        }
+
+        $inventoryUnitId = $product->inventory_unit_id !== null
+            ? (int) $product->inventory_unit_id
+            : ($parentProduct?->inventory_unit_id !== null ? (int) $parentProduct->inventory_unit_id : null);
+        $unitName = $product->unit?->name ?? $parentProduct?->unit?->name;
+        $parentPayload = $parentProduct ? [[
+            'id' => (int) $parentProduct->id,
+            'account_id' => (int) ($parentProduct->account_id ?? 0),
+            'name' => $parentProduct->name,
+            'sku' => $parentProduct->sku,
+            'type' => $parentProduct->type,
+            'inventory_unit_id' => $parentProduct->inventory_unit_id !== null ? (int) $parentProduct->inventory_unit_id : null,
+            'unit' => $parentProduct->unit ? [
+                'id' => (int) $parentProduct->unit->id,
+                'name' => $parentProduct->unit->name,
+            ] : null,
+        ]] : [];
+
+        return [
+            'id' => (int) $product->id,
+            'account_id' => (int) ($product->account_id ?? 0),
+            'slug' => $product->slug,
+            'sku' => $product->sku,
+            'display_sku' => $product->sku,
+            'warehouse_sequence' => $this->productWarehouseSequenceForDisplay($product),
+            'inventory_import_starred' => (bool) ($product->inventory_import_starred ?? false),
+            'name' => $product->name,
+            'display_name' => $displayName,
+            'entry_kind' => $parentProduct ? 'variation' : 'product',
+            'parent_product_id' => $parentProduct?->id ? (int) $parentProduct->id : null,
+            'parent_product_name' => $parentProduct?->name,
+            'parent_product_sku' => $parentProduct?->sku,
+            'parent_configurable' => $parentPayload,
+            'option_label' => $parentProduct ? $attributeSummary : '',
+            'inventory_unit_id' => $inventoryUnitId,
+            'unit_name' => $unitName,
+            'price' => (float) ($product->price ?? 0),
+            'expected_cost' => $product->expected_cost !== null ? (float) $product->expected_cost : null,
+            'cost_price' => (float) ($product->cost_price ?? $product->expected_cost ?? 0),
+            'stock_quantity' => (float) ($product->stock_quantity ?? 0),
+            'type' => $product->type,
+            'category_id' => $product->category_id !== null ? (int) $product->category_id : null,
+            'profit_center_id' => $product->profit_center_id !== null ? (int) $product->profit_center_id : null,
+            'attribute_values' => $this->pickerAttributePayload($product),
+            'attribute_summary' => $attributeSummary,
+            'has_variations' => $product->hasVariantChildren(),
+            'variation_count' => $product->hasVariantChildren() ? 1 : 0,
+            'search_score' => (float) ($product->getAttribute('search_score') ?? 0),
+        ];
+    }
     protected function pickerIndex(Request $request)
     {
         $quickFiltersEnabled = $this->productQuickFiltersEnabled($request);
@@ -8713,6 +8978,10 @@ class ProductController extends Controller
      */
     public function index(Request $request)
     {
+        if ($request->boolean('supplement_picker')) {
+            return $this->supplementPickerIndex($request);
+        }
+
         if ($request->boolean('picker')) {
             return $this->pickerIndex($request);
         }
@@ -9359,7 +9628,7 @@ class ProductController extends Controller
 
             // Tôn trọng tiêu chí sắp xếp từ bảng quản lý sản phẩm; mặc định là mới nhất lên đầu.
             if ($searchRankingSql !== null) {
-                $query->orderByRaw("{$searchRankingSql} DESC", $searchRankingBindings);
+                $query->orderByDesc('search_score');
             }
 
             if (!$this->applyRequestedProductSort($query, $requestedSort, $order, $actualStockSql)) {

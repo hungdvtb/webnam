@@ -56,6 +56,7 @@ import QuickReplies from './pages/admin/QuickReplies';
 import FixedCostTracker from './pages/admin/FixedCostTracker';
 import FundManagement from './pages/admin/FundManagement';
 import DebtManagement from './pages/admin/DebtManagement';
+import AssetSummary from './pages/admin/AssetSummary';
 import DailyProfitReport from './pages/admin/DailyProfitReport';
 import MonthlyProfitReport from './pages/admin/MonthlyProfitReport';
 import ProfitCenterManager from './pages/admin/ProfitCenterManager';
@@ -210,6 +211,7 @@ function App() {
                 <Route path="finance/fixed-costs" element={<FixedCostTracker />} />
                 <Route path="finance/funds" element={<FundManagement />} />
                 <Route path="finance/debts" element={<DebtManagement />} />
+                <Route path="finance/assets" element={<AssetSummary />} />
                 <Route path="finance/daily-profit" element={<DailyProfitReport />} />
                 <Route path="finance/monthly-profit" element={<MonthlyProfitReport />} />
                 <Route path="finance/profit-centers" element={<ProfitCenterManager />} />

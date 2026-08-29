@@ -2,16 +2,33 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Api\InventoryController;
 use App\Models\FinAccount;
 use App\Models\FinCategory;
 use App\Models\FinTransaction;
+use App\Models\FinDailyReportConfig;
+use App\Models\DebtSubject;
+use App\Models\Order;
+use App\Models\Shipment;
+use App\Models\SiteSetting;
 use App\Services\AccountDataScopeService;
+use App\Services\Finance\FinanceService;
+use App\Support\OrderStatusCatalog;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\Rule;
 
 class FundController extends Controller
 {
+    private const ASSET_SUMMARY_SETTING_KEY = 'fund_asset_summary_settings';
+
+    private const ASSET_SUMMARY_SETTING_DEFAULTS = [
+        'delivered_unpaid_amount' => 0,
+        'other_deductions_amount' => 0,
+        'note' => '',
+    ];
+
     private function ensureDefaults(int $accountId): void
     {
         if (FinAccount::query()->where('account_id', $accountId)->count() === 0) {
@@ -61,6 +78,52 @@ class FundController extends Controller
                 'bank' => $totalBank,
                 'accounts' => $accounts,
             ],
+        ]);
+    }
+
+    public function assetSummary(Request $request)
+    {
+        $accountId = $this->accountId($request);
+        $this->ensureDefaults($accountId);
+
+        return response()->json([
+            'status' => 'success',
+            'data' => $this->buildAssetSummary($accountId, $request),
+        ]);
+    }
+
+    public function saveAssetSummarySettings(Request $request)
+    {
+        $accountId = $this->accountId($request);
+
+        $validated = $request->validate([
+            'delivered_unpaid_amount' => 'nullable|numeric|min:0',
+            'other_deductions_amount' => 'nullable|numeric|min:0',
+            'note' => 'nullable|string|max:2000',
+        ]);
+
+        $settings = [
+            'delivered_unpaid_amount' => round((float) ($validated['delivered_unpaid_amount'] ?? 0), 2),
+            'other_deductions_amount' => round((float) ($validated['other_deductions_amount'] ?? 0), 2),
+            'note' => trim((string) ($validated['note'] ?? '')),
+        ];
+
+        if (!Schema::hasTable('site_settings')) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Bang cau hinh site_settings chua san sang.',
+            ], 422);
+        }
+
+        SiteSetting::setValue(
+            self::ASSET_SUMMARY_SETTING_KEY,
+            json_encode($settings, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            $accountId
+        );
+
+        return response()->json([
+            'status' => 'success',
+            'data' => $this->buildAssetSummary($accountId, $request),
         ]);
     }
 
@@ -565,6 +628,427 @@ class FundController extends Controller
                 'total_expense' => $totalExpense,
             ],
         ]);
+    }
+
+    private function buildAssetSummary(int $accountId, ?Request $request = null): array
+    {
+        $fundTotals = $this->fundAssetTotals($accountId);
+        $inventoryTotals = $this->inventoryAssetTotals($accountId, $request);
+        $settings = $this->assetSummarySettings($accountId);
+        $pendingOrderTotals = $this->pendingOrderAssetTotals($accountId);
+        $debtTotals = $this->debtAssetTotals($accountId);
+
+        $rows = [
+            [
+                'key' => 'fund_balance',
+                'type' => 'plus',
+                'source' => 'auto',
+                'label' => 'Tien trong so',
+                'amount' => $fundTotals['total'],
+                'note' => 'Tong so du tien mat va ngan hang trong so cai.',
+                'meta' => $fundTotals,
+            ],
+            [
+                'key' => 'inventory_value',
+                'type' => 'plus',
+                'source' => 'auto',
+                'label' => 'Ton kho',
+                'amount' => $inventoryTotals['value'],
+                'note' => 'Tinh theo co the ban * gia von/gia du kien, cung cong thuc trang Ton kho.',
+                'meta' => $inventoryTotals,
+            ],
+            [
+                'key' => 'delivered_unpaid',
+                'type' => 'plus',
+                'source' => 'manual',
+                'label' => 'VTP da giao chua tra',
+                'amount' => $settings['delivered_unpaid_amount'],
+                'note' => 'Khoan da giao thanh cong nhung ViettelPost chua doi soat/tra tien.',
+                'meta' => [],
+            ],
+            [
+                'key' => 'pending_orders',
+                'type' => 'plus',
+                'source' => 'auto',
+                'label' => 'Don moi/dang giao du kien',
+                'amount' => $pendingOrderTotals['net_amount'],
+                'note' => 'Da tru ty le hoan, phi ship, dong goi va thue theo cau hinh lai ngay.',
+                'meta' => $pendingOrderTotals,
+            ],
+            [
+                'key' => 'other_deductions',
+                'type' => 'minus',
+                'source' => 'manual',
+                'label' => 'Chi khac',
+                'amount' => $settings['other_deductions_amount'],
+                'note' => 'Khoan chi/du phong nhap tay can tru khoi tong tai san.',
+                'meta' => [],
+            ],
+            [
+                'key' => 'debt_payable',
+                'type' => 'minus',
+                'source' => 'auto',
+                'label' => 'No phai tra',
+                'amount' => $debtTotals['payable'],
+                'note' => 'Lay tu so no: no dau ky + vay/ghi no - tra goc.',
+                'meta' => $debtTotals,
+            ],
+        ];
+
+        $grossAssets = round(
+            $fundTotals['total']
+            + $inventoryTotals['value']
+            + $settings['delivered_unpaid_amount']
+            + $pendingOrderTotals['net_amount'],
+            2
+        );
+        $deductions = round($settings['other_deductions_amount'] + $debtTotals['payable'], 2);
+        $netAssets = round($grossAssets - $deductions, 2);
+
+        return [
+            'summary' => [
+                'net_assets' => $netAssets,
+                'gross_assets' => $grossAssets,
+                'deductions' => $deductions,
+                'fund_balance' => $fundTotals['total'],
+                'inventory_value' => $inventoryTotals['value'],
+                'delivered_unpaid_amount' => $settings['delivered_unpaid_amount'],
+                'pending_orders_net_amount' => $pendingOrderTotals['net_amount'],
+                'other_deductions_amount' => $settings['other_deductions_amount'],
+                'debt_payable' => $debtTotals['payable'],
+            ],
+            'settings' => $settings,
+            'rows' => $rows,
+            'pending_orders' => $pendingOrderTotals,
+            'formula' => 'Tien trong so + Ton kho + VTP da giao chua tra + Don moi/dang giao du kien - Chi khac - No phai tra',
+        ];
+    }
+
+    private function assetSummarySettings(int $accountId): array
+    {
+        if (!Schema::hasTable('site_settings')) {
+            return self::ASSET_SUMMARY_SETTING_DEFAULTS;
+        }
+
+        $raw = SiteSetting::getValue(self::ASSET_SUMMARY_SETTING_KEY, $accountId, null);
+        $decoded = is_string($raw) && $raw !== '' ? json_decode($raw, true) : [];
+        if (!is_array($decoded)) {
+            $decoded = [];
+        }
+
+        return [
+            'delivered_unpaid_amount' => round((float) ($decoded['delivered_unpaid_amount'] ?? 0), 2),
+            'other_deductions_amount' => round((float) ($decoded['other_deductions_amount'] ?? 0), 2),
+            'note' => trim((string) ($decoded['note'] ?? '')),
+        ];
+    }
+
+    private function fundAssetTotals(int $accountId): array
+    {
+        if (!Schema::hasTable('fin_accounts')) {
+            return ['total' => 0, 'cash' => 0, 'bank' => 0, 'account_count' => 0];
+        }
+
+        $accounts = FinAccount::query()
+            ->where('account_id', $accountId)
+            ->get(['id', 'type', 'balance']);
+
+        return [
+            'total' => round((float) $accounts->sum('balance'), 2),
+            'cash' => round((float) $accounts->where('type', 'cash')->sum('balance'), 2),
+            'bank' => round((float) $accounts->where('type', 'bank')->sum('balance'), 2),
+            'account_count' => $accounts->count(),
+        ];
+    }
+
+    private function inventoryAssetTotals(int $accountId, ?Request $sourceRequest = null): array
+    {
+        if (!Schema::hasTable('products')) {
+            return [
+                'value' => 0,
+                'stock_quantity' => 0,
+                'sellable_stock_quantity' => 0,
+                'pending_export_quantity' => 0,
+                'pending_return_quantity' => 0,
+                'product_count' => 0,
+            ];
+        }
+
+        $sourceRequest ??= request();
+        $inventoryRequest = Request::create('/api/inventory/products', 'GET', ['per_page' => 20]);
+        $inventoryRequest->headers->set('X-Account-Id', (string) $accountId);
+        $inventoryRequest->setUserResolver($sourceRequest->getUserResolver());
+        $inventoryRequest->setRouteResolver($sourceRequest->getRouteResolver());
+
+        $previousRequest = app('request');
+
+        try {
+            app()->instance('request', $inventoryRequest);
+            $summary = app(InventoryController::class)->productSummaryForRequest($inventoryRequest);
+        } finally {
+            app()->instance('request', $previousRequest);
+        }
+
+        return [
+            'value' => round((float) ($summary['total_inventory_value'] ?? 0), 2),
+            'stock_quantity' => round((float) ($summary['total_stock'] ?? 0), 2),
+            'sellable_stock_quantity' => round((float) ($summary['total_actual_stock'] ?? $summary['total_sellable_stock'] ?? 0), 2),
+            'pending_export_quantity' => round((float) ($summary['total_pending_export'] ?? 0), 2),
+            'pending_return_quantity' => round((float) ($summary['total_pending_return'] ?? 0), 2),
+            'product_count' => (int) ($summary['total_products'] ?? 0),
+            'source' => 'inventory_products_summary',
+        ];
+    }
+
+    private function pendingOrderAssetTotals(int $accountId): array
+    {
+        if (!Schema::hasTable('orders')) {
+            return $this->emptyPendingOrderAssetTotals();
+        }
+
+        $orders = $this->pendingOrderAssetQuery($accountId)->get([
+            'id',
+            'order_number',
+            'order_type',
+            'total_price',
+            'shipping_fee',
+            'internal_shipping_fee',
+            'shipping_dispatched_at',
+            'status',
+        ]);
+        $orderCount = $orders->count();
+        $orderIds = $orders
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->values()
+            ->all();
+        $grossCod = round((float) $orders->sum(fn (Order $order) => $this->orderCodAmount($order)), 2);
+        $shippingRows = $orders->map(function (Order $order) {
+            return [
+                'cod_amount' => $this->orderCodAmount($order),
+                'recorded_shipping_cost' => $this->recordedOrderShippingCost($order),
+            ];
+        });
+        $recordedShippingCost = round((float) $shippingRows->sum('recorded_shipping_cost'), 2);
+        $missingShippingOrderCount = $shippingRows
+            ->filter(fn (array $row) => (float) $row['recorded_shipping_cost'] <= 0)
+            ->count();
+        $missingShippingGrossCod = round((float) $shippingRows
+            ->filter(fn (array $row) => (float) $row['recorded_shipping_cost'] <= 0)
+            ->sum('cod_amount'), 2);
+
+        $config = $this->dailyPnlExperienceConfig($accountId);
+        $returnRate = max(0, (float) ($config['return_rate'] ?? 0));
+        $returnFactor = max(0, 1 - ($returnRate / 100));
+        $afterReturn = round($grossCod * $returnFactor, 2);
+
+        $estimatedShippingCost = ($config['shipping_calculation_mode'] ?? 'fixed_per_order') === 'revenue_percent'
+            ? round($missingShippingGrossCod * ((float) ($config['shipping_cost_rate'] ?? 0) / 100), 2)
+            : round($missingShippingOrderCount * (float) ($config['shipping_cost_per_order'] ?? 0), 2);
+        $shippingCost = round($recordedShippingCost + $estimatedShippingCost, 2);
+        $packagingOrders = $orders->filter(fn (Order $order) => $this->shouldReservePackagingCost($order));
+        $packagingOrderCount = $packagingOrders->count();
+        $packagingCostPerOrder = (float) ($config['packaging_cost_per_order'] ?? 0);
+        $packagingCost = round($packagingOrderCount * $packagingCostPerOrder, 2);
+        $taxCost = round(max(0, $afterReturn - $shippingCost) * ((float) ($config['tax_rate'] ?? 1.5) / 100), 2);
+        $netAmount = round($afterReturn - $shippingCost - $packagingCost - $taxCost, 2);
+
+        return [
+            'gross_cod_amount' => $grossCod,
+            'order_count' => $orderCount,
+            'order_ids' => $orderIds,
+            'return_rate' => round($returnRate, 4),
+            'after_return_amount' => $afterReturn,
+            'shipping_cost' => round($shippingCost, 2),
+            'recorded_shipping_cost' => $recordedShippingCost,
+            'estimated_shipping_cost' => $estimatedShippingCost,
+            'packaging_cost' => $packagingCost,
+            'packaging_order_count' => $packagingOrderCount,
+            'tax_cost' => $taxCost,
+            'net_amount' => $netAmount,
+            'config' => [
+                'effective_date' => $config['effective_date'] ?? null,
+                'source' => $config['source'] ?? 'daily_pnl_config',
+                'shipping_calculation_mode' => $config['shipping_calculation_mode'] ?? 'fixed_per_order',
+                'shipping_calculation_label' => $config['shipping_calculation_label'] ?? app(FinanceService::class)->dailyProfitShippingModeLabel('fixed_per_order'),
+                'shipping_cost_per_order' => round((float) ($config['shipping_cost_per_order'] ?? 0), 2),
+                'shipping_cost_rate' => round((float) ($config['shipping_cost_rate'] ?? 0), 4),
+                'packaging_cost_per_order' => round($packagingCostPerOrder, 2),
+                'tax_rate' => round((float) ($config['tax_rate'] ?? 1.5), 4),
+            ],
+        ];
+    }
+
+    private function dailyPnlExperienceConfig(int $accountId): array
+    {
+        $defaults = [
+            'effective_date' => null,
+            'return_rate' => 2.0,
+            'packaging_cost_per_order' => 2000.0,
+            'shipping_calculation_mode' => 'revenue_percent',
+            'shipping_calculation_label' => 'Ước tính % theo COD',
+            'shipping_cost_per_order' => 0.0,
+            'shipping_cost_rate' => 5.0,
+            'tax_rate' => 1.5,
+            'source' => 'daily_pnl_config_default',
+        ];
+
+        if (!Schema::hasTable('fin_daily_report_configs')) {
+            return $defaults;
+        }
+
+        $query = FinDailyReportConfig::query();
+
+        if (Schema::hasColumn('fin_daily_report_configs', 'account_id')) {
+            $config = (clone $query)->where('account_id', $accountId)->first()
+                ?: (clone $query)->whereNull('account_id')->orderBy('id')->first()
+                ?: (clone $query)->orderBy('id')->first();
+        } else {
+            $config = $query->orderBy('id')->first();
+        }
+
+        if (!$config) {
+            return $defaults;
+        }
+
+        $shippingFeeType = trim((string) ($config->shipping_fee_type ?? '%'));
+        $shippingEstimateRate = (float) ($config->shipping_estimate_rate ?? $defaults['shipping_cost_rate']);
+        $isPercentShipping = $shippingFeeType === '%' || str_contains(strtolower($shippingFeeType), 'percent');
+
+        return [
+            'effective_date' => null,
+            'return_rate' => (float) ($config->return_rate ?? $defaults['return_rate']),
+            'packaging_cost_per_order' => (float) ($config->packaging_fee ?? $defaults['packaging_cost_per_order']),
+            'shipping_calculation_mode' => $isPercentShipping ? 'revenue_percent' : 'fixed_per_order',
+            'shipping_calculation_label' => $isPercentShipping ? 'Theo % COD thiếu phí ship' : 'Cố định theo đơn thiếu phí ship',
+            'shipping_cost_per_order' => $isPercentShipping ? 0.0 : $shippingEstimateRate,
+            'shipping_cost_rate' => $isPercentShipping ? $shippingEstimateRate : 0.0,
+            'tax_rate' => (float) ($config->tax_rate ?? $defaults['tax_rate']),
+            'source' => 'daily_pnl_config',
+        ];
+    }
+
+    private function shouldReservePackagingCost(Order $order): bool
+    {
+        if ($order->shipping_dispatched_at) {
+            return false;
+        }
+
+        return !($order->activeShipment instanceof Shipment);
+    }
+
+    private function emptyPendingOrderAssetTotals(): array
+    {
+        return [
+            'gross_cod_amount' => 0,
+            'order_count' => 0,
+            'order_ids' => [],
+            'return_rate' => 0,
+            'after_return_amount' => 0,
+            'shipping_cost' => 0,
+            'recorded_shipping_cost' => 0,
+            'estimated_shipping_cost' => 0,
+            'packaging_cost' => 0,
+            'packaging_order_count' => 0,
+            'tax_cost' => 0,
+            'net_amount' => 0,
+            'config' => [],
+        ];
+    }
+
+    private function pendingOrderAssetQuery(int $accountId)
+    {
+        $excludedOrderStatuses = array_filter(array_unique([
+            OrderStatusCatalog::COMPLETED_CODE,
+            OrderStatusCatalog::PENDING_RETURN_CODE,
+            OrderStatusCatalog::RETURNED_CODE,
+            OrderStatusCatalog::EXCHANGE_COMPLETED_CODE,
+            OrderStatusCatalog::PARTIAL_DELIVERY_CODE,
+            'cancelled',
+            'canceled',
+        ]));
+        $excludedShipmentStatuses = [
+            'delivered',
+            'delivery_success',
+            'returning',
+            'returned',
+            'canceled',
+            'cancelled',
+        ];
+
+        $query = Order::query()
+            ->where('account_id', $accountId)
+            ->where('total_price', '>', 0)
+            ->whereNotIn(DB::raw('LOWER(status)'), $excludedOrderStatuses);
+        if (Schema::hasColumn('orders', 'order_kind')) {
+            $query->where(function ($kindQuery) {
+                $kindQuery
+                    ->where('order_kind', Order::KIND_OFFICIAL)
+                    ->orWhereNull('order_kind')
+                    ->orWhere('order_kind', '');
+            });
+        }
+
+        if (Schema::hasTable('shipments')) {
+            $query->with(['activeShipment:id,order_id,shipment_status,shipping_cost,service_fee,insurance_fee,other_fee,return_fee'])
+                ->whereDoesntHave('shipments', function ($shipmentQuery) use ($excludedShipmentStatuses) {
+                    $shipmentQuery->whereIn(DB::raw('LOWER(shipment_status)'), $excludedShipmentStatuses);
+                });
+        }
+
+        return $query;
+    }
+
+    private function orderCodAmount(Order $order): float
+    {
+        return $order->shouldCollectCashOnDelivery()
+            ? max(0, round((float) ($order->total_price ?? 0), 2))
+            : 0.0;
+    }
+
+    private function recordedOrderShippingCost(Order $order): float
+    {
+        $shipment = $order->activeShipment;
+        if ($shipment instanceof Shipment) {
+            return round(
+                (float) ($shipment->shipping_cost ?? 0)
+                + (float) ($shipment->service_fee ?? 0)
+                + (float) ($shipment->insurance_fee ?? 0)
+                + (float) ($shipment->other_fee ?? 0)
+                + (float) ($shipment->return_fee ?? 0),
+                2
+            );
+        }
+
+        return round(
+            (float) ($order->internal_shipping_fee ?? 0)
+            + (float) ($order->shipping_fee ?? 0),
+            2
+        );
+    }
+
+    private function debtAssetTotals(int $accountId): array
+    {
+        if (!Schema::hasTable('debt_subjects')) {
+            return ['payable' => 0, 'subject_count' => 0];
+        }
+
+        $subjects = DebtSubject::query()
+            ->where('account_id', $accountId)
+            ->with(['transactions:id,debt_subject_id,type,amount'])
+            ->get(['id', 'initial_debt']);
+
+        $payable = $subjects->sum(function (DebtSubject $subject) {
+            $borrowSum = $subject->transactions->where('type', 'borrow')->sum('amount');
+            $payPrincipalSum = $subject->transactions->where('type', 'pay_principal')->sum('amount');
+
+            return (float) ($subject->initial_debt ?? 0) + (float) $borrowSum - (float) $payPrincipalSum;
+        });
+
+        return [
+            'payable' => round(max(0, (float) $payable), 2),
+            'subject_count' => $subjects->count(),
+        ];
     }
 
     private function accountId(Request $request): int

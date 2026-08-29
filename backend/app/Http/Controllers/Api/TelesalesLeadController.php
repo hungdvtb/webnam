@@ -112,15 +112,12 @@ class TelesalesLeadController extends Controller
                 'statusConfig',
                 'assignedStaff',
                 'latestNote',
-                'followUpTasks' => fn ($taskQuery) => $taskQuery
-                    ->where('status', LeadFollowUpTask::STATUS_PENDING)
-                    ->orderBy('due_date')
-                    ->orderBy('id'),
+                'followUpTasks' => fn ($taskQuery) => $this->scopeVisibleFollowUpTasks($taskQuery),
             ])
             ->withCount('notesTimeline');
 
         $this->applyFilters($query, $request);
-        $this->applyQueueFilter($query, (string) $request->input('queue', 'today'));
+        $this->applyQueueFilter($query, $request);
 
         $sortBy = (string) $request->input('sort_by', 'placed_at');
         $sortDirection = $request->input('sort_order') === 'asc' ? 'asc' : 'desc';
@@ -162,10 +159,7 @@ class TelesalesLeadController extends Controller
                 'statusConfig',
                 'assignedStaff',
                 'latestNote',
-                'followUpTasks' => fn ($taskQuery) => $taskQuery
-                    ->where('status', LeadFollowUpTask::STATUS_PENDING)
-                    ->orderBy('due_date')
-                    ->orderBy('id'),
+                'followUpTasks' => fn ($taskQuery) => $this->scopeVisibleFollowUpTasks($taskQuery),
                 'notesTimeline.statusConfig',
                 'notesTimeline.assignedStaff',
                 'notesTimeline.user',
@@ -285,10 +279,7 @@ class TelesalesLeadController extends Controller
                 'statusConfig',
                 'assignedStaff',
                 'latestNote',
-                'followUpTasks' => fn ($taskQuery) => $taskQuery
-                    ->where('status', LeadFollowUpTask::STATUS_PENDING)
-                    ->orderBy('due_date')
-                    ->orderBy('id'),
+                'followUpTasks' => fn ($taskQuery) => $this->scopeVisibleFollowUpTasks($taskQuery),
             ]);
             $created->push($this->transformLead($lead));
             $existingByPhone->put($normalizedPhone, $lead);
@@ -449,10 +440,7 @@ class TelesalesLeadController extends Controller
             'statusConfig',
             'assignedStaff',
             'latestNote',
-            'followUpTasks' => fn ($taskQuery) => $taskQuery
-                ->where('status', LeadFollowUpTask::STATUS_PENDING)
-                ->orderBy('due_date')
-                ->orderBy('id'),
+            'followUpTasks' => fn ($taskQuery) => $this->scopeVisibleFollowUpTasks($taskQuery),
         ])->loadCount('notesTimeline');
 
         return response()->json([
@@ -525,10 +513,7 @@ class TelesalesLeadController extends Controller
             'statusConfig',
             'assignedStaff',
             'latestNote',
-            'followUpTasks' => fn ($taskQuery) => $taskQuery
-                ->where('status', LeadFollowUpTask::STATUS_PENDING)
-                ->orderBy('due_date')
-                ->orderBy('id'),
+            'followUpTasks' => fn ($taskQuery) => $this->scopeVisibleFollowUpTasks($taskQuery),
         ])->loadCount('notesTimeline');
 
         return response()->json([
@@ -569,10 +554,6 @@ class TelesalesLeadController extends Controller
     private function applyFilters(Builder $query, Request $request): void
     {
         $this->applyFilterControls($query, $request);
-
-        if (!$request->boolean('include_stopped') && (string) $request->input('queue', 'today') !== 'all') {
-            $this->applyActiveFollowUpScope($query);
-        }
     }
 
     private function applyFilterControls(Builder $query, Request $request): void
@@ -622,18 +603,77 @@ class TelesalesLeadController extends Controller
         }
     }
 
-    private function applyQueueFilter(Builder $query, string $queue): void
+    private function applyQueueFilter(Builder $query, Request $request): void
     {
+        $queue = (string) $request->input('queue', 'today');
+        $workStatus = $this->workStatusFilter($request);
+
         match ($queue) {
-            'all' => null,
-            'new_today' => $this->whereHasCurrentDueTask($query, LeadFollowUpTask::TYPE_NEW, false),
-            'overdue' => $this->whereHasCurrentDueTask($query, null, true),
-            '3_days' => $this->whereHasCurrentDueTask($query, LeadFollowUpTask::TYPE_THREE_DAYS, false),
-            '7_days' => $this->whereHasCurrentDueTask($query, LeadFollowUpTask::TYPE_SEVEN_DAYS, false),
-            default => $this->whereHasCurrentDueTask($query, null, false),
+            'all' => $workStatus === 'all' ? null : $this->whereHasWorkTask($query, null, false, $workStatus),
+            'new_today' => $this->whereHasWorkTask($query, LeadFollowUpTask::TYPE_NEW, false, $workStatus),
+            'overdue' => $this->whereHasWorkTask($query, null, true, $workStatus),
+            '3_days' => $this->whereHasWorkTask($query, LeadFollowUpTask::TYPE_THREE_DAYS, false, $workStatus),
+            '7_days' => $this->whereHasWorkTask($query, LeadFollowUpTask::TYPE_SEVEN_DAYS, false, $workStatus),
+            default => $this->whereHasWorkTask($query, null, false, $workStatus),
         };
     }
 
+    private function workStatusFilter(Request $request): string
+    {
+        $value = (string) $request->input('work_status', 'all');
+
+        return in_array($value, ['pending', 'completed'], true) ? $value : 'all';
+    }
+
+    private function whereHasWorkTask(Builder $query, ?string $taskType = null, bool $overdueOnly = false, string $workStatus = 'all'): void
+    {
+        if ($workStatus === 'pending') {
+            $query->where(function (Builder $pendingQuery) use ($taskType, $overdueOnly) {
+                $this->applyActiveFollowUpScope($pendingQuery);
+                $this->whereHasCurrentDueTask($pendingQuery, $taskType, $overdueOnly);
+            });
+            return;
+        }
+
+        if ($workStatus === 'completed') {
+            $this->whereHasCompletedTodayTask($query, $taskType, $overdueOnly);
+            return;
+        }
+
+        $query->where(function (Builder $builder) use ($taskType, $overdueOnly) {
+            $builder->where(function (Builder $pendingQuery) use ($taskType, $overdueOnly) {
+                $this->applyActiveFollowUpScope($pendingQuery);
+                $this->whereHasCurrentDueTask($pendingQuery, $taskType, $overdueOnly);
+            })->orWhere(function (Builder $completedQuery) use ($taskType, $overdueOnly) {
+                $this->whereHasCompletedTodayTask($completedQuery, $taskType, $overdueOnly);
+            });
+        });
+    }
+
+    private function whereHasCompletedTodayTask(Builder $query, ?string $taskType = null, bool $overdueOnly = false): void
+    {
+        $today = now()->toDateString();
+        $leadTable = $query->getModel()->getTable();
+        $taskTable = (new LeadFollowUpTask())->getTable();
+
+        $query->whereExists(function ($taskQuery) use ($leadTable, $taskTable, $taskType, $overdueOnly, $today) {
+            $taskQuery->selectRaw('1')
+                ->from("{$taskTable} as completed_tasks")
+                ->whereColumn('completed_tasks.account_id', "{$leadTable}.account_id")
+                ->whereColumn('completed_tasks.lead_id', "{$leadTable}.id")
+                ->where('completed_tasks.status', LeadFollowUpTask::STATUS_COMPLETED)
+                ->whereDate('completed_tasks.completed_at', $today)
+                ->where('completed_tasks.due_date', $overdueOnly ? '<' : '<=', $today)
+                ->when($taskType, fn ($builder) => $builder->where('completed_tasks.task_type', $taskType));
+        })->whereNotExists(function ($pendingQuery) use ($leadTable, $taskTable, $today) {
+            $pendingQuery->selectRaw('1')
+                ->from("{$taskTable} as pending_tasks")
+                ->whereColumn('pending_tasks.account_id', "{$leadTable}.account_id")
+                ->whereColumn('pending_tasks.lead_id', "{$leadTable}.id")
+                ->where('pending_tasks.status', LeadFollowUpTask::STATUS_PENDING)
+                ->where('pending_tasks.due_date', '<=', $today);
+        });
+    }
     private function whereHasCurrentDueTask(Builder $query, ?string $taskType = null, bool $overdueOnly = false): void
     {
         $today = now()->toDateString();
@@ -735,6 +775,21 @@ class TelesalesLeadController extends Controller
         });
     }
 
+    private function scopeVisibleFollowUpTasks($query)
+    {
+        $today = now()->toDateString();
+
+        return $query
+            ->where(function (Builder $builder) use ($today) {
+                $builder->where('status', LeadFollowUpTask::STATUS_PENDING)
+                    ->orWhere(function (Builder $completedQuery) use ($today) {
+                        $completedQuery->where('status', LeadFollowUpTask::STATUS_COMPLETED)
+                            ->whereDate('completed_at', $today);
+                    });
+            })
+            ->orderBy('due_date')
+            ->orderBy('id');
+    }
     private function ensureFollowUpTasksForAccount(int $accountId): void
     {
         Lead::withoutGlobalScopes()
@@ -864,15 +919,11 @@ class TelesalesLeadController extends Controller
         return $query;
     }
 
-    private function pendingTaskLeadCount(Request $request, ?string $taskType = null, bool $overdueOnly = false): int
+    private function workTaskLeadCount(Request $request, ?string $taskType = null, bool $overdueOnly = false, ?string $workStatus = null): int
     {
         $query = $this->filteredStatsBaseQuery($request);
 
-        if (!$request->boolean('include_stopped')) {
-            $this->applyActiveFollowUpScope($query);
-        }
-
-        $this->whereHasCurrentDueTask($query, $taskType, $overdueOnly);
+        $this->whereHasWorkTask($query, $taskType, $overdueOnly, $workStatus ?: $this->workStatusFilter($request));
 
         return $query->count();
     }
@@ -895,6 +946,7 @@ class TelesalesLeadController extends Controller
     private function stats(Request $request): array
     {
         $accountId = $this->accountId($request);
+        $workStatus = $this->workStatusFilter($request);
 
         $base = $this->filteredStatsBaseQuery($request);
         $highPotential = clone $base;
@@ -933,11 +985,11 @@ class TelesalesLeadController extends Controller
 
         return [
             'total' => $total,
-            'today_due' => $this->pendingTaskLeadCount($request),
-            'new_today' => $this->pendingTaskLeadCount($request, LeadFollowUpTask::TYPE_NEW),
-            'three_day_due' => $this->pendingTaskLeadCount($request, LeadFollowUpTask::TYPE_THREE_DAYS),
-            'seven_day_due' => $this->pendingTaskLeadCount($request, LeadFollowUpTask::TYPE_SEVEN_DAYS),
-            'overdue' => $this->pendingTaskLeadCount($request, null, true),
+            'today_due' => $this->workTaskLeadCount($request, null, false, $workStatus),
+            'new_today' => $this->workTaskLeadCount($request, LeadFollowUpTask::TYPE_NEW, false, $workStatus),
+            'three_day_due' => $this->workTaskLeadCount($request, LeadFollowUpTask::TYPE_THREE_DAYS, false, $workStatus),
+            'seven_day_due' => $this->workTaskLeadCount($request, LeadFollowUpTask::TYPE_SEVEN_DAYS, false, $workStatus),
+            'overdue' => $this->workTaskLeadCount($request, null, true, $workStatus),
             'high_potential' => !empty($potentialCodes) ? $highPotential->whereIn('potential_level', $potentialCodes)->count() : 0,
             'unassigned' => $unassigned->whereNull('assigned_staff_id')->count(),
             'conversion' => [
@@ -1152,6 +1204,7 @@ class TelesalesLeadController extends Controller
         $addedAt = $this->leadAddedAt($lead);
         $careBucket = $this->careBucket($lead);
         $currentTask = $this->currentTaskForLead($lead);
+        $workTask = $this->workTaskForLead($lead);
         $daysUntilFollowUp = $nextFollowUpAt
             ? now()->startOfDay()->diffInDays($nextFollowUpAt->copy()->startOfDay(), false)
             : null;
@@ -1188,6 +1241,7 @@ class TelesalesLeadController extends Controller
             'care_bucket' => $careBucket['value'],
             'care_bucket_label' => $careBucket['label'],
             'current_task' => $currentTask ? $this->transformFollowUpTask($currentTask, $lead) : null,
+            'work_task' => $workTask ? $this->transformFollowUpTask($workTask, $lead) : null,
             'days_until_follow_up' => $daysUntilFollowUp,
             'latest_note_id' => $lead->latestNote?->id,
             'latest_note_excerpt' => $lead->latest_note_excerpt,
@@ -1265,7 +1319,7 @@ class TelesalesLeadController extends Controller
         $typeLabel = self::TASK_TYPE_LABELS[$task->task_type] ?? 'Việc chăm sóc';
 
         if ($task->status !== LeadFollowUpTask::STATUS_PENDING) {
-            $label = 'Đã xử lý';
+            $label = $typeLabel;
             $statusLabel = 'Đã xử lý';
         } elseif ($isOverdue) {
             $label = "Quá {$daysOverdue} ngày - {$typeLabel}";
@@ -1295,6 +1349,7 @@ class TelesalesLeadController extends Controller
             'is_overdue' => $isOverdue,
             'days_overdue' => $daysOverdue,
             'completed_at' => $this->isoDateTime($task->completed_at),
+            'completed_label' => $this->dateTimeLabel($task->completed_at),
         ];
     }
 
@@ -1318,7 +1373,7 @@ class TelesalesLeadController extends Controller
     {
         $today = now()->toDateString();
         $tasks = $lead->relationLoaded('followUpTasks')
-            ? $lead->followUpTasks
+            ? $lead->followUpTasks->where('status', LeadFollowUpTask::STATUS_PENDING)->values()
             : $lead->followUpTasks()
                 ->where('status', LeadFollowUpTask::STATUS_PENDING)
                 ->orderBy('due_date')
@@ -1333,6 +1388,33 @@ class TelesalesLeadController extends Controller
             ?: $tasks->first();
     }
 
+    private function workTaskForLead(Lead $lead): ?LeadFollowUpTask
+    {
+        $today = now()->toDateString();
+        $tasks = $lead->relationLoaded('followUpTasks')
+            ? $lead->followUpTasks
+            : $this->scopeVisibleFollowUpTasks($lead->followUpTasks())->get();
+
+        if ($tasks->isEmpty()) {
+            return null;
+        }
+
+        $pendingDue = $tasks
+            ->filter(fn (LeadFollowUpTask $task) => $task->status === LeadFollowUpTask::STATUS_PENDING && $task->due_date?->toDateString() <= $today)
+            ->sortBy(fn (LeadFollowUpTask $task) => ($task->due_date?->format('Ymd') ?: '99999999') . '-' . str_pad((string) $task->id, 10, '0', STR_PAD_LEFT))
+            ->first();
+
+        if ($pendingDue) {
+            return $pendingDue;
+        }
+
+        $completedToday = $tasks
+            ->filter(fn (LeadFollowUpTask $task) => $task->status === LeadFollowUpTask::STATUS_COMPLETED && $task->completed_at?->toDateString() === $today)
+            ->sortByDesc(fn (LeadFollowUpTask $task) => $task->completed_at?->timestamp ?: 0)
+            ->first();
+
+        return $completedToday ?: $this->currentTaskForLead($lead);
+    }
     private function leadHasNewStatus(Lead $lead): bool
     {
         $statusCode = Str::lower((string) ($lead->statusConfig?->code ?: $lead->status));

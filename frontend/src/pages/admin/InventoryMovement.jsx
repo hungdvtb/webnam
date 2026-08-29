@@ -108,7 +108,7 @@ const trashSlipTypeLabels = {
 const INVENTORY_TRACKING_WINDOW_DAYS = 15;
 const PRODUCT_FILTER_PRESETS_STORAGE_KEY = 'inventory_product_filter_presets_v1';
 const PRODUCT_SEARCH_HISTORY_STORAGE_KEY = 'inventory_product_search_history_v1';
-const productMultiFilterKeys = ['status', 'cost_source', 'stock_alert', 'type', 'category_id', 'variant_scope'];
+const productMultiFilterKeys = ['status', 'cost_source', 'stock_alert', 'type', 'category_id'];
 const normalizeStringFilterList = (value) => {
     const rawValues = Array.isArray(value)
         ? value
@@ -126,7 +126,7 @@ const createDefaultProductFilters = () => ({
     stock_alert: [],
     type: [],
     category_id: [],
-    variant_scope: [],
+    attributes: {},
     import_starred: '',
     tracking_mode: '',
     tracking_daily_min: '1',
@@ -175,6 +175,8 @@ const normalizeProductFilters = (filters = {}) => {
     });
     normalized.ids = normalizeStringFilterList(filters?.ids)
         .filter((id) => Number.isFinite(Number(id)) && Number(id) > 0);
+    normalized.attributes = normalizeImportQuickAttributeFilters(filters?.attributes || {});
+    delete normalized.variant_scope;
 
     return normalized;
 };
@@ -369,6 +371,40 @@ const countImportQuickFilters = (filters = {}) => {
         + Object.values(normalized.attributes).reduce((total, values) => total + values.length, 0);
 };
 const serializeImportQuickFilters = (filters = {}) => JSON.stringify(normalizeImportQuickFilters(filters));
+const summarizeAttributeFilterLabels = (attributes = [], value = {}) => {
+    const normalizedValue = normalizeImportQuickAttributeFilters(value);
+    const entries = Object.entries(normalizedValue).filter(([, values]) => values.length > 0);
+    if (!entries.length) return '';
+
+    const attributeMap = new Map(buildImportQuickFilterAttributes(attributes).map((attribute) => [String(attribute.id), attribute]));
+    const labels = entries.map(([attributeId, values]) => {
+        const attribute = attributeMap.get(String(attributeId));
+        const optionMap = new Map((attribute?.options || []).map((option) => [String(option.value), option.label || option.value]));
+        const valueLabels = values.map((item) => optionMap.get(String(item)) || String(item));
+        const valueSummary = valueLabels.length <= 2
+            ? valueLabels.join(', ')
+            : `${valueLabels.slice(0, 2).join(', ')} +${valueLabels.length - 2}`;
+
+        return `${attribute?.name || `Thuộc tính ${attributeId}`}: ${valueSummary}`;
+    });
+
+    if (labels.length <= 1) return labels[0];
+    return `${labels[0]} +${labels.length - 1}`;
+};
+const buildInventoryProductFilterParams = (filters = {}) => {
+    const normalizedFilters = normalizeProductFilters(filters);
+    const params = { ...normalizedFilters };
+    delete params.attributes;
+    delete params.variant_scope;
+
+    Object.entries(normalizedFilters.attributes || {}).forEach(([attributeId, values]) => {
+        if (values.length) {
+            params[`attributes[${attributeId}]`] = values.join(',');
+        }
+    });
+
+    return params;
+};
 const createImportQuickFilterPresetId = () => `inventory_import_quick_filter_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 const normalizeImportQuickFilterPreset = (preset) => {
     if (!preset || typeof preset !== 'object') return null;
@@ -441,12 +477,6 @@ const productStockAlertFilterOptions = [
     { value: 'available', label: 'Tồn ổn' },
 ];
 const productTypeFilterOptions = ACTIVE_PRODUCT_TYPE_OPTIONS;
-const productVariantScopeFilterOptions = [
-    { value: 'has_variants', label: 'Có biến thể' },
-    { value: 'no_variants', label: 'Không có biến thể' },
-    { value: 'only_variants', label: 'Chỉ biến thể con' },
-    { value: 'roots', label: 'Chỉ sản phẩm gốc' },
-];
 const supplierStatusFilterOptions = [
     { value: '1', label: 'Đang dùng' },
     { value: '0', label: 'Ngừng dùng' },
@@ -2637,7 +2667,7 @@ const productColumns = [
     { id: 'expected_cost', label: 'Giá nhập dự kiến', minWidth: 108, align: 'right', headerRender: () => renderTwoLineHeader('Giá nhập', 'dự kiến') },
     { id: 'current_cost', label: 'Giá nhập thực tế', minWidth: 108, align: 'right', headerTooltip: 'Tổng tiền nhập hợp lệ / Tổng SL nhập hợp lệ', headerRender: () => renderTwoLineHeader('Giá nhập', 'thực tế') },
     { id: 'inventory_value', label: 'Thành tiền', minWidth: 104, align: 'right', headerTooltip: 'Có thể bán x giá đang dùng; thiếu giá thực tế thì lấy giá dự kiến', headerRender: () => renderTwoLineHeader('Thành', 'tiền') },
-    { id: 'actions', label: 'Thao tác', minWidth: 190, align: 'center' },
+    { id: 'actions', label: 'Thao tác', minWidth: 140, align: 'center' },
 ];
 
 const supplierColumns = [
@@ -3218,6 +3248,7 @@ const SummaryPanel = ({ items }) => (
             {items.map((item) => (
                 <div key={item.label} className="rounded-sm border border-primary/10 bg-primary/[0.03] px-3 py-2">
                     <div className="truncate text-[11px] font-semibold text-primary/55">{item.label}</div>
+                    {item.note ? <div className="mt-0.5 truncate text-[10px] font-semibold text-primary/40" title={item.note}>{item.note}</div> : null}
                     <div className="mt-1 truncate text-[15px] font-black text-primary">{item.value}</div>
                 </div>
             ))}
@@ -3567,7 +3598,15 @@ const ProductLookupInput = ({ supplierId = null, onSelect, placeholder = 'Tìm t
     );
 };
 
-const ImportQuickAttributeFilterDropdown = ({ attributes = [], value = {}, onChange }) => {
+const ImportQuickAttributeFilterDropdown = ({
+    attributes = [],
+    value = {},
+    onChange,
+    className = 'relative min-w-0',
+    buttonClassName = '',
+    menuClassName = '',
+    label = 'Thuộc tính',
+}) => {
     const [open, setOpen] = useState(false);
     const [activeAttributeId, setActiveAttributeId] = useState('');
     const containerRef = useRef(null);
@@ -3616,7 +3655,7 @@ const ImportQuickAttributeFilterDropdown = ({ attributes = [], value = {}, onCha
     };
 
     return (
-        <div ref={containerRef} className="relative min-w-0">
+        <div ref={containerRef} className={className}>
             <button
                 type="button"
                 onClick={() => {
@@ -3628,18 +3667,18 @@ const ImportQuickAttributeFilterDropdown = ({ attributes = [], value = {}, onCha
                         return nextOpen;
                     });
                 }}
-                className={`flex h-12 w-full min-w-[170px] items-center justify-between gap-2 rounded-sm border bg-white px-3 text-[12px] font-bold text-primary shadow-sm transition hover:border-primary/30 ${selectedCount ? 'border-emerald-200 text-emerald-700' : 'border-primary/15'}`}
+                className={buttonClassName || `flex h-12 w-full min-w-[170px] items-center justify-between gap-2 rounded-sm border bg-white px-3 text-[12px] font-bold text-primary shadow-sm transition hover:border-primary/30 ${selectedCount ? 'border-emerald-200 text-emerald-700' : 'border-primary/15'}`}
                 title="Lọc theo thuộc tính sản phẩm"
             >
                 <span className="inline-flex min-w-0 items-center gap-2">
                     <span className="material-symbols-outlined shrink-0 text-[18px]">category</span>
-                    <span className="truncate">{selectedCount ? `Thuộc tính: ${selectedCount}` : 'Thuộc tính'}</span>
+                    <span className="truncate">{selectedCount ? `${label}: ${selectedCount}` : label}</span>
                 </span>
                 <span className="material-symbols-outlined shrink-0 text-[18px] text-primary/40">{open ? 'expand_less' : 'expand_more'}</span>
             </button>
 
             {open ? (
-                <div className="absolute right-0 top-[calc(100%+6px)] z-[145] w-[380px] max-w-[calc(100vw-2rem)] rounded-sm border border-primary/15 bg-white p-3 shadow-2xl">
+                <div className={menuClassName || 'absolute right-0 top-[calc(100%+6px)] z-[145] w-[380px] max-w-[calc(100vw-2rem)] rounded-sm border border-primary/15 bg-white p-3 shadow-2xl'}>
                     <div className="mb-2 flex items-center justify-between gap-2">
                         {activeAttribute ? (
                             <button
@@ -4125,11 +4164,11 @@ const ImportProductQuickSearch = ({
                 <button
                     type="button"
                     onClick={beginQuickFilterDeclaration}
-                    className="inline-flex h-12 w-full min-w-[112px] items-center justify-center gap-1.5 rounded-sm border border-amber-200 bg-amber-50 px-3 text-[12px] font-black text-amber-700 shadow-sm transition hover:border-amber-300 hover:bg-amber-100 xl:w-auto"
+                    aria-label="Tìm toàn bộ sản phẩm để khai báo vào lọc nhanh"
+                    className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-sm border border-amber-200 bg-amber-50 text-amber-700 shadow-sm transition hover:border-amber-300 hover:bg-amber-100"
                     title="Tìm toàn bộ sản phẩm để khai báo vào lọc nhanh"
                 >
-                    <span className="material-symbols-outlined text-[17px]">star</span>
-                    <span className="truncate">Khai báo</span>
+                    <span className="material-symbols-outlined text-[19px]">star</span>
                 </button>
 
                 <button
@@ -4253,7 +4292,8 @@ const ImportProductQuickSearch = ({
                                     type="button"
                                     onClick={(event) => handleToggleStar(event, row)}
                                     disabled={starLoadingProductIds.includes(Number(row.id))}
-                                    className={`mr-2 inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-sm border px-2 text-[11px] font-black transition ${
+                                    aria-label={row.inventory_import_starred ? 'Bỏ khỏi lọc nhanh' : 'Khai báo sản phẩm vào lọc nhanh'}
+                                    className={`mr-2 inline-flex size-9 shrink-0 items-center justify-center rounded-sm border transition ${
                                         row.inventory_import_starred
                                             ? 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100'
                                             : 'border-primary/10 bg-white text-primary/45 hover:border-amber-200 hover:bg-amber-50 hover:text-amber-700'
@@ -4261,7 +4301,6 @@ const ImportProductQuickSearch = ({
                                     title={row.inventory_import_starred ? 'Bỏ khỏi lọc nhanh' : 'Khai báo sản phẩm vào lọc nhanh'}
                                 >
                                     <span className="material-symbols-outlined text-[17px]">{row.inventory_import_starred ? 'star' : 'star_outline'}</span>
-                                    <span>{row.inventory_import_starred ? 'Đã lưu' : 'Khai báo'}</span>
                                 </button>
                             </div>
                         );})}
@@ -6697,7 +6736,7 @@ const InventoryMovement = () => {
         setFlag('products', true);
         try {
             const response = await inventoryApi.getProducts({
-                ...filtersOverride,
+                ...buildInventoryProductFilterParams(filtersOverride),
                 page,
                 per_page: perPage,
                 without_summary: includeSummary ? undefined : 1,
@@ -6880,6 +6919,11 @@ const InventoryMovement = () => {
     const importQuickAttributeOptions = useMemo(
         () => buildImportQuickFilterAttributes(allAttributes),
         [allAttributes]
+    );
+    const productAttributeFilterCount = useMemo(
+        () => Object.values(normalizeImportQuickAttributeFilters(productFilters.attributes))
+            .reduce((total, values) => total + values.length, 0),
+        [productFilters.attributes]
     );
     const getCategoryNameById = (categoryId) => categories.find((category) => String(category.id) === String(categoryId))?.name || (String(categoryId) === 'uncategorized' ? 'Chưa gắn danh mục' : String(categoryId || ''));
     const getImportStatusNameById = (statusId) => importStatuses.find((status) => String(status.id) === String(statusId))?.name || String(statusId || '');
@@ -7160,7 +7204,7 @@ const InventoryMovement = () => {
         buildFilterChip('products_stock_alert', 'Cảnh báo tồn', summarizeOptionLabels(productStockAlertFilterOptions, productFilters.stock_alert), () => clearProductFilter('stock_alert')),
         buildFilterChip('products_type', 'Loại sản phẩm', summarizeOptionLabels(productTypeFilterOptions, productFilters.type), () => clearProductFilter('type')),
         buildFilterChip('products_category', 'Danh mục', summarizeOptionLabels(productCategoryFilterOptions, productFilters.category_id), () => clearProductFilter('category_id')),
-        buildFilterChip('products_variant_scope', 'Biến thể', summarizeOptionLabels(productVariantScopeFilterOptions, productFilters.variant_scope), () => clearProductFilter('variant_scope')),
+        buildFilterChip('products_attributes', 'Thuộc tính', summarizeAttributeFilterLabels(importQuickAttributeOptions, productFilters.attributes), () => clearProductFilter('attributes')),
         buildFilterChip('products_import_starred', 'Lọc nhanh', productFilters.import_starred === '1' ? 'Đã khai báo' : '', () => clearProductFilter('import_starred')),
         buildFilterChip('products_tracking_mode', 'Theo dõi nhập', productFilters.tracking_mode === '1' ? `Mã đi ${INVENTORY_TRACKING_WINDOW_DAYS} ngày` : '', () => clearProductFilter('tracking_mode')),
         buildFilterChip('products_tracking_daily_min', 'TB/ngày từ', productFilters.tracking_mode === '1' ? (productFilters.tracking_daily_min || defaultProductFilters.tracking_daily_min) : '', () => clearProductFilter('tracking_daily_min')),
@@ -9076,7 +9120,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             { label: 'SL hoàn chờ về', value: formatNumber(productSummary.total_pending_return || 0) },
             { label: 'Có thể bán', value: formatNumber(productSummary.total_actual_stock ?? productSummary.total_sellable_stock ?? 0) },
             ...trackingItems,
-            { label: 'Tổng giá trị tồn kho', value: formatCurrency(productSummary.total_inventory_value || 0) },
+            { label: 'Tổng giá trị tồn kho', value: formatCurrency(productSummary.total_inventory_value || 0), note: 'Tính theo Có thể bán = Tồn kho - SL chờ xuất' },
             { label: 'Tổng mã', value: formatNumber(productSummary.total_products) },
             { label: 'Tổng nhập', value: formatNumber(productSummary.total_imported) },
             { label: 'Tổng xuất', value: formatNumber(productSummary.total_exported) },
@@ -9103,7 +9147,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             pending_return_quantity: { value: formatNumber(productSummary.total_pending_return || 0), title: 'Tổng số lượng hoàn chờ về theo bộ lọc' },
             actual_stock: { value: formatNumber(productSummary.total_actual_stock ?? productSummary.total_sellable_stock ?? 0), title: 'Tổng có thể bán theo bộ lọc', strong: true },
             tracking_status: { value: showProductTrackingColumns ? `${formatNumber(productSummary.tracking_needs_restock_products || 0)} cần nhập` : '', title: 'Số mã cần nhập theo bộ lọc' },
-            inventory_value: { value: formatCurrency(productSummary.total_inventory_value || 0), title: 'Tổng giá trị tồn kho theo bộ lọc', strong: true },
+            inventory_value: { value: formatCurrency(productSummary.total_inventory_value || 0), title: 'Tính theo Có thể bán = Tồn kho - SL chờ xuất, rồi nhân giá nhập.', strong: true },
         };
     }, [productPagination.total, productSummary, showProductTrackingColumns]);
 
@@ -9205,6 +9249,11 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             const nameValue = String(row.name || '').trim();
             const copyBaseId = String(row.product_id || row.id || row.sku || row.name || 'product');
             const productId = Number(row?.id || 0);
+            const isParentProduct = Boolean(row.is_parent_product || row.has_variants || Number(row.variant_count || 0) > 0);
+            const parentVariantCount = Number(row.variant_count || 0);
+            const parentProductTitle = parentVariantCount > 0
+                ? `Sản phẩm cha, tồn kho cộng từ ${formatNumber(parentVariantCount)} sản phẩm con`
+                : 'Sản phẩm cha';
             const starLoading = importStarLoadingProductIds.includes(productId);
             const productImportStarred = Boolean(row.inventory_import_starred);
             const handleProductStarClick = (event) => {
@@ -9240,25 +9289,33 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                     <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0 flex-1">
                             <div className="flex items-start gap-2">
+                                <div className="min-w-0 flex-1 whitespace-normal break-words text-[13px] font-semibold leading-[1.35] text-primary" title={row.name || '-'}>
+                                    {row.name || '-'}
+                                </div>
+                                {nameValue ? (
+                                    <button
+                                        type="button"
+                                        onClick={(event) => { void handleCopyProductCellValue(nameValue, 'tên sản phẩm', event, `${copyBaseId}-name`); }}
+                                        className={`inline-flex size-5 shrink-0 items-center justify-center rounded-sm transition-all ${copiedProductCellId === `${copyBaseId}-name` ? 'text-green-600 opacity-100' : 'text-primary/20 opacity-0 group-hover/productcell:opacity-100 hover:text-primary'}`}
+                                        title="Sao chép tên sản phẩm"
+                                    >
+                                        <span className="material-symbols-outlined text-[14px]">{copiedProductCellId === `${copyBaseId}-name` ? 'check' : 'content_copy'}</span>
+                                    </button>
+                                ) : null}
+                            </div>
+                            <div className="mt-1 flex items-center gap-2">
                                 <div className="min-w-0 flex flex-1 flex-wrap items-center gap-2">
-                                    <span className="truncate font-mono text-[12px] font-black text-primary">{row.sku || 'Chưa có mã'}</span>
-                                    <span className={`rounded-sm border px-2 py-0.5 text-[10px] font-black ${stockMeta.badgeClass}`}>{stockMeta.label}</span>
-                                    {productDeclarationModeActive ? (
-                                        <button
-                                            type="button"
-                                            onClick={handleProductStarClick}
-                                            disabled={starLoading}
-                                            className={`inline-flex h-6 items-center gap-1 rounded-sm border px-2 text-[10px] font-black transition disabled:cursor-not-allowed disabled:opacity-50 ${
-                                                productImportStarred
-                                                    ? 'border-amber-300 bg-amber-100 text-amber-800'
-                                                    : 'border-primary/15 bg-white text-primary/65 hover:border-amber-300 hover:bg-amber-50 hover:text-amber-700'
-                                            }`}
-                                            title={productImportStarred ? 'Bỏ khỏi lọc nhanh phiếu nhập' : 'Khai báo sản phẩm vào lọc nhanh phiếu nhập'}
+                                    <span className="truncate font-mono text-[11px] font-semibold text-primary/45" title={row.sku || 'Chưa có mã'}>{row.sku || 'Chưa có mã'}</span>
+                                    {isParentProduct ? (
+                                        <span
+                                            className="rounded-sm border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] font-black text-sky-700"
+                                            title={parentProductTitle}
                                         >
-                                            <span className="material-symbols-outlined text-[15px]">{productImportStarred ? 'star' : 'star_outline'}</span>
-                                            <span>{productImportStarred ? 'Đã lưu' : 'Khai báo'}</span>
-                                        </button>
-                                    ) : productImportStarred ? (
+                                            SP cha
+                                        </span>
+                                    ) : null}
+                                    <span className={`rounded-sm border px-2 py-0.5 text-[10px] font-black ${stockMeta.badgeClass}`}>{stockMeta.label}</span>
+                                    {!productDeclarationModeActive && productImportStarred ? (
                                         <span className="material-symbols-outlined text-[16px] text-amber-500" title="Đã khai báo lọc nhanh phiếu nhập">star</span>
                                     ) : null}
                                     {showProductTrackingColumns && trackingDemandQuantity > 0 ? (
@@ -9281,27 +9338,13 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                                     </button>
                                 ) : null}
                             </div>
-                            <div className="mt-1 flex items-start gap-2">
-                                <div className="min-w-0 flex-1 whitespace-normal break-words text-[13px] font-semibold leading-[1.35] text-primary" title={row.name || '-'}>
-                                    {row.name || '-'}
-                                </div>
-                                {nameValue ? (
-                                    <button
-                                        type="button"
-                                        onClick={(event) => { void handleCopyProductCellValue(nameValue, 'tên sản phẩm', event, `${copyBaseId}-name`); }}
-                                        className={`inline-flex size-5 shrink-0 items-center justify-center rounded-sm transition-all ${copiedProductCellId === `${copyBaseId}-name` ? 'text-green-600 opacity-100' : 'text-primary/20 opacity-0 group-hover/productcell:opacity-100 hover:text-primary'}`}
-                                        title="Sao chép tên sản phẩm"
-                                    >
-                                        <span className="material-symbols-outlined text-[14px]">{copiedProductCellId === `${copyBaseId}-name` ? 'check' : 'content_copy'}</span>
-                                    </button>
-                                ) : null}
-                            </div>
                         </div>
                         {productDeclarationModeActive ? (
                             <button
                                 type="button"
                                 onClick={handleProductStarClick}
                                 disabled={starLoading}
+                                aria-label={productImportStarred ? 'Bỏ khỏi lọc nhanh phiếu nhập' : 'Khai báo sản phẩm vào lọc nhanh phiếu nhập'}
                                 className={`mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-sm border transition disabled:cursor-not-allowed disabled:opacity-50 ${
                                     productImportStarred
                                         ? 'border-amber-300 bg-amber-100 text-amber-800'
@@ -9415,7 +9458,8 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                     type="button"
                     onClick={() => { void toggleInventoryProductImportStar(row); }}
                     disabled={starLoading}
-                    className={`inline-flex h-8 items-center justify-center gap-1 rounded-sm border px-2 text-[12px] font-bold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                    aria-label={row.inventory_import_starred ? 'Bỏ khỏi lọc nhanh phiếu nhập' : 'Khai báo sản phẩm vào lọc nhanh phiếu nhập'}
+                    className={`inline-flex size-8 shrink-0 items-center justify-center rounded-sm border transition disabled:cursor-not-allowed disabled:opacity-50 ${
                         row.inventory_import_starred
                             ? 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100'
                             : 'border-primary/15 bg-white text-primary hover:border-amber-200 hover:bg-amber-50 hover:text-amber-700'
@@ -9423,7 +9467,6 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                     title={row.inventory_import_starred ? 'Bỏ khỏi lọc nhanh phiếu nhập' : 'Khai báo sản phẩm vào lọc nhanh phiếu nhập'}
                 >
                     <span className="material-symbols-outlined text-[17px]">{row.inventory_import_starred ? 'star' : 'star_outline'}</span>
-                    <span>{row.inventory_import_starred ? 'Đã lưu' : 'Khai báo'}</span>
                 </button>
                 <button type="button" onClick={() => openStockAdjustmentModal([row])} className={ghostButton}>Điều chỉnh</button>
             </div>
@@ -10286,15 +10329,15 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             <button
                 type="button"
                 onClick={toggleProductDeclarationMode}
-                className={`inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-sm border px-3 text-[12px] font-black transition ${
+                aria-label={productDeclarationModeActive ? 'Tắt chế độ khai báo lọc nhanh' : 'Bật chế độ khai báo sản phẩm lọc nhanh'}
+                className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-sm border text-[12px] font-black transition ${
                     productDeclarationModeActive
                         ? 'border-amber-300 bg-amber-100 text-amber-800 shadow-sm'
                         : 'border-amber-200 bg-amber-50 text-amber-700 hover:border-amber-300 hover:bg-amber-100'
                 }`}
                 title={productDeclarationModeActive ? 'Tắt chế độ khai báo lọc nhanh' : 'Bật chế độ khai báo sản phẩm lọc nhanh'}
             >
-                <span className="material-symbols-outlined text-[17px]">star</span>
-                <span className="truncate">{productDeclarationModeActive ? 'Đang khai báo' : 'Khai báo'}</span>
+                <span className="material-symbols-outlined text-[18px]">star</span>
             </button>
         </>
     );
@@ -10444,12 +10487,14 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                         menuClassName="w-[360px]"
                         searchable
                     />
-                    <InventoryMultiSelectFilter
-                        value={productFilters.variant_scope}
-                        onChange={(value) => updateProductFilterValue('variant_scope', value)}
-                        options={productVariantScopeFilterOptions}
-                        placeholder="Có biến thể / không"
-                        className="w-[150px] shrink-0"
+                    <ImportQuickAttributeFilterDropdown
+                        attributes={importQuickAttributeOptions}
+                        value={productFilters.attributes}
+                        onChange={(value) => updateProductFilterValue('attributes', value)}
+                        className="relative min-w-0 shrink-0"
+                        buttonClassName={`flex h-8 w-[150px] items-center justify-between gap-2 rounded-sm border bg-white px-3 text-[12px] font-bold shadow-sm transition hover:border-primary/30 ${productAttributeFilterCount ? 'border-emerald-200 text-emerald-700' : 'border-primary/15 text-primary'}`}
+                        menuClassName="absolute right-0 top-[calc(100%+6px)] z-[145] w-[380px] max-w-[calc(100vw-2rem)] rounded-sm border border-primary/15 bg-white p-3 shadow-2xl"
+                        label="Thuộc tính"
                     />
                     <select value={productFilters.tracking_mode} onChange={(event) => updateProductFilterValue('tracking_mode', event.target.value)} className={`w-[130px] shrink-0 ${selectClass}`}>
                         <option value="">Tất cả mã</option>

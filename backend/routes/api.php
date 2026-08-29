@@ -665,6 +665,8 @@ Route::post('/blog/import-excel', [\App\Http\Controllers\Api\BlogController::cla
         // --- Finance & Funds (Sổ Cái Dòng Tiền) ---
         Route::prefix('finance/funds')->group(function () {
             Route::get('summary', [\App\Http\Controllers\FundController::class, 'summary']);
+            Route::get('asset-summary', [\App\Http\Controllers\FundController::class, 'assetSummary']);
+            Route::put('asset-summary/settings', [\App\Http\Controllers\FundController::class, 'saveAssetSummarySettings']);
             Route::get('accounts', [\App\Http\Controllers\FundController::class, 'accounts']);
             Route::post('accounts', [\App\Http\Controllers\FundController::class, 'saveAccount']);
             Route::delete('accounts/{id}', [\App\Http\Controllers\FundController::class, 'deleteAccount']);

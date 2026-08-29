@@ -311,7 +311,7 @@ class QuickReplyGalleryController extends Controller
         try {
             $this->pruneTempDirectories();
             $paths = $this->exportImagesForClipboard($images);
-            $this->sendImagePathsToOpenZaloChat($paths);
+            $this->sendImagePathsToOpenZaloChat($paths, $this->zaloTarget($request));
             $this->recordImageUse($images);
 
             return response()->json([
@@ -505,7 +505,7 @@ class QuickReplyGalleryController extends Controller
         }
     }
 
-    private function sendImagePathsToOpenZaloChat(array $paths): void
+    private function sendImagePathsToOpenZaloChat(array $paths, string $zaloTarget = 'pc'): void
     {
         $paths = array_values(array_filter($paths, fn (string $path) => is_file($path)));
         if ($paths === []) {
@@ -521,7 +521,8 @@ class QuickReplyGalleryController extends Controller
         $payloadPath = $root . DIRECTORY_SEPARATOR . 'send-gallery-images-' . Str::lower(Str::random(12)) . '.json';
         File::put($scriptPath, $this->zaloPastePythonScript());
         File::put($payloadPath, json_encode([
-            'window_keywords' => $this->zaloWindowKeywords(),
+            'zalo_target' => $zaloTarget,
+            'window_keywords' => $this->zaloWindowKeywords($zaloTarget),
             'paste_delay_ms' => (int) env('QUICK_REPLY_ZALO_IMAGE_PASTE_DELAY_MS', 1600),
         ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
 
@@ -646,16 +647,31 @@ class QuickReplyGalleryController extends Controller
             ->max('sort_order')) + 1;
     }
 
-    private function zaloWindowKeywords(): array
+    private function zaloWindowKeywords(string $target = 'pc'): array
     {
-        $raw = trim((string) env('QUICK_REPLY_ZALO_WINDOW_KEYWORDS', 'Zalo'));
+        $target = $this->normalizeZaloTarget($target);
+        $raw = $target === 'web'
+            ? trim((string) env('QUICK_REPLY_ZALO_WEB_WINDOW_KEYWORDS', 'Zalo - Google Chrome,My Z.com - Google Chrome,chat.zalo.me - Google Chrome,web.zalo.me - Google Chrome'))
+            : trim((string) env('QUICK_REPLY_ZALO_WINDOW_KEYWORDS', 'Zalo'));
         $keywords = preg_split('/[,;|]+/', $raw) ?: [];
 
         return collect($keywords)
             ->map(fn ($keyword) => trim((string) $keyword))
             ->filter()
             ->values()
-            ->all() ?: ['Zalo'];
+            ->all() ?: ($target === 'web' ? ['Zalo - Google Chrome', 'My Z.com - Google Chrome'] : ['Zalo']);
+    }
+
+    private function zaloTarget(Request $request): string
+    {
+        return $this->normalizeZaloTarget($request->input('zalo_target', $request->input('target', 'pc')));
+    }
+
+    private function normalizeZaloTarget($target): string
+    {
+        $normalized = Str::lower(trim((string) $target));
+
+        return in_array($normalized, ['web', 'chrome', 'zalo_web', 'zalo-web'], true) ? 'web' : 'pc';
     }
 
     private function clipboardPythonExecutable(): string
@@ -946,18 +962,28 @@ keybd_event = user32.keybd_event
 keybd_event.argtypes = [wintypes.BYTE, wintypes.BYTE, wintypes.DWORD, wintypes.ULONG]
 keybd_event.restype = None
 
-BROWSER_TITLE_PARTS = [
+WEB_BROWSER_TITLE_PARTS = [
     "google chrome",
     "chrome",
     "microsoft edge",
     "edge",
     "firefox",
     "coc coc",
+]
+
+QUICK_REPLY_TITLE_PARTS = [
     "trả lời nhanh",
     "tra loi nhanh",
     "quick-replies",
     "localhost",
     "sidebar",
+]
+
+ZALO_WEB_TITLE_PARTS = [
+    "zalo",
+    "my z.com",
+    "chat.zalo.me",
+    "web.zalo.me",
 ]
 
 
@@ -970,15 +996,26 @@ def window_title(hwnd):
     return buffer.value
 
 
+def wants_web_target(target):
+    normalized = str(target or "pc").strip().lower()
+    return normalized in ("web", "chrome", "zalo_web", "zalo-web")
+
+
 def looks_like_browser(title):
     lowered = str(title or "").lower()
-    return any(part in lowered for part in BROWSER_TITLE_PARTS)
+    return any(part in lowered for part in WEB_BROWSER_TITLE_PARTS)
 
 
-def find_zalo_window(keywords):
+def looks_like_quick_reply_window(title):
+    lowered = str(title or "").lower()
+    return any(part in lowered for part in QUICK_REPLY_TITLE_PARTS)
+
+
+def find_zalo_window(keywords, target="pc"):
     needles = [str(item).lower() for item in keywords if str(item).strip()]
+    target_web = wants_web_target(target)
     if not needles:
-        needles = ["zalo"]
+        needles = ["zalo"] if not target_web else ["zalo - google chrome", "my z.com - google chrome", "chat.zalo.me", "web.zalo.me"]
 
     matches = []
     fallback = []
@@ -993,7 +1030,12 @@ def find_zalo_window(keywords):
         lowered = title.lower()
         if any(needle in lowered for needle in needles):
             item = (hwnd, title)
-            if looks_like_browser(title):
+            if target_web:
+                if looks_like_browser(title) and not looks_like_quick_reply_window(title):
+                    matches.append(item)
+                else:
+                    fallback.append(item)
+            elif looks_like_browser(title):
                 fallback.append(item)
             else:
                 matches.append(item)
@@ -1001,14 +1043,22 @@ def find_zalo_window(keywords):
 
     user32.EnumWindows(callback, 0)
     if not matches:
+        if target_web:
+            if fallback:
+                raise RuntimeError("Đang thấy cửa sổ có chữ Zalo nhưng chưa đúng Zalo Web Chrome. Hãy mở tab Zalo web trên Chrome rồi thử lại.")
+            raise RuntimeError("Không tìm thấy cửa sổ Zalo Web Chrome. Hãy mở Zalo web trên Chrome rồi thử lại.")
         if fallback:
             raise RuntimeError("Đang chỉ thấy cửa sổ trình duyệt/panel có chữ Zalo, chưa thấy Zalo Desktop. Hãy mở Zalo Desktop rồi thử lại.")
         raise RuntimeError("Không tìm thấy cửa sổ Zalo. Hãy mở đúng khung chat Zalo rồi thử lại.")
 
+    if target_web:
+        chrome = [item for item in matches if "google chrome" in item[1].lower()]
+        zalo_web = [item for item in matches if any(part in item[1].lower() for part in ZALO_WEB_TITLE_PARTS)]
+        return (chrome or zalo_web or matches)[0]
+
     exact = [item for item in matches if item[1].strip().lower() == "zalo"]
     starts_with_zalo = [item for item in matches if item[1].strip().lower().startswith("zalo")]
     return (exact or starts_with_zalo or matches)[0]
-
 
 def focus_window(hwnd, title):
     ShowWindow(hwnd, SW_RESTORE)
@@ -1090,7 +1140,7 @@ def main():
     with open(sys.argv[1], "r", encoding="utf-8") as handle:
         payload = json.load(handle)
 
-    hwnd, title = find_zalo_window(payload.get("window_keywords") or ["Zalo"])
+    hwnd, title = find_zalo_window(payload.get("window_keywords") or ["Zalo"], payload.get("zalo_target") or "pc")
     focus_window(hwnd, title)
     click_chat_input(hwnd)
     ctrl_v()

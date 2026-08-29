@@ -2159,6 +2159,115 @@ class OrderController extends Controller
             });
     }
 
+    private function hasSubmittedOrderItemPrice(array $item): bool
+    {
+        return array_key_exists('price', $item)
+            && $item['price'] !== null
+            && $item['price'] !== ''
+            && is_numeric($item['price']);
+    }
+
+    private function normalizeOrderItemOptionsSignatureValue(mixed $value): mixed
+    {
+        if (is_string($value)) {
+            $decoded = json_decode($value, true);
+            if (json_last_error() === JSON_ERROR_NONE) {
+                return $this->normalizeOrderItemOptionsSignatureValue($decoded);
+            }
+
+            return $value;
+        }
+
+        if (!is_array($value)) {
+            return $value;
+        }
+
+        $normalized = [];
+        foreach ($value as $key => $childValue) {
+            $normalized[$key] = $this->normalizeOrderItemOptionsSignatureValue($childValue);
+        }
+
+        ksort($normalized);
+
+        return $normalized;
+    }
+
+    private function orderItemPricePreservationKey(mixed $productId, mixed $actualProductId = null, mixed $options = null): string
+    {
+        return implode('|', [
+            (int) $productId,
+            (int) ($actualProductId ?? 0),
+            md5(json_encode(
+                $this->normalizeOrderItemOptionsSignatureValue($options ?? []),
+                JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+            ) ?: ''),
+        ]);
+    }
+
+    private function submittedOrderItemId(array $item): int
+    {
+        $orderItemId = (int) ($item['order_item_id'] ?? 0);
+        if ($orderItemId > 0) {
+            return $orderItemId;
+        }
+
+        $lineId = trim((string) ($item['line_id'] ?? ''));
+        if (preg_match('/^saved-(\d+)$/', $lineId, $matches)) {
+            return (int) $matches[1];
+        }
+
+        return 0;
+    }
+
+    private function hydrateMissingOrderItemPricesFromStoredOrder(Order $order, array $rawItems): array
+    {
+        if (empty($rawItems)) {
+            return $rawItems;
+        }
+
+        $order->loadMissing('items');
+        $existingItemsById = $order->items->keyBy(fn (OrderItem $item) => (int) $item->id);
+        $existingPriceBuckets = [];
+
+        foreach ($order->items as $existingItem) {
+            $key = $this->orderItemPricePreservationKey(
+                $existingItem->product_id,
+                $existingItem->actual_product_id,
+                $existingItem->options
+            );
+            $existingPriceBuckets[$key] ??= [];
+            $existingPriceBuckets[$key][] = (float) $existingItem->price;
+        }
+
+        return collect($rawItems)
+            ->map(function ($item) use ($existingItemsById, &$existingPriceBuckets) {
+                if (!is_array($item) || $this->hasSubmittedOrderItemPrice($item)) {
+                    return $item;
+                }
+
+                $orderItemId = $this->submittedOrderItemId($item);
+                $existingItem = $orderItemId > 0 ? $existingItemsById->get($orderItemId) : null;
+                if ($existingItem) {
+                    $item['price'] = (float) $existingItem->price;
+
+                    return $item;
+                }
+
+                $key = $this->orderItemPricePreservationKey(
+                    $item['product_id'] ?? 0,
+                    $item['actual_product_id'] ?? null,
+                    $item['options'] ?? null
+                );
+
+                if (!empty($existingPriceBuckets[$key])) {
+                    $item['price'] = array_shift($existingPriceBuckets[$key]);
+                }
+
+                return $item;
+            })
+            ->all();
+    }
+
     private function syncManualOrderItems(Order $order, array $rawItems, bool $allowEmptyItems = false): array
     {
         $normalizedItems = $this->normalizeOrderedOrderItems($rawItems);
@@ -5941,6 +6050,11 @@ class OrderController extends Controller
         $order->update($data);
 
         if ($request->has('items')) {
+            $rawItems = $this->hydrateMissingOrderItemPricesFromStoredOrder(
+                $order,
+                (array) $request->input('items', [])
+            );
+
             if ($this->shouldManageInventory($currentKind)) {
                 $this->releaseInventoryIfNeeded($order->forceFill(['order_kind' => $currentKind]));
             }
@@ -5950,7 +6064,7 @@ class OrderController extends Controller
                 : $requestedKind;
             $inventorySummary = $this->syncOrderItems(
                 $order,
-                (array) $request->input('items', []),
+                $rawItems,
                 $itemSyncKind,
                 $this->shouldManageInventory($itemSyncKind)
             );

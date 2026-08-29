@@ -51,7 +51,7 @@ const AdminLayout = () => {
         location.pathname.startsWith('/admin/product-faqs') ||
         location.pathname.startsWith('/admin/blog');
     const isInventoryRoute = location.pathname.startsWith('/admin/inventory');
-    const isFundRoute = location.pathname === '/admin/finance/funds';
+    const isFundRoute = location.pathname === '/admin/finance/funds' || location.pathname === '/admin/finance/assets';
 
     const [isSettingsOpen, setIsSettingsOpen] = React.useState(isSettingsRoute);
     const [isOrdersOpen, setIsOrdersOpen] = React.useState(isOrdersRoute);
@@ -922,6 +922,18 @@ const AdminLayout = () => {
                             Sổ nợ
                         </SidebarText>
                     </Link>
+
+                    <Link
+                        to="/admin/finance/assets"
+                        aria-label="Tổng tài sản"
+                        title={collapsedTitle('Tổng tài sản')}
+                        className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname === '/admin/finance/assets' ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
+                    >
+                        <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/finance/assets' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>monitoring</span>
+                        <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
+                            Tổng tài sản
+                        </SidebarText>
+                    </Link>
                 </nav>
 
                 <div className={`mt-auto border-t border-white/10 p-4 transition-all duration-300 ease-out ${isSidebarExpanded ? '' : 'px-3'}`}>
@@ -960,7 +972,7 @@ const AdminLayout = () => {
                         </button>
                     </div>
                 )}
-                <div className={`relative flex-grow min-h-0 ${isOrderForm ? 'h-full overflow-auto p-0' : location.pathname === '/admin/leads' || location.pathname === '/admin/telesales' || location.pathname === '/admin/quick-replies' ? 'overflow-auto p-0' : location.pathname === '/admin/finance/funds' ? 'overflow-auto p-0 sm:p-4 md:p-6 lg:p-8' : isInventoryRoute ? 'overflow-auto p-4 md:p-5' : 'overflow-auto p-8'}`}>
+                <div className={`relative flex-grow min-h-0 ${isOrderForm ? 'h-full overflow-auto p-0' : location.pathname === '/admin/leads' || location.pathname === '/admin/telesales' || location.pathname === '/admin/quick-replies' ? 'overflow-auto p-0' : isFundRoute ? 'overflow-auto p-0 sm:p-4 md:p-6 lg:p-8' : isInventoryRoute ? 'overflow-auto p-4 md:p-5' : 'overflow-auto p-8'}`}>
                     {(() => {
                         const permNeeded = getCurrentPermId();
                         if (permNeeded && !canAccess(permNeeded)) {

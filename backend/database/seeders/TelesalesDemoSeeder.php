@@ -5,7 +5,9 @@ namespace Database\Seeders;
 use App\Models\Account;
 use App\Models\Lead;
 use App\Models\LeadFollowUpTask;
+use App\Models\LeadItem;
 use App\Models\LeadNote;
+use App\Models\LeadNotificationRead;
 use App\Models\LeadPotential;
 use App\Models\LeadStaff;
 use App\Models\LeadStatus;
@@ -17,11 +19,19 @@ use Illuminate\Support\Facades\Schema;
 class TelesalesDemoSeeder extends Seeder
 {
     private const DEMO_TAG = 'CRM-DEMO-TEST';
-    private const PER_ACCOUNT_COUNT = 80;
+    private const DEFAULT_PER_ACCOUNT_COUNT = 50;
 
     public function run(): void
     {
         $targetAccountId = (int) env('TELESALES_DEMO_ACCOUNT_ID', 0);
+        $count = max(1, min((int) env('TELESALES_DEMO_COUNT', self::DEFAULT_PER_ACCOUNT_COUNT), 500));
+        $clearAll = filter_var(env('TELESALES_DEMO_CLEAR_ALL', false), FILTER_VALIDATE_BOOLEAN);
+
+        if ($clearAll && $targetAccountId <= 0) {
+            $this->command?->error('TELESALES_DEMO_CLEAR_ALL can only be used with TELESALES_DEMO_ACCOUNT_ID.');
+            return;
+        }
+
         $accounts = Account::query()
             ->when($targetAccountId > 0, fn ($query) => $query->where('id', $targetAccountId))
             ->where('status', true)
@@ -34,22 +44,26 @@ class TelesalesDemoSeeder extends Seeder
         }
 
         foreach ($accounts as $account) {
-            $createdCount = $this->seedAccount((int) $account->id);
+            $createdCount = $this->seedAccount((int) $account->id, $count, $clearAll);
             $this->command?->info("Da tao {$createdCount} khach CRM demo cho account #{$account->id} - {$account->name}.");
         }
     }
 
-    private function seedAccount(int $accountId): int
+    private function seedAccount(int $accountId, int $count, bool $clearAll): int
     {
-        $this->clearExistingDemoLeads($accountId);
+        if ($clearAll) {
+            $this->clearAccountLeads($accountId);
+        } else {
+            $this->clearExistingDemoLeads($accountId);
+        }
 
         $statuses = LeadStatus::ensureDefaultsForAccount($accountId)->keyBy('code');
-        $potentials = LeadPotential::ensureDefaultsForAccount($accountId);
+        $potentials = $this->ensureDemoPotentials($accountId);
         $staffs = $this->ensureStaffs($accountId);
         $now = now();
         $created = 0;
 
-        for ($index = 1; $index <= self::PER_ACCOUNT_COUNT; $index++) {
+        for ($index = 1; $index <= $count; $index++) {
             $case = $this->caseForIndex($index);
             $status = $this->statusForCase($statuses, $case);
             $staff = $staffs[($index - 1) % max(1, $staffs->count())] ?? null;
@@ -123,22 +137,48 @@ class TelesalesDemoSeeder extends Seeder
             ->where('tag', self::DEMO_TAG)
             ->pluck('id');
 
-        if ($demoLeadIds->isEmpty()) {
+        $this->deleteLeadsByIds($demoLeadIds);
+    }
+
+    private function clearAccountLeads(int $accountId): void
+    {
+        $leadIds = Lead::withoutGlobalScopes()
+            ->where('account_id', $accountId)
+            ->pluck('id');
+
+        $this->deleteLeadsByIds($leadIds);
+    }
+
+    private function deleteLeadsByIds(Collection $leadIds): void
+    {
+        if ($leadIds->isEmpty()) {
             return;
         }
 
         LeadNote::withoutGlobalScopes()
-            ->whereIn('lead_id', $demoLeadIds)
+            ->whereIn('lead_id', $leadIds)
             ->delete();
+
+        if (Schema::hasTable('lead_items')) {
+            LeadItem::withoutGlobalScopes()
+                ->whereIn('lead_id', $leadIds)
+                ->delete();
+        }
+
+        if (Schema::hasTable('lead_notification_reads')) {
+            LeadNotificationRead::query()
+                ->whereIn('lead_id', $leadIds)
+                ->delete();
+        }
 
         if (Schema::hasTable('lead_follow_up_tasks')) {
             LeadFollowUpTask::withoutGlobalScopes()
-                ->whereIn('lead_id', $demoLeadIds)
+                ->whereIn('lead_id', $leadIds)
                 ->delete();
         }
 
         Lead::withoutGlobalScopes()
-            ->whereIn('id', $demoLeadIds)
+            ->whereIn('id', $leadIds)
             ->get()
             ->each(fn (Lead $lead) => $lead->forceDelete());
     }
@@ -157,6 +197,40 @@ class TelesalesDemoSeeder extends Seeder
                 ]);
             })
             ->values();
+    }
+
+    private function ensureDemoPotentials(int $accountId): Collection
+    {
+        $definitions = collect(LeadPotential::defaultDefinitions());
+        $defaultCodes = $definitions->pluck('code')->all();
+
+        LeadPotential::ensureDefaultsForAccount($accountId);
+
+        foreach ($definitions as $definition) {
+            LeadPotential::withoutGlobalScopes()->updateOrCreate([
+                'account_id' => $accountId,
+                'code' => $definition['code'],
+            ], [
+                'name' => $definition['name'],
+                'color' => $definition['color'],
+                'sort_order' => $definition['sort_order'],
+                'is_default' => $definition['is_default'],
+                'counts_as_potential' => $definition['counts_as_potential'],
+                'is_active' => true,
+            ]);
+        }
+
+        LeadPotential::withoutGlobalScopes()
+            ->where('account_id', $accountId)
+            ->whereNotIn('code', $defaultCodes)
+            ->update(['is_active' => false]);
+
+        return LeadPotential::withoutGlobalScopes()
+            ->where('account_id', $accountId)
+            ->whereIn('code', $defaultCodes)
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->get();
     }
 
     private function caseForIndex(int $index): array

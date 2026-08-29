@@ -49,6 +49,30 @@ const GALLERY_FILTERS = [
 ];
 
 const SIDEBAR_BROWSER_KEYWORDS = ['Trả lời nhanh Zalo Sidebar', 'Trả lời nhanh', 'quick-replies', 'localhost'];
+const ZALO_TARGET_STORAGE_KEY = 'quick-replies-zalo-target';
+const ZALO_TARGET_OPTIONS = [
+    { value: 'pc', label: 'Zalo PC', shortLabel: 'PC', icon: 'desktop_windows' },
+    { value: 'web', label: 'Zalo Web', shortLabel: 'Web', icon: 'language' },
+];
+
+const normalizeZaloTarget = (value) => (String(value || '').trim().toLowerCase() === 'web' ? 'web' : 'pc');
+
+const readInitialZaloTarget = () => {
+    if (typeof window === 'undefined') {
+        return 'pc';
+    }
+
+    try {
+        const urlTarget = new URLSearchParams(window.location.search).get('zalo_target');
+        if (urlTarget) {
+            return normalizeZaloTarget(urlTarget);
+        }
+
+        return normalizeZaloTarget(window.localStorage?.getItem(ZALO_TARGET_STORAGE_KEY));
+    } catch {
+        return 'pc';
+    }
+};
 
 const MAX_REPLY_CONTENTS = 10;
 const MAX_REPLY_IMAGES = 120;
@@ -216,6 +240,15 @@ const replyContentCount = (reply) => {
     return Math.max(validContents.length, 1);
 };
 
+const replyPreviewText = (reply) => {
+    const contents = Array.isArray(reply?.contents) ? reply.contents : [];
+    const contentText = contents
+        .map((content) => normalizeText(content?.body || content?.content))
+        .filter(Boolean)
+        .join(' ... ');
+
+    return contentText || normalizeText(reply?.body) || 'Mẫu chỉ có ảnh';
+};
 const replyFormImageCount = (replyForm) => (Array.isArray(replyForm?.contents) ? replyForm.contents : [])
     .reduce((total, content) => total + (Array.isArray(content?.images) ? content.images.length : 0), 0);
 
@@ -409,10 +442,12 @@ function QuickReplies() {
     const [saving, setSaving] = useState(false);
     const [uploading, setUploading] = useState(false);
     const [importingPancake, setImportingPancake] = useState(false);
+    const [pancakeImportPromptOpen, setPancakeImportPromptOpen] = useState(false);
     const [bulkDeleting, setBulkDeleting] = useState(false);
     const [bulkRestoring, setBulkRestoring] = useState(false);
     const [copyingId, setCopyingId] = useState(null);
     const [splittingZalo, setSplittingZalo] = useState(false);
+    const [zaloTarget, setZaloTarget] = useState(readInitialZaloTarget);
     const [copiedState, setCopiedState] = useState({ id: null, mode: '' });
     const [sendDraft, setSendDraft] = useState(null);
     const [hoveredSendContentKey, setHoveredSendContentKey] = useState(null);
@@ -430,7 +465,6 @@ function QuickReplies() {
     const [replyForm, setReplyForm] = useState(() => createEmptyReplyForm());
     const [topicForm, setTopicForm] = useState(emptyTopicForm);
     const [galleryOpen, setGalleryOpen] = useState(false);
-    const [galleryControlsOpen, setGalleryControlsOpen] = useState(false);
     const [galleryLoading, setGalleryLoading] = useState(false);
     const [galleryUploading, setGalleryUploading] = useState(false);
     const [galleryFolderSaving, setGalleryFolderSaving] = useState(false);
@@ -443,14 +477,19 @@ function QuickReplies() {
     const [galleryFolderFilter, setGalleryFolderFilter] = useState('all');
     const [galleryPage, setGalleryPage] = useState(1);
     const [galleryFolderName, setGalleryFolderName] = useState('');
+    const [galleryFolderMenu, setGalleryFolderMenu] = useState(null);
     const [selectedGalleryImageIds, setSelectedGalleryImageIds] = useState(() => new Set());
     const [galleryZoomImage, setGalleryZoomImage] = useState(null);
+    const [replyImagePreview, setReplyImagePreview] = useState(null);
+    const [replyImageHoverPreview, setReplyImageHoverPreview] = useState(null);
     const zaloMirrorObjectUrlRef = useRef('');
     const sidebarWindowRef = useRef(null);
     const pancakeImportInputRef = useRef(null);
+    const pancakeImportModeRef = useRef('merge');
     const bulkSelectAllRef = useRef(null);
     const galleryUploadInputRef = useRef(null);
     const galleryUploadAbortRef = useRef(null);
+    const replyImageClickTimerRef = useRef(null);
     const pageSize = isSidebarMode ? 20 : (pagination.per_page || 50);
     const galleryPageSize = 60;
 
@@ -462,6 +501,8 @@ function QuickReplies() {
         return topics.find((topic) => String(topic.id) === String(topicFilter)) || null;
     }, [topicFilter, topics]);
     const isTrashMode = statusFilter === 'trashed';
+    const selectedZaloTargetOption = ZALO_TARGET_OPTIONS.find((option) => option.value === zaloTarget) || ZALO_TARGET_OPTIONS[0];
+    const zaloTargetLabel = selectedZaloTargetOption.label;
     const sendDraftPayload = useMemo(() => buildSendDraftPayload(sendDraft), [sendDraft]);
     const sendDraftSelectedCount = sendDraftPayload.contents.length;
     const sendDraftTotalCount = Array.isArray(sendDraft?.contents) ? sendDraft.contents.length : 0;
@@ -500,6 +541,18 @@ function QuickReplies() {
     };
 
     useEffect(() => {
+        if (typeof window === 'undefined') {
+            return;
+        }
+
+        try {
+            window.localStorage?.setItem(ZALO_TARGET_STORAGE_KEY, zaloTarget);
+        } catch {
+            // Ignore storage errors; the selector still works for this session.
+        }
+    }, [zaloTarget]);
+
+    useEffect(() => {
         if (!isSidebarMode || typeof document === 'undefined') {
             return undefined;
         }
@@ -535,6 +588,7 @@ function QuickReplies() {
                 require_browser: false,
                 manage_browser: true,
                 browser_window_keywords: SIDEBAR_BROWSER_KEYWORDS,
+                zalo_target: zaloTarget,
             }).then((response) => {
                 setMessage(response?.data?.message || '');
                 if (!response?.data?.result?.browser_found && attempt < 6) {
@@ -564,7 +618,7 @@ function QuickReplies() {
             document.documentElement.style.overflowX = previousHtmlOverflowX;
             document.body.style.overflowX = previousBodyOverflowX;
         };
-    }, [isSidebarMode]);
+    }, [isSidebarMode, zaloTarget]);
 
     useEffect(() => {
         const controller = new AbortController();
@@ -717,9 +771,36 @@ function QuickReplies() {
         setSelectedGalleryImageIds(new Set());
     }, [galleryFolderFilter, gallerySearch]);
 
+    useEffect(() => {
+        if (!galleryFolderMenu) {
+            return undefined;
+        }
+
+        const closeMenu = () => setGalleryFolderMenu(null);
+        const closeOnEscape = (event) => {
+            if (event.key === 'Escape') {
+                closeMenu();
+            }
+        };
+
+        window.addEventListener('click', closeMenu);
+        window.addEventListener('scroll', closeMenu, true);
+        window.addEventListener('keydown', closeOnEscape);
+
+        return () => {
+            window.removeEventListener('click', closeMenu);
+            window.removeEventListener('scroll', closeMenu, true);
+            window.removeEventListener('keydown', closeOnEscape);
+        };
+    }, [galleryFolderMenu]);
+
     useEffect(() => () => {
         galleryUploadAbortRef.current?.abort();
         galleryUploadAbortRef.current = null;
+        if (replyImageClickTimerRef.current) {
+            window.clearTimeout(replyImageClickTimerRef.current);
+            replyImageClickTimerRef.current = null;
+        }
     }, []);
 
     const updateReplyInList = (reply) => {
@@ -825,7 +906,6 @@ function QuickReplies() {
 
     const openGallery = () => {
         setGalleryOpen(true);
-        setGalleryControlsOpen(false);
         setGalleryPage(1);
         setError('');
         setMessage('');
@@ -850,12 +930,69 @@ function QuickReplies() {
         }
 
         setGalleryZoomImage(null);
+        setGalleryFolderMenu(null);
         setGalleryOpen(false);
     };
 
     const selectGalleryFolder = (folderId) => {
+        setGalleryFolderMenu(null);
         setGalleryFolderFilter(folderId);
         setGalleryPage(1);
+    };
+
+    const openGalleryFolderMenu = (event, folder) => {
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (!folder?.id) {
+            return;
+        }
+
+        const menuWidth = 132;
+        const menuHeight = 76;
+        const viewportWidth = window.innerWidth || document.documentElement.clientWidth || menuWidth;
+        const viewportHeight = window.innerHeight || document.documentElement.clientHeight || menuHeight;
+        const x = Math.max(8, Math.min(event.clientX, viewportWidth - menuWidth - 8));
+        const y = Math.max(8, Math.min(event.clientY, viewportHeight - menuHeight - 8));
+
+        setGalleryFolderMenu({ folder, x, y });
+    };
+
+    const renameGalleryFolder = async (folder) => {
+        setGalleryFolderMenu(null);
+
+        if (!folder?.id || galleryBusy) {
+            return;
+        }
+
+        const nextNameInput = window.prompt('Đổi tên thư mục ảnh', folder.name || '');
+        if (nextNameInput === null) {
+            return;
+        }
+
+        const name = normalizeText(nextNameInput);
+        if (!name) {
+            setError('Nhập tên thư mục ảnh.');
+            return;
+        }
+
+        if (name === normalizeText(folder.name)) {
+            return;
+        }
+
+        setGalleryFolderSaving(true);
+        setError('');
+        setMessage('');
+
+        try {
+            const response = await quickReplyApi.updateGalleryFolder(folder.id, { name });
+            setMessage(response?.data?.message || 'Đã đổi tên thư mục ảnh.');
+            await refreshGallery();
+        } catch (err) {
+            setError(err?.response?.data?.message || 'Không đổi tên được thư mục ảnh.');
+        } finally {
+            setGalleryFolderSaving(false);
+        }
     };
 
     const createGalleryFolder = async (event) => {
@@ -894,6 +1031,8 @@ function QuickReplies() {
     };
 
     const deleteGalleryFolder = async (folder) => {
+        setGalleryFolderMenu(null);
+
         if (!folder?.id || !window.confirm(`Xóa thư mục ${folder.name}? Ảnh trong thư mục vẫn được giữ lại trong Tất cả ảnh.`)) {
             return;
         }
@@ -1098,7 +1237,7 @@ function QuickReplies() {
         setMessage('Đang gửi ảnh sang chat Zalo đang mở...');
 
         try {
-            const response = await quickReplyApi.sendGalleryImagesToZalo({ ids });
+            const response = await quickReplyApi.sendGalleryImagesToZalo({ ids, zalo_target: zaloTarget });
             setMessage(response?.data?.message || `Đã gửi ${ids.length} ảnh sang Zalo.`);
             await refreshGallery();
         } catch (err) {
@@ -1452,6 +1591,12 @@ function QuickReplies() {
         }
     };
 
+    const choosePancakeImportMode = (mode) => {
+        pancakeImportModeRef.current = mode === 'replace' ? 'replace' : 'merge';
+        setPancakeImportPromptOpen(false);
+        window.setTimeout(() => pancakeImportInputRef.current?.click(), 0);
+    };
+
     const importPancakeExcel = async (files) => {
         const file = Array.from(files || [])[0];
         if (!file) {
@@ -1463,12 +1608,15 @@ function QuickReplies() {
             return;
         }
 
+        const importMode = pancakeImportModeRef.current === 'replace' ? 'replace' : 'merge';
+
         const formData = new FormData();
         formData.append('file', file);
+        formData.append('mode', importMode);
 
         setImportingPancake(true);
         setError('');
-        setMessage('Đang import file Pancake...');
+        setMessage(importMode === 'replace' ? 'Đang thay thế danh sách bằng file Pancake...' : 'Đang import file Pancake...');
 
         try {
             const response = await quickReplyApi.importPancake(formData);
@@ -1631,6 +1779,68 @@ function QuickReplies() {
         }
     };
 
+    const openReplyImagePreview = (reply, initialIndex = 0) => {
+        const images = flattenReplyImages(reply).filter((image) => imageSource(image, 'large'));
+        if (images.length === 0) {
+            setError('Mẫu này chưa có ảnh để xem.');
+            return;
+        }
+
+        setReplyImagePreview({
+            reply,
+            images,
+            index: Math.max(0, Math.min(Number(initialIndex) || 0, images.length - 1)),
+        });
+    };
+
+    const handleReplyThumbnailClick = (reply) => {
+        if (replyImageClickTimerRef.current) {
+            window.clearTimeout(replyImageClickTimerRef.current);
+        }
+
+        replyImageClickTimerRef.current = window.setTimeout(() => {
+            replyImageClickTimerRef.current = null;
+            void copyReplyImagesNative(reply);
+        }, 220);
+    };
+
+    const handleReplyThumbnailDoubleClick = (reply, initialIndex = 0) => {
+        if (replyImageClickTimerRef.current) {
+            window.clearTimeout(replyImageClickTimerRef.current);
+            replyImageClickTimerRef.current = null;
+        }
+
+        setReplyImageHoverPreview(null);
+        openReplyImagePreview(reply, initialIndex);
+    };
+
+    const showReplyImageHoverPreview = (event, reply) => {
+        const images = flattenReplyImages(reply);
+        const firstImage = images[0] || null;
+        const src = firstImage ? imageSource(firstImage, 'thumbnail') : '';
+        if (!src) {
+            setReplyImageHoverPreview(null);
+            return;
+        }
+
+        const previewSize = 112;
+        const offset = 12;
+        const viewportWidth = window.innerWidth || document.documentElement.clientWidth || previewSize;
+        const viewportHeight = window.innerHeight || document.documentElement.clientHeight || previewSize;
+        const left = event.clientX + offset + previewSize > viewportWidth - 8
+            ? Math.max(8, event.clientX - previewSize - offset)
+            : event.clientX + offset;
+        const top = event.clientY + offset + previewSize > viewportHeight - 8
+            ? Math.max(8, event.clientY - previewSize - offset)
+            : event.clientY + offset;
+
+        setReplyImageHoverPreview({
+            src,
+            count: images.length,
+            left,
+            top,
+        });
+    };
     const openSendDraft = (reply) => {
         setSendDraft(createSendDraftFromReply(reply));
         setHoveredSendContentKey(null);
@@ -1689,7 +1899,7 @@ function QuickReplies() {
         setMessage('Đang gửi sang chat Zalo đang mở...');
 
         try {
-            const response = await quickReplyApi.sendToZalo(replyId, payload);
+            const response = await quickReplyApi.sendToZalo(replyId, { ...payload, zalo_target: zaloTarget });
             if (response?.data?.reply) {
                 updateReplyInList(response.data.reply);
                 await loadBootstrap();
@@ -1859,7 +2069,7 @@ function QuickReplies() {
         setMessage('');
 
         try {
-            const response = await quickReplyApi.splitZalo();
+            const response = await quickReplyApi.splitZalo({ zalo_target: zaloTarget });
             setMessage(response?.data?.message || 'Đã chia màn hình Zalo.');
         } catch (err) {
             setError(err?.response?.data?.message || err?.message || 'Không chia được màn hình. Hãy mở Zalo Desktop rồi thử lại.');
@@ -1873,6 +2083,7 @@ function QuickReplies() {
         const sidebarUrl = new URL('/admin/quick-replies', window.location.origin);
         sidebarUrl.searchParams.set('mode', 'zalo-sidebar');
         sidebarUrl.searchParams.set('dock', '0');
+        sidebarUrl.searchParams.set('zalo_target', zaloTarget);
 
         setSplittingZalo(true);
         setError('');
@@ -1917,6 +2128,7 @@ function QuickReplies() {
                 require_browser: false,
                 manage_browser: !sidebarWindow,
                 browser_window_keywords: SIDEBAR_BROWSER_KEYWORDS,
+                zalo_target: zaloTarget,
                 gap: 0,
             });
             const result = response?.data?.result || {};
@@ -1942,7 +2154,7 @@ function QuickReplies() {
         }
 
         try {
-            const response = await quickReplyApi.getZaloMirrorScreenshot({ t: Date.now() });
+            const response = await quickReplyApi.getZaloMirrorScreenshot({ t: Date.now(), zalo_target: zaloTarget });
             const nextUrl = URL.createObjectURL(response.data);
             if (zaloMirrorObjectUrlRef.current) {
                 URL.revokeObjectURL(zaloMirrorObjectUrlRef.current);
@@ -1956,7 +2168,7 @@ function QuickReplies() {
                 setZaloMirrorLoading(false);
             }
         }
-    }, [zaloMirrorOpen]);
+    }, [zaloMirrorOpen, zaloTarget]);
 
     useEffect(() => {
         if (!zaloMirrorOpen) {
@@ -1992,7 +2204,7 @@ function QuickReplies() {
         zaloMirrorObjectUrlRef.current = '';
         setZaloMirrorSrc('');
         setZaloMirrorLoading(false);
-    }, [zaloMirrorOpen]);
+    }, [zaloMirrorOpen, zaloTarget]);
 
     const handleZaloMirrorClick = async (event) => {
         if (!zaloMirrorSrc) {
@@ -2033,6 +2245,7 @@ function QuickReplies() {
                 x_ratio: Math.min(Math.max(xRatio, 0), 1),
                 y_ratio: Math.min(Math.max(yRatio, 0), 1),
                 double: false,
+                zalo_target: zaloTarget,
             });
             await loadZaloMirrorScreenshot({ silent: true });
         } catch (err) {
@@ -2052,7 +2265,7 @@ function QuickReplies() {
         setError('');
 
         try {
-            await quickReplyApi.typeZaloMirror({ text, enter });
+            await quickReplyApi.typeZaloMirror({ text, enter, zalo_target: zaloTarget });
             if (enter) {
                 setZaloMirrorText('');
             }
@@ -2101,15 +2314,112 @@ function QuickReplies() {
         }
     }, [allVisibleRepliesSelected, selectedVisibleReplyCount]);
 
-    const currentGalleryFolder = galleryFolders.find((folder) => String(folder.id) === String(galleryFolderFilter));
-    const currentGalleryTitle = currentGalleryFolder?.name
-        || GALLERY_FILTERS.find((filter) => filter.value === galleryFolderFilter)?.label
-        || 'Kho ảnh';
     const galleryActionBusy = galleryLoading || galleryFolderSaving || gallerySending;
     const galleryBusy = galleryActionBusy || galleryUploading;
     const galleryZoomSrc = galleryZoomImage ? imageSource(galleryZoomImage, 'large') : '';
     const galleryZoomName = galleryZoomImage?.name || galleryZoomImage?.filename || 'Ảnh trong kho';
 
+    const replyPreviewImages = Array.isArray(replyImagePreview?.images) ? replyImagePreview.images : [];
+    const replyPreviewIndex = Math.max(0, Math.min(Number(replyImagePreview?.index) || 0, Math.max(replyPreviewImages.length - 1, 0)));
+    const replyPreviewImage = replyPreviewImages[replyPreviewIndex] || null;
+    const replyPreviewSrc = replyPreviewImage ? imageSource(replyPreviewImage, 'large') : '';
+    const replyPreviewName = replyPreviewImage?.name || replyPreviewImage?.filename || `Ảnh ${replyPreviewIndex + 1}`;
+    const replyImagePreviewModal = replyImagePreview ? (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/75 p-2 backdrop-blur-[2px]" onClick={() => setReplyImagePreview(null)}>
+            <div className="flex max-h-[94vh] w-full max-w-3xl flex-col overflow-hidden rounded-sm bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
+                <header className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-200 bg-white p-3">
+                    <div className="min-w-0">
+                        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                            <span className="inline-flex h-7 max-w-[150px] items-center truncate rounded-sm bg-slate-100 px-2 text-[12px] font-black text-slate-700" title={replyImagePreview.reply?.shortcut || ''}>
+                                {replyImagePreview.reply?.shortcut || 'Ảnh'}
+                            </span>
+                            {replyImagePreview.reply?.topic && (
+                                <span className="inline-flex max-w-[120px] items-center truncate rounded-full px-2.5 py-1 text-[11px] font-black text-white" style={{ backgroundColor: replyImagePreview.reply.topic.color || DEFAULT_TOPIC_COLOR }} title={replyImagePreview.reply.topic.name}>
+                                    {replyImagePreview.reply.topic.name}
+                                </span>
+                            )}
+                            <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[11px] font-black text-sky-700">{formatNumber(replyPreviewImages.length)} ảnh</span>
+                        </div>
+                        <div className="mt-1 truncate text-[12px] font-semibold text-slate-500">{replyPreviewName}</div>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => setReplyImagePreview(null)}
+                        className={iconButtonClassName}
+                        title="Đóng ảnh"
+                        aria-label="Đóng ảnh"
+                    >
+                        <span className="material-symbols-outlined text-[18px]">close</span>
+                    </button>
+                </header>
+
+                <div className="flex min-h-0 flex-1 items-center justify-center bg-slate-950 p-2">
+                    {replyPreviewSrc ? (
+                        <img src={replyPreviewSrc} alt={replyPreviewName} className="max-h-[62vh] max-w-full object-contain" />
+                    ) : (
+                        <div className="flex h-64 w-full items-center justify-center text-sm font-bold text-slate-400">Không có ảnh để phóng to.</div>
+                    )}
+                </div>
+
+                <div className="shrink-0 border-t border-slate-200 bg-white p-3">
+                    {replyPreviewImages.length > 1 && (
+                        <div className="mb-3 max-h-28 overflow-y-auto pr-1">
+                            <div className="grid grid-cols-5 gap-1.5 sm:grid-cols-8">
+                                {replyPreviewImages.map((image, imageIndex) => {
+                                    const src = imageSource(image, 'thumbnail');
+                                    const active = imageIndex === replyPreviewIndex;
+                                    const imageName = image.name || image.filename || `Ảnh ${imageIndex + 1}`;
+
+                                    return (
+                                        <button
+                                            key={image.id || `${src}-${imageIndex}`}
+                                            type="button"
+                                            onClick={() => setReplyImagePreview((current) => current ? { ...current, index: imageIndex } : current)}
+                                            className={`relative aspect-square overflow-hidden rounded-sm border bg-slate-100 transition ${active ? 'border-sky-500 ring-2 ring-sky-100' : 'border-slate-200 hover:border-sky-300'}`}
+                                            title={imageName}
+                                            aria-label={`Xem ảnh ${imageIndex + 1}`}
+                                        >
+                                            {src ? (
+                                                <img src={src} alt={imageName} className="h-full w-full object-cover" />
+                                            ) : (
+                                                <span className="material-symbols-outlined flex h-full w-full items-center justify-center text-slate-300">image</span>
+                                            )}
+                                            <span className={`absolute left-0.5 top-0.5 inline-flex size-4 items-center justify-center rounded-sm text-[9px] font-black ${active ? 'bg-sky-600 text-white' : 'bg-white/90 text-slate-500'}`}>{imageIndex + 1}</span>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
+                    <div className="flex items-center justify-between gap-2">
+                        <span className="text-[12px] font-bold text-slate-500">Ảnh {formatNumber(replyPreviewIndex + 1)}/{formatNumber(replyPreviewImages.length)}</span>
+                        <button
+                            type="button"
+                            onClick={() => copyReplyImagesNative(replyImagePreview.reply)}
+                            disabled={Boolean(copyingId)}
+                            className={secondaryButtonClassName}
+                        >
+                            <span className="material-symbols-outlined text-[18px]">content_copy</span>
+                            Copy ảnh
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    ) : null;
+    const replyImageHoverPreviewBubble = replyImageHoverPreview ? (
+        <div
+            className="pointer-events-none fixed z-[115] overflow-hidden rounded-sm border border-white bg-white shadow-2xl ring-1 ring-slate-900/15"
+            style={{ left: replyImageHoverPreview.left, top: replyImageHoverPreview.top, width: 112, height: 112 }}
+        >
+            <img src={replyImageHoverPreview.src} alt="" className="h-full w-full object-cover" />
+            {replyImageHoverPreview.count > 1 && (
+                <span className="absolute bottom-1 right-1 rounded-sm bg-slate-950/75 px-1.5 py-0.5 text-[10px] font-black text-white">
+                    {formatNumber(replyImageHoverPreview.count)} ảnh
+                </span>
+            )}
+        </div>
+    ) : null;
     const galleryModal = galleryOpen ? (
         <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-900/45 p-2 text-slate-900 sm:p-4">
             <div className="flex h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-sm bg-white shadow-2xl">
@@ -2151,112 +2461,101 @@ function QuickReplies() {
                 </header>
 
                 <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-                    <button
-                        type="button"
-                        onClick={() => setGalleryControlsOpen((open) => !open)}
-                        className="mx-3 mt-3 flex h-9 shrink-0 items-center gap-2 rounded-sm border border-slate-200 bg-slate-50 px-3 text-left text-[12px] font-bold text-slate-700 transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800"
-                        title={galleryControlsOpen ? 'Ẩn bộ lọc ảnh' : 'Mở bộ lọc ảnh'}
-                    >
-                        <span className="material-symbols-outlined text-[18px]">tune</span>
-                        <span className="min-w-0 flex-1 truncate">{currentGalleryTitle}</span>
-                        <span className="shrink-0 text-slate-400">{formatNumber(galleryPagination.total)} ảnh</span>
-                        <span className="material-symbols-outlined text-[20px]">{galleryControlsOpen ? 'keyboard_arrow_up' : 'keyboard_arrow_down'}</span>
-                    </button>
+                    <div className="shrink-0 border-b border-slate-200 bg-slate-50/70 px-3 py-2">
+                        <div className="max-h-[146px] overflow-y-auto pr-1">
+                            <div className="grid grid-cols-4 gap-1.5 sm:grid-cols-5">
+                                {GALLERY_FILTERS.map((filter) => {
+                                    const count = filter.value === 'all'
+                                        ? galleryStats.images
+                                        : filter.value === 'favorite'
+                                            ? galleryStats.favorite_images
+                                            : null;
+                                    const active = galleryFolderFilter === filter.value;
 
-                    {galleryControlsOpen && (
-                        <div className="grid shrink-0 grid-cols-1 border-b border-slate-200 bg-white md:grid-cols-[230px_minmax(0,1fr)]">
-                            <aside className="flex max-h-[280px] min-h-0 flex-col gap-2 overflow-hidden bg-slate-50 p-3 md:border-r">
-                                <div className="grid gap-2">
-                                    {GALLERY_FILTERS.map((filter) => {
-                                        const count = filter.value === 'all'
-                                            ? galleryStats.images
-                                            : filter.value === 'favorite'
-                                                ? galleryStats.favorite_images
-                                                : null;
-                                        const active = galleryFolderFilter === filter.value;
+                                    return (
+                                        <button
+                                            key={filter.value}
+                                            type="button"
+                                            onClick={() => selectGalleryFolder(filter.value)}
+                                            className={`flex h-7 min-w-0 items-center rounded-sm border px-1.5 text-left transition ${active ? 'border-sky-500 bg-sky-600 text-white shadow-sm' : 'border-slate-200 bg-white text-slate-600 hover:border-sky-200 hover:text-sky-800'}`}
+                                            title={filter.label}
+                                        >
+                                            <span className="min-w-0 flex-1 truncate text-[10px] font-bold leading-none">{filter.label}</span>
+                                            {count !== null && <span className={`ml-1 shrink-0 text-[9px] font-black leading-none ${active ? 'text-white/85' : 'text-slate-400'}`}>{formatNumber(count)}</span>}
+                                        </button>
+                                    );
+                                })}
 
-                                        return (
-                                            <button
-                                                key={filter.value}
-                                                type="button"
-                                                onClick={() => selectGalleryFolder(filter.value)}
-                                                className={`flex h-9 items-center gap-2 rounded-sm border px-3 text-left text-[12px] font-bold transition ${active ? 'border-sky-300 bg-sky-50 text-sky-800' : 'border-slate-200 bg-white text-slate-600 hover:border-sky-200'}`}
-                                            >
-                                                <span className="material-symbols-outlined text-[18px]">{filter.icon}</span>
-                                                <span className="min-w-0 flex-1 truncate">{filter.label}</span>
-                                                {count !== null && <span className="shrink-0 text-[12px] font-black text-slate-400">{formatNumber(count)}</span>}
-                                            </button>
-                                        );
-                                    })}
-                                </div>
+                                {galleryFolders.map((folder) => {
+                                    const active = String(galleryFolderFilter) === String(folder.id);
 
-                                <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-                                    {galleryFolders.length === 0 ? (
-                                        <div className="rounded-sm border border-dashed border-slate-200 bg-white px-3 py-4 text-center text-[12px] font-bold text-slate-400">
-                                            Chưa có thư mục ảnh.
-                                        </div>
-                                    ) : (
-                                        <div className="grid gap-2">
-                                            {galleryFolders.map((folder) => {
-                                                const active = String(galleryFolderFilter) === String(folder.id);
+                                    return (
+                                        <button
+                                            key={folder.id}
+                                            type="button"
+                                            onClick={() => selectGalleryFolder(String(folder.id))}
+                                            onContextMenu={(event) => openGalleryFolderMenu(event, folder)}
+                                            className={`flex h-7 min-w-0 items-center rounded-sm border px-1.5 text-left transition ${active ? 'border-sky-500 bg-sky-600 text-white shadow-sm' : 'border-slate-200 bg-white text-slate-600 hover:border-sky-200 hover:text-sky-800'}`}
+                                            title={`${folder.name} - bấm chuột phải để đổi tên hoặc xóa`}
+                                        >
+                                            <span className="min-w-0 flex-1 truncate text-[10px] font-bold leading-none">{folder.name}</span>
+                                            <span className={`ml-1 shrink-0 text-[9px] font-black leading-none ${active ? 'text-white/85' : 'text-slate-400'}`}>{formatNumber(folder.images_count)}</span>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
 
-                                                return (
-                                                    <div key={folder.id} className={`group flex items-center gap-2 rounded-sm border px-2 py-2 transition ${active ? 'border-sky-300 bg-sky-50' : 'border-slate-200 bg-white hover:border-sky-200'}`}>
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => selectGalleryFolder(String(folder.id))}
-                                                            className="flex min-w-0 flex-1 items-center gap-2 text-left"
-                                                        >
-                                                            <span className="material-symbols-outlined shrink-0 text-[18px] text-slate-400">folder</span>
-                                                            <span className="min-w-0 flex-1 truncate text-[12px] font-bold text-slate-700">{folder.name}</span>
-                                                            <span className="shrink-0 text-[12px] font-black text-slate-400">{formatNumber(folder.images_count)}</span>
-                                                        </button>
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => deleteGalleryFolder(folder)}
-                                                            disabled={galleryBusy}
-                                                            className="text-slate-400 transition hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
-                                                            title="Xóa thư mục"
-                                                        >
-                                                            <span className="material-symbols-outlined text-[17px]">delete</span>
-                                                        </button>
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-                                    )}
-                                </div>
+                        <form onSubmit={createGalleryFolder} className="mt-2 grid grid-cols-[minmax(0,1fr)_auto_auto] gap-1.5">
+                            <input
+                                value={galleryFolderName}
+                                onChange={(event) => setGalleryFolderName(event.target.value)}
+                                placeholder="Tên thư mục mới"
+                                className="h-8 w-full rounded-sm border border-slate-200 bg-white px-2 text-[12px] font-semibold text-slate-900 shadow-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-500/10"
+                            />
+                            <button
+                                type="submit"
+                                disabled={galleryFolderSaving || !normalizeText(galleryFolderName)}
+                                className="inline-flex h-8 items-center justify-center gap-1 rounded-sm border border-slate-200 bg-white px-2 text-[12px] font-bold text-slate-700 shadow-sm transition hover:border-sky-300 hover:text-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                <span className="material-symbols-outlined text-[15px]">create_new_folder</span>
+                                {galleryFolderSaving ? '...' : 'Thêm'}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => toggleVisibleGallerySelection(!allVisibleGalleryImagesSelected)}
+                                disabled={galleryImages.length === 0 || galleryBusy}
+                                className="inline-flex size-8 shrink-0 items-center justify-center rounded-sm border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:border-sky-300 hover:text-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                title={allVisibleGalleryImagesSelected ? 'Bỏ chọn ảnh đang hiển thị' : 'Chọn tất cả ảnh đang hiển thị'}
+                                aria-label={allVisibleGalleryImagesSelected ? 'Bỏ chọn ảnh đang hiển thị' : 'Chọn tất cả ảnh đang hiển thị'}
+                            >
+                                <span className="material-symbols-outlined text-[16px]">select_all</span>
+                            </button>
+                        </form>
+                    </div>
 
-                                <form onSubmit={createGalleryFolder} className="grid shrink-0 gap-2 rounded-sm border border-slate-200 bg-white p-2">
-                                    <input
-                                        value={galleryFolderName}
-                                        onChange={(event) => setGalleryFolderName(event.target.value)}
-                                        placeholder="Tên thư mục"
-                                        className={inputClassName}
-                                    />
-                                    <button type="submit" disabled={galleryFolderSaving || !normalizeText(galleryFolderName)} className={secondaryButtonClassName}>
-                                        <span className="material-symbols-outlined text-[17px]">create_new_folder</span>
-                                        {galleryFolderSaving ? 'Đang thêm...' : 'Thêm thư mục'}
-                                    </button>
-                                </form>
-                            </aside>
-
-                            <section className="flex min-h-0 flex-col gap-2 border-t border-slate-200 p-3 md:border-t-0">
-                                <div className="min-w-0">
-                                    <div className="truncate text-sm font-black text-slate-950">{currentGalleryTitle}</div>
-                                    <div className="mt-0.5 text-[12px] font-semibold text-slate-400">{formatNumber(galleryPagination.total)} ảnh phù hợp</div>
-                                </div>
-                                <button
-                                    type="button"
-                                    onClick={() => toggleVisibleGallerySelection(!allVisibleGalleryImagesSelected)}
-                                    disabled={galleryImages.length === 0 || galleryBusy}
-                                    className={secondaryButtonClassName}
-                                    title="Chọn tất cả ảnh đang hiển thị"
-                                >
-                                    <span className="material-symbols-outlined text-[18px]">select_all</span>
-                                    {allVisibleGalleryImagesSelected ? 'Bỏ chọn trang này' : 'Chọn trang này'}
-                                </button>
-                            </section>
+                    {galleryFolderMenu && (
+                        <div
+                            className="fixed z-[120] w-[132px] overflow-hidden rounded-sm border border-slate-200 bg-white py-1 text-[12px] font-bold text-slate-700 shadow-xl"
+                            style={{ left: galleryFolderMenu.x, top: galleryFolderMenu.y }}
+                            onClick={(event) => event.stopPropagation()}
+                        >
+                            <button
+                                type="button"
+                                onClick={() => renameGalleryFolder(galleryFolderMenu.folder)}
+                                disabled={galleryBusy}
+                                className="block w-full px-3 py-2 text-left transition hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                Đổi tên
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => deleteGalleryFolder(galleryFolderMenu.folder)}
+                                disabled={galleryBusy}
+                                className="block w-full px-3 py-2 text-left text-rose-700 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                Xóa thư mục
+                            </button>
                         </div>
                     )}
 
@@ -2426,6 +2725,51 @@ function QuickReplies() {
         </div>
     ) : null;
 
+    const pancakeImportPromptModal = pancakeImportPromptOpen ? (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-950/45 p-3 backdrop-blur-[2px]">
+            <div className="w-full max-w-lg rounded-sm bg-white shadow-2xl">
+                <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
+                    <div className="min-w-0">
+                        <h2 className="text-base font-black text-slate-950">Import Pancake</h2>
+                        <p className="mt-1 text-[12px] font-semibold text-slate-500">Chọn cách đưa file Excel vào danh sách trả lời nhanh.</p>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => setPancakeImportPromptOpen(false)}
+                        disabled={importingPancake}
+                        className={iconButtonClassName}
+                        title="Đóng"
+                        aria-label="Đóng"
+                    >
+                        <span className="material-symbols-outlined text-[18px]">close</span>
+                    </button>
+                </div>
+                <div className="grid gap-3 p-4 sm:grid-cols-2">
+                    <button
+                        type="button"
+                        onClick={() => choosePancakeImportMode('merge')}
+                        disabled={importingPancake}
+                        className="rounded-sm border border-sky-200 bg-sky-50 p-4 text-left shadow-sm transition hover:border-sky-400 hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        <span className="material-symbols-outlined text-[24px] text-sky-700">playlist_add</span>
+                        <span className="mt-2 block text-sm font-black text-slate-950">Thêm/cập nhật</span>
+                        <span className="mt-1 block text-[12px] font-semibold leading-5 text-slate-600">Giữ danh sách hiện có. Mẫu mới sẽ được thêm, mẫu trùng ký tự tắt sẽ được cập nhật.</span>
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => choosePancakeImportMode('replace')}
+                        disabled={importingPancake}
+                        className="rounded-sm border border-rose-200 bg-rose-50 p-4 text-left shadow-sm transition hover:border-rose-400 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        <span className="material-symbols-outlined text-[24px] text-rose-700">published_with_changes</span>
+                        <span className="mt-2 block text-sm font-black text-slate-950">Thay thế danh sách</span>
+                        <span className="mt-1 block text-[12px] font-semibold leading-5 text-slate-600">Chuyển toàn bộ mẫu hiện có vào thùng rác, rồi import danh sách mới từ file Pancake.</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    ) : null;
+
     const sendDraftModal = sendDraft ? (
                 <div className="fixed inset-0 z-[110] flex items-start justify-center overflow-y-auto bg-slate-950/45 p-2 backdrop-blur-[2px] sm:p-6">
                     <div className="mt-2 flex max-h-[calc(100vh-1rem)] w-full max-w-2xl flex-col rounded-sm bg-white shadow-2xl sm:mt-4 sm:max-h-[calc(100vh-3rem)]">
@@ -2541,10 +2885,12 @@ function QuickReplies() {
         return (
             <div className="flex h-screen w-screen max-w-[420px] flex-col overflow-hidden border-l border-slate-200 bg-[#eef3f8] text-slate-900">
                 {galleryModal}
+                {replyImageHoverPreviewBubble}
+                {replyImagePreviewModal}
                 {sendDraftModal}
                 <header className="shrink-0 border-b border-slate-200 bg-white p-2 shadow-sm">
-                    <div className="flex items-center gap-1.5">
-                        <div className="flex min-w-0 flex-1 items-center gap-2">
+                    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
+                        <div className="flex min-w-0 items-center gap-2">
                             <div className="flex size-8 shrink-0 items-center justify-center rounded-sm bg-sky-700 text-white">
                                 <span className="material-symbols-outlined text-[19px]">quickreply</span>
                             </div>
@@ -2555,27 +2901,43 @@ function QuickReplies() {
                                 </div>
                             </div>
                         </div>
-                        <div className="min-w-0 max-w-[170px] shrink [&>div]:h-8 [&>div]:gap-1 [&>div]:px-2 [&>div]:py-0 [&_select]:max-w-[118px] [&_select]:text-[12px]">
-                            <AccountSelector reloadOnAutoSelect={false} />
+                        <div className="flex shrink-0 items-center gap-1.5">
+                            <button
+                                type="button"
+                                onClick={() => window.open('/admin/quick-replies', '_blank')}
+                                className="inline-flex size-8 shrink-0 items-center justify-center rounded-sm border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-sky-300 hover:text-sky-700"
+                                title="Mở trang đầy đủ"
+                            >
+                                <span className="material-symbols-outlined text-[17px]">open_in_new</span>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => window.close()}
+                                className="inline-flex size-8 shrink-0 items-center justify-center rounded-sm border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-sky-300 hover:text-sky-700"
+                                title="Đóng panel"
+                            >
+                                <span className="material-symbols-outlined text-[17px]">close</span>
+                            </button>
                         </div>
-                        <button
-                            type="button"
-                            onClick={() => window.open('/admin/quick-replies', '_blank')}
-                            className="inline-flex size-8 shrink-0 items-center justify-center rounded-sm border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-sky-300 hover:text-sky-700"
-                            title="Mở trang đầy đủ"
-                        >
-                            <span className="material-symbols-outlined text-[17px]">open_in_new</span>
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => window.close()}
-                            className="inline-flex size-8 shrink-0 items-center justify-center rounded-sm border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-sky-300 hover:text-sky-700"
-                            title="Đóng panel"
-                        >
-                            <span className="material-symbols-outlined text-[17px]">close</span>
-                        </button>
+                        <div className="col-span-2 grid grid-cols-[minmax(0,1fr)_72px] gap-1.5">
+                            <div className="min-w-0 [&>div]:h-8 [&>div]:gap-2 [&>div]:px-2 [&>div]:py-0 [&_select]:w-full [&_select]:text-[12px]">
+                                <AccountSelector reloadOnAutoSelect={false} />
+                            </div>
+                            <div className="relative min-w-0" title={`Đích gửi: ${zaloTargetLabel}`}>
+                                <select
+                                    value={zaloTarget}
+                                    onChange={(event) => setZaloTarget(normalizeZaloTarget(event.target.value))}
+                                    className="h-8 w-full appearance-none rounded-sm border border-slate-200 bg-white px-2 pr-6 text-[11px] font-black text-slate-700 shadow-sm outline-none transition hover:border-sky-300 focus:border-sky-500 focus:ring-2 focus:ring-sky-500/10"
+                                    aria-label="Chọn đích Zalo"
+                                >
+                                    {ZALO_TARGET_OPTIONS.map((option) => (
+                                        <option key={option.value} value={option.value}>{option.shortLabel}</option>
+                                    ))}
+                                </select>
+                                <span className="material-symbols-outlined pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-[15px] text-slate-400">expand_more</span>
+                            </div>
+                        </div>
                     </div>
-
                     <div className="mt-2 grid grid-cols-[minmax(0,1fr)_34px_34px_34px] gap-1.5">
                         <div className="relative">
                             <span className="material-symbols-outlined pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[18px] text-slate-400">search</span>
@@ -2651,129 +3013,137 @@ function QuickReplies() {
                         </button>
                     </div>
                 )}
-                <div className="min-h-0 flex-1 overflow-y-auto p-2.5">
+                <div className="min-h-0 flex-1 overflow-hidden bg-white">
                     {loading ? (
-                        <div className="flex h-40 items-center justify-center rounded-sm border border-slate-200 bg-white text-[13px] font-bold text-slate-400">
+                        <div className="flex h-full min-h-40 items-center justify-center border-t border-slate-200 bg-white text-[13px] font-bold text-slate-400">
                             Đang tải mẫu...
                         </div>
                     ) : tableRows.length === 0 ? (
-                        <div className="flex h-40 items-center justify-center rounded-sm border border-slate-200 bg-white text-[13px] font-bold text-slate-400">
+                        <div className="flex h-full min-h-40 items-center justify-center border-t border-slate-200 bg-white text-[13px] font-bold text-slate-400">
                             {isTrashMode ? 'Thùng rác đang trống.' : 'Chưa có mẫu phù hợp.'}
                         </div>
                     ) : (
-                        <div className="grid gap-2">
-                            {tableRows.map((reply) => {
-                                const topic = reply.topic;
-                                const images = flattenReplyImages(reply);
-                                const contentCount = replyContentCount(reply);
-                                const isCopying = Number(copyingId) === Number(reply.id);
-                                const isCopied = Number(copiedState.id) === Number(reply.id);
-                                const isTrashedReply = isTrashMode || Boolean(reply.is_trashed);
+                        <div className="h-full overflow-y-auto overflow-x-hidden">
+                            <table className="w-full table-fixed border-collapse text-[12px]">
+                                <colgroup>
+                                    <col className="w-9" />
+                                    <col className="w-[76px]" />
+                                    <col className="w-[78px]" />
+                                    <col />
+                                </colgroup>
+                                <thead className="sticky top-0 z-10 bg-[#f6f9fc]">
+                                    <tr className="border-b border-slate-200">
+                                        <th className="h-[27px] px-1 text-left text-[10px] font-black uppercase tracking-[0.02em] text-slate-400" aria-label="Gửi" />
+                                        <th className="h-[27px] px-1 text-left text-[10px] font-black uppercase tracking-[0.02em] text-slate-500">Ký tự</th>
+                                        <th className="h-[27px] px-1 text-left text-[10px] font-black uppercase tracking-[0.02em] text-slate-500">Chủ đề</th>
+                                        <th className="h-[27px] px-1.5 text-left text-[10px] font-black uppercase tracking-[0.02em] text-slate-500">Tin nhắn</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {tableRows.map((reply, index) => {
+                                        const topic = reply.topic;
+                                        const images = flattenReplyImages(reply);
+                                        const firstImageSrc = images.length > 0 ? imageSource(images[0], 'thumbnail') : '';
+                                        const contentCount = replyContentCount(reply);
+                                        const previewText = replyPreviewText(reply);
+                                        const isCopying = Number(copyingId) === Number(reply.id);
+                                        const isCopied = Number(copiedState.id) === Number(reply.id);
+                                        const isTrashedReply = isTrashMode || Boolean(reply.is_trashed);
 
-                                return (
-                                    <article key={reply.id} className="rounded-sm border border-slate-200 bg-white p-2.5 shadow-sm">
-                                        <div className="flex items-start justify-between gap-2">
-                                            <div className="min-w-0 flex-1">
-                                                <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                                                    {!isTrashedReply && (
+                                        return (
+                                            <tr key={reply.id} className={`h-[37px] transition hover:bg-sky-50/70 ${index % 2 === 1 ? 'bg-[#fbfdff]' : 'bg-white'} ${index === 0 && !isTrashMode ? 'bg-sky-50/60' : ''}`}>
+                                                <td className="h-[37px] px-1 py-1 align-middle">
+                                                    {isTrashedReply ? (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => restoreReply(reply)}
+                                                            className="inline-flex size-[27px] items-center justify-center rounded-sm border border-emerald-200 bg-white text-emerald-700 shadow-sm transition hover:border-emerald-300 hover:bg-emerald-50"
+                                                            title="Khôi phục mẫu"
+                                                            aria-label="Khôi phục mẫu"
+                                                        >
+                                                            <span className="material-symbols-outlined text-[16px]">restore_from_trash</span>
+                                                        </button>
+                                                    ) : (
                                                         <button
                                                             type="button"
                                                             onClick={() => sendReplyToZalo(reply)}
                                                             disabled={isCopying}
-                                                            className="inline-flex size-7 shrink-0 items-center justify-center rounded-sm bg-sky-700 text-white shadow-sm transition hover:bg-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
+                                                            className="inline-flex size-[27px] items-center justify-center rounded-sm bg-sky-700 text-white shadow-sm transition hover:bg-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
                                                             title="Gửi vào chat Zalo đang mở"
                                                             aria-label="Gửi vào chat Zalo đang mở"
                                                         >
-                                                            <span className="material-symbols-outlined text-[17px]">{isCopied && copiedState.mode === 'sent' ? 'check' : 'send'}</span>
+                                                            <span className="material-symbols-outlined text-[16px]">{isCopied && copiedState.mode === 'sent' ? 'check' : 'send'}</span>
                                                         </button>
                                                     )}
+                                                </td>
+                                                <td className="h-[37px] px-1 py-1 align-middle">
                                                     <button
                                                         type="button"
                                                         onClick={() => copyReplyAll(reply)}
                                                         disabled={isTrashedReply}
-                                                        className="inline-flex h-7 max-w-[118px] shrink-0 items-center overflow-hidden rounded-sm bg-slate-100 px-2 text-[12px] font-black text-slate-700 transition hover:bg-sky-100 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-60"
-                                                        title={reply.shortcut}
+                                                        className="block w-full truncate text-left text-[12px] font-black text-slate-800 transition hover:text-sky-700 disabled:cursor-not-allowed disabled:text-slate-400"
+                                                        title={`${reply.shortcut} - bấm để copy nhanh`}
                                                     >
-                                                        <span className="min-w-0 truncate">{reply.shortcut}</span>
+                                                        {reply.shortcut}
                                                     </button>
-                                                    {topic && (
-                                                        <span className="inline-flex max-w-[92px] shrink-0 items-center justify-center truncate rounded-full px-2.5 py-1 text-[11px] font-black text-white" style={{ backgroundColor: topic.color || DEFAULT_TOPIC_COLOR }} title={topic.name}>
+                                                </td>
+                                                <td className="h-[37px] px-1 py-1 align-middle">
+                                                    {topic ? (
+                                                        <span
+                                                            className="block h-[22px] w-[72px] overflow-hidden rounded-[3px] px-1.5 text-center text-[11px] font-black leading-[22px] text-white"
+                                                            style={{ backgroundColor: topic.color || DEFAULT_TOPIC_COLOR }}
+                                                            title={topic.name}
+                                                        >
                                                             {topic.name}
                                                         </span>
+                                                    ) : (
+                                                        <span className="block h-[22px] w-[72px] overflow-hidden rounded-[3px] bg-slate-100 px-1.5 text-center text-[11px] font-black leading-[22px] text-slate-400">-</span>
                                                     )}
-                                                    {!isTrashedReply && (
-                                                        <>
+                                                </td>
+                                                <td className="h-[37px] min-w-0 px-1.5 py-1 align-middle">
+                                                    <div className="flex min-w-0 items-center gap-1.5">
+                                                        <span className="min-w-0 flex-1 truncate text-[12px] leading-5 text-slate-700" title={previewText}>
+                                                            {previewText}
+                                                        </span>
+                                                        {images.length > 0 && !isTrashedReply && (
                                                             <button
                                                                 type="button"
-                                                                onClick={() => copyReplyText(reply)}
-                                                                disabled={isCopying || !normalizeText(reply.body)}
-                                                                className="inline-flex size-7 shrink-0 items-center justify-center rounded-sm border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-sky-300 hover:text-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
-                                                                title="Copy chữ"
+                                                                onClick={() => handleReplyThumbnailClick(reply)}
+                                                                onDoubleClick={() => handleReplyThumbnailDoubleClick(reply)}
+                                                                onMouseEnter={(event) => showReplyImageHoverPreview(event, reply)}
+                                                                onMouseMove={(event) => showReplyImageHoverPreview(event, reply)}
+                                                                onMouseLeave={() => setReplyImageHoverPreview(null)}
+                                                                disabled={isCopying}
+                                                                className="relative inline-flex size-[22px] shrink-0 items-center justify-center overflow-hidden rounded-sm border border-slate-200 bg-slate-100 text-slate-400 shadow-sm transition hover:border-sky-300 hover:ring-2 hover:ring-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                                                title={`${images.length} ảnh - bấm 1 lần để copy, bấm đúp để xem lớn`}
+                                                                aria-label={`${images.length} ảnh - bấm 1 lần để copy, bấm đúp để xem lớn`}
                                                             >
-                                                                <span className="material-symbols-outlined text-[17px]">{isCopied && copiedState.mode === 'text' ? 'check' : 'article'}</span>
+                                                                {firstImageSrc ? (
+                                                                    <img src={firstImageSrc} alt="" className="h-full w-full object-cover" />
+                                                                ) : (
+                                                                    <span className="material-symbols-outlined text-[15px]">image</span>
+                                                                )}
+                                                                {images.length > 1 && (
+                                                                    <span className="absolute bottom-0 right-0 min-w-[13px] rounded-tl-sm bg-slate-900/75 px-0.5 text-[8px] font-black leading-[11px] text-white">+{formatNumber(images.length - 1)}</span>
+                                                                )}
                                                             </button>
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => copyReplyImagesNative(reply)}
-                                                                disabled={isCopying || images.length === 0}
-                                                                className="inline-flex size-7 shrink-0 items-center justify-center rounded-sm border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-sky-300 hover:text-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
-                                                                title="Copy tất cả ảnh"
-                                                            >
-                                                                <span className="material-symbols-outlined text-[17px]">{isCopied && copiedState.mode === 'images' ? 'check' : 'photo_library'}</span>
-                                                            </button>
-                                                        </>
-                                                    )}
-
-                                                </div>
-                                                <div className="mt-2 line-clamp-3 whitespace-pre-line text-[12px] leading-5 text-slate-600">{reply.body || 'Mẫu chỉ có ảnh'}</div>
-                                                {isTrashedReply && (
-                                                    <span className="mt-2 inline-flex rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-black text-rose-700">Trong thùng rác</span>
-                                                )}
-                                            </div>
-                                            <span className="shrink-0 rounded-full bg-sky-50 px-2 py-0.5 text-[11px] font-black text-sky-700" title={`${contentCount} tin nhắn`}>{contentCount} tin</span>
-                                        </div>
-
-                                        {images.length > 0 && (
-                                            <div className="mt-2 flex gap-1.5 overflow-hidden">
-                                                {images.slice(0, 5).map((image) => {
-                                                    const src = imageSource(image, 'thumbnail');
-                                                    return (
-                                                        <button
-                                                            key={image.id || src}
-                                                            type="button"
-                                                            onClick={() => copySingleImage(reply, image)}
-                                                            disabled={isTrashedReply}
-                                                            className="relative size-10 shrink-0 overflow-hidden rounded-sm border border-slate-200 bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-                                                            title={isTrashedReply ? 'Mẫu đang trong thùng rác' : 'Copy ảnh'}
-                                                        >
-                                                            {src ? <img src={src} alt="" className="h-full w-full object-cover" /> : <span className="material-symbols-outlined text-slate-400">image</span>}
-                                                        </button>
-                                                    );
-                                                })}
-                                                {images.length > 5 && (
-                                                    <span className="inline-flex size-10 shrink-0 items-center justify-center rounded-sm bg-slate-100 text-[11px] font-black text-slate-500">+{images.length - 5}</span>
-                                                )}
-                                            </div>
-                                        )}
-
-                                        {isTrashedReply ? (
-                                            <button
-                                                type="button"
-                                                onClick={() => restoreReply(reply)}
-                                                className={`${secondaryButtonClassName} mt-2 w-full justify-center border-emerald-200 text-emerald-700 hover:border-emerald-300 hover:bg-emerald-50`}
-                                                title="Khôi phục mẫu"
-                                            >
-                                                <span className="material-symbols-outlined text-[18px]">restore_from_trash</span>
-                                                Khôi phục
-                                            </button>
-                                        ) : null}
-                                    </article>
-                                );
-                            })}
+                                                        )}
+                                                        <span className="inline-flex h-[18px] shrink-0 items-center rounded-full bg-sky-50 px-1.5 text-[10px] font-black text-sky-700" title={`${contentCount} tin nhắn`}>
+                                                            {formatNumber(contentCount)} tin
+                                                        </span>
+                                                        {isTrashedReply && (
+                                                            <span className="inline-flex h-[18px] shrink-0 items-center rounded-full bg-rose-50 px-1.5 text-[10px] font-black text-rose-700">Rác</span>
+                                                        )}
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
                         </div>
                     )}
                 </div>
-
                 <footer className="shrink-0 border-t border-slate-200 bg-white px-2.5 py-2">
                     <div className="mb-2 flex items-center justify-between gap-2">
                         <span className="text-[12px] font-bold text-slate-500">Tổng {formatNumber(pagination.total)} mẫu</span>
@@ -2807,6 +3177,9 @@ function QuickReplies() {
     return (
         <div className="min-h-full bg-[#eef3f8] p-2 text-slate-900 sm:p-3 lg:p-4 xl:h-full xl:overflow-hidden">
             {galleryModal}
+            {replyImageHoverPreviewBubble}
+            {replyImagePreviewModal}
+            {pancakeImportPromptModal}
             {sendDraftModal}
             <div className="flex w-full flex-col gap-3 xl:h-full xl:min-h-0">
                 <header className="flex shrink-0 flex-col gap-3 rounded-sm border border-slate-200 bg-white px-4 py-3 shadow-sm xl:flex-row xl:items-center xl:justify-between">
@@ -2828,6 +3201,20 @@ function QuickReplies() {
 
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
                         <AccountSelector />
+                        <div className="relative shrink-0" title={`Đích gửi hiện tại: ${zaloTargetLabel}`}>
+                            <span className="material-symbols-outlined pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-slate-600">{selectedZaloTargetOption.icon}</span>
+                            <select
+                                value={zaloTarget}
+                                onChange={(event) => setZaloTarget(normalizeZaloTarget(event.target.value))}
+                                className="h-10 w-full appearance-none rounded-sm border border-slate-200 bg-white pl-10 pr-8 text-[13px] font-semibold text-slate-700 shadow-sm outline-none transition hover:border-sky-300 hover:text-sky-700 focus:border-sky-500 focus:ring-2 focus:ring-sky-500/10 sm:w-[132px]"
+                                aria-label="Chọn đích Zalo"
+                            >
+                                {ZALO_TARGET_OPTIONS.map((option) => (
+                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                ))}
+                            </select>
+                            <span className="material-symbols-outlined pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[16px] text-slate-400">expand_more</span>
+                        </div>
                         <button
                             type="button"
                             onClick={openGallery}
@@ -2849,7 +3236,7 @@ function QuickReplies() {
                         />
                         <button
                             type="button"
-                            onClick={() => pancakeImportInputRef.current?.click()}
+                            onClick={() => setPancakeImportPromptOpen(true)}
                             disabled={importingPancake}
                             className={secondaryButtonClassName}
                             title="Import file Excel xuất từ Pancake"

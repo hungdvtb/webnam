@@ -3305,6 +3305,7 @@ const restoreDeletedOrderLineItemBatch = (currentItems = [], deletedItems = []) 
 const createOrderLineItem = (payload = {}) => {
     const {
         line_id,
+        order_item_id,
         product_id,
         actual_product_id,
         name,
@@ -3399,6 +3400,7 @@ const createOrderLineItem = (payload = {}) => {
 
     return {
         line_id: normalizeCanvasText(line_id) || createOrderLineId('order-item'),
+        order_item_id: Number(order_item_id) || undefined,
         product_id: Number(product_id) || 0,
         actual_product_id: normalizedActualProductId || null,
         name: resolvedName,
@@ -5988,7 +5990,8 @@ const OrderForm = () => {
             return hasChanged ? nextStore : prev;
         });
     }, []);
-    const applyLatestProductsToOrderState = useCallback((refreshedItems = []) => {
+    const applyLatestProductsToOrderState = useCallback((refreshedItems = [], options = {}) => {
+        const preserveSellingPrice = Boolean(options?.preserveSellingPrice);
         const refreshedMap = buildLatestProductSnapshotMap(refreshedItems);
 
         if (refreshedMap.size === 0) {
@@ -6021,7 +6024,7 @@ const OrderForm = () => {
                     original_name: latestName,
                     original_sku: latestSku,
                     unit_name: resolveOrderUnitLabel(latest, item),
-                    price: Number(latest.price ?? item.price ?? 0) || 0,
+                    price: preserveSellingPrice ? item.price : (Number(latest.price ?? item.price ?? 0) || 0),
                     cost_price: resolveProductCostPrice(latest, item.cost_price),
                     options: mergedOptions,
                     ...resolveInventorySnapshot(latest, item),
@@ -6067,11 +6070,6 @@ const OrderForm = () => {
             const nextItems = prev.items.map((item) => {
                 const latest = refreshedMap.get(getOrderItemEffectiveInventoryProductId(item));
                 if (!latest) return item;
-                const latestPrice = parseMoneyNumber(latest?.price);
-                const shouldHydrateBundlePrice = (
-                    normalizeCanvasText(item?.options?.search_entry_kind) === SEARCH_ENTRY_BUNDLE_OPTION
-                    || Number(item?.options?.bundle_parent_id ?? 0) > 0
-                ) && latestPrice !== null;
                 const currentCostPrice = resolveRoundedImportCostValue(item.cost_price, 0);
                 const shouldHydrateCostPrice = currentCostPrice <= 0 && hasProductCostSnapshot(latest);
                 const nextCostPrice = shouldHydrateCostPrice
@@ -6108,7 +6106,6 @@ const OrderForm = () => {
                         original_sku: latestSku,
                     } : {}),
                     unit_name: resolveOrderUnitLabel(latest, item),
-                    price: shouldHydrateBundlePrice ? latestPrice : item.price,
                     cost_price: nextCostPrice,
                     base_cost_price: shouldHydrateCostPrice
                         ? resolveRoundedImportCostValue(latest.cost_price ?? latest.expected_cost, nextCostPrice)
@@ -10625,6 +10622,7 @@ const OrderForm = () => {
             })) || [];
             const normalizedMappedItems = order.items?.map((item, index) => createOrderLineItem({
                 line_id: item?.id ? `saved-${item.id}` : `saved-${Number(item?.product_id) || 0}-${index + 1}`,
+                order_item_id: Number(item?.id) || undefined,
                 product_id: item.product_id,
                 actual_product_id: !isDuplicating && hasActualOrderProductOverride(item) ? item.actual_product_id : null,
                 name: resolveOrderLineItemDisplayName({
@@ -10686,6 +10684,7 @@ const OrderForm = () => {
 
                 return createOrderLineItem({
                     line_id: item?.id ? `saved-${item.id}` : `saved-${Number(item?.product_id) || 0}-${index + 1}`,
+                    order_item_id: Number(item?.id) || undefined,
                     product_id: item.product_id,
                     actual_product_id: !isDuplicating && hasActualOrderProductOverride(item) ? item.actual_product_id : null,
                     name: displayName,
@@ -11008,6 +11007,7 @@ const OrderForm = () => {
                 const actualProductId = Number(item.actual_product_id) || 0;
 
                 return {
+                    order_item_id: Number(item.order_item_id) || undefined,
                     product_id: productId,
                     actual_product_id: hasActualOrderProductOverride(item) ? actualProductId : undefined,
                     sort_order: index + 1,
@@ -12293,7 +12293,7 @@ const OrderForm = () => {
 
             const refreshedItems = Array.isArray(response.data?.items) ? response.data.items : [];
             const issues = Array.isArray(response.data?.issues) ? response.data.issues : [];
-            applyLatestProductsToOrderState(refreshedItems);
+            applyLatestProductsToOrderState(refreshedItems, { preserveSellingPrice: isEdit });
 
             if (refreshedItems.length > 0) {
                 showTransientNotification(

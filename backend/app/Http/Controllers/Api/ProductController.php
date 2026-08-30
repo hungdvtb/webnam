@@ -69,6 +69,19 @@ class ProductController extends Controller
         'media_asset',
     ];
 
+    private array $schemaHasColumnCache = [];
+
+    private function schemaHasColumn(string $table, string $column): bool
+    {
+        $cacheKey = "{$table}.{$column}";
+
+        if (!array_key_exists($cacheKey, $this->schemaHasColumnCache)) {
+            $this->schemaHasColumnCache[$cacheKey] = Schema::hasColumn($table, $column);
+        }
+
+        return $this->schemaHasColumnCache[$cacheKey];
+    }
+
     private function normalizeBundleOptionStatus($value): string
     {
         $status = Str::lower(Str::squish((string) $value));
@@ -98,7 +111,7 @@ class ProductController extends Controller
 
     private function loadExistingBundleOptionUids(Product $product): array
     {
-        if (!$product->id || !Schema::hasColumn('product_links', 'bundle_option_uid')) {
+        if (!$product->id || !$this->schemaHasColumn('product_links', 'bundle_option_uid')) {
             return [];
         }
 
@@ -4901,7 +4914,7 @@ class ProductController extends Controller
             $manualExportQtySub->where('inventory_documents.account_id', $accountId);
         }
 
-        if (Schema::hasColumn('inventory_documents', 'deleted_at')) {
+        if ($this->schemaHasColumn('inventory_documents', 'deleted_at')) {
             $manualExportQtySub->whereNull('inventory_documents.deleted_at');
         }
 
@@ -4955,7 +4968,7 @@ class ProductController extends Controller
             ? $this->accountDataScopeService->accountIdsSharingInventoryScope($inventoryAccountId)
             : $this->inventoryOrderAccountIds($request);
 
-        if ($inventoryAccountId > 0 && Schema::hasColumn('order_items', 'inventory_source_account_id')) {
+        if ($inventoryAccountId > 0 && $this->schemaHasColumn('order_items', 'inventory_source_account_id')) {
             $query->where(function ($builder) use ($inventoryAccountId, $accountIds) {
                 $builder->where('order_items.inventory_source_account_id', $inventoryAccountId);
 
@@ -4971,7 +4984,7 @@ class ProductController extends Controller
             $query->whereIn('orders.account_id', $accountIds);
         }
 
-        if (Schema::hasColumn('orders', 'deleted_at')) {
+        if ($this->schemaHasColumn('orders', 'deleted_at')) {
             $query->whereNull('orders.deleted_at');
         }
 
@@ -5012,7 +5025,7 @@ class ProductController extends Controller
             ? $this->accountDataScopeService->accountIdsSharingInventoryScope($inventoryAccountId)
             : $this->inventoryOrderAccountIds($request);
 
-        if ($inventoryAccountId > 0 && Schema::hasColumn('order_items', 'inventory_source_account_id')) {
+        if ($inventoryAccountId > 0 && $this->schemaHasColumn('order_items', 'inventory_source_account_id')) {
             $query->where(function ($builder) use ($inventoryAccountId, $accountIds) {
                 $builder->where('order_items.inventory_source_account_id', $inventoryAccountId);
 
@@ -5028,7 +5041,7 @@ class ProductController extends Controller
             $query->whereIn('orders.account_id', $accountIds);
         }
 
-        if (Schema::hasColumn('orders', 'deleted_at')) {
+        if ($this->schemaHasColumn('orders', 'deleted_at')) {
             $query->whereNull('orders.deleted_at');
         }
 
@@ -5056,7 +5069,7 @@ class ProductController extends Controller
 
     protected function applyActiveShipmentFilters($query, string $shipmentTable = 'shipments'): void
     {
-        if (Schema::hasColumn('shipments', 'deleted_at')) {
+        if ($this->schemaHasColumn('shipments', 'deleted_at')) {
             $query->whereNull("{$shipmentTable}.deleted_at");
         }
 
@@ -5149,7 +5162,7 @@ class ProductController extends Controller
             $query->whereIn('orders.account_id', $accountIds);
         }
 
-        if (Schema::hasColumn('orders', 'deleted_at')) {
+        if ($this->schemaHasColumn('orders', 'deleted_at')) {
             $query->whereNull('orders.deleted_at');
         }
 
@@ -5172,7 +5185,7 @@ class ProductController extends Controller
             $query->whereIn('orders.account_id', $accountIds);
         }
 
-        if (Schema::hasColumn('orders', 'deleted_at')) {
+        if ($this->schemaHasColumn('orders', 'deleted_at')) {
             $query->whereNull('orders.deleted_at');
         }
 
@@ -5220,7 +5233,7 @@ class ProductController extends Controller
             $query->where('import_items.account_id', $inventoryAccountId);
         }
 
-        if (Schema::hasColumn('imports', 'deleted_at')) {
+        if ($this->schemaHasColumn('imports', 'deleted_at')) {
             $query->whereNull('imports.deleted_at');
         }
 
@@ -5256,7 +5269,7 @@ class ProductController extends Controller
                 ->where('inventory_documents.account_id', $inventoryAccountId);
         }
 
-        if (Schema::hasColumn('inventory_documents', 'deleted_at')) {
+        if ($this->schemaHasColumn('inventory_documents', 'deleted_at')) {
             $query->whereNull('inventory_documents.deleted_at');
         }
 
@@ -5298,7 +5311,7 @@ class ProductController extends Controller
                 ->where('inventory_documents.account_id', $inventoryAccountId);
         }
 
-        if (Schema::hasColumn('inventory_documents', 'deleted_at')) {
+        if ($this->schemaHasColumn('inventory_documents', 'deleted_at')) {
             $query->whereNull('inventory_documents.deleted_at');
         }
 
@@ -5335,7 +5348,7 @@ class ProductController extends Controller
                 ->where('inventory_documents.account_id', $inventoryAccountId);
         }
 
-        if (Schema::hasColumn('inventory_documents', 'deleted_at')) {
+        if ($this->schemaHasColumn('inventory_documents', 'deleted_at')) {
             $query->whereNull('inventory_documents.deleted_at');
         }
 
@@ -5371,7 +5384,7 @@ class ProductController extends Controller
                 ->where('inventory_documents.account_id', $inventoryAccountId);
         }
 
-        if (Schema::hasColumn('inventory_documents', 'deleted_at')) {
+        if ($this->schemaHasColumn('inventory_documents', 'deleted_at')) {
             $manualExportQtySub->whereNull('inventory_documents.deleted_at');
         }
 
@@ -5519,7 +5532,7 @@ class ProductController extends Controller
                 ->where('inventory_documents.account_id', $inventoryAccountId);
         }
 
-        if (Schema::hasColumn('inventory_documents', 'deleted_at')) {
+        if ($this->schemaHasColumn('inventory_documents', 'deleted_at')) {
             $manualExportQtySub->whereNull('inventory_documents.deleted_at');
         }
 
@@ -6520,6 +6533,107 @@ class ProductController extends Controller
         $this->applyBundleNameAdjacentPhraseConstraint($query, $adjacentPhraseLikes);
     }
 
+    protected function isShortSingleNameSearchToken(string $normalizedName, string $compactName, array $nameTokens): bool
+    {
+        if (count($nameTokens) !== 1) {
+            return false;
+        }
+
+        $token = (string) $nameTokens[0];
+
+        return $token !== ''
+            && $normalizedName === $token
+            && $compactName === $token
+            && strlen($token) <= 3
+            && preg_match('/^[a-z]+$/', $token) === 1;
+    }
+
+    protected function applySearchTokenPrefixConstraint(
+        Builder $query,
+        string $expression,
+        string $tokenPrefixLike,
+        string $wordPrefixLike
+    ): void {
+        $query->where(function (Builder $expressionQuery) use ($expression, $tokenPrefixLike, $wordPrefixLike) {
+            $expressionQuery
+                ->whereRaw("{$expression} LIKE ? ESCAPE '\\'", [$tokenPrefixLike])
+                ->orWhereRaw("{$expression} LIKE ? ESCAPE '\\'", [$wordPrefixLike]);
+        });
+    }
+
+    protected function applyBundleNameShortTokenConstraint(
+        Builder $query,
+        string $tokenPrefixLike,
+        string $wordPrefixLike
+    ): void {
+        $query->orWhereHas('bundleItems', function (Builder $bundleQuery) use ($tokenPrefixLike, $wordPrefixLike) {
+            $bundleOptionExpr = $this->normalizedWordsExpression('product_links.option_title');
+
+            $this->applySearchTokenPrefixConstraint($bundleQuery, $bundleOptionExpr, $tokenPrefixLike, $wordPrefixLike);
+        });
+    }
+
+    protected function applyProductNameShortTokenConstraint(
+        Builder $query,
+        string $token,
+        bool $includeVariationMatches = true
+    ): void {
+        $tokenPrefixLike = $this->escapeLike($token) . '%';
+        $wordPrefixLike = '% ' . $this->escapeLike($token) . '%';
+        $nameExpr = $this->normalizedWordsExpression('products.name');
+        $skuWordsExpr = $this->normalizedWordsExpression('products.sku');
+
+        $query
+            ->where(function (Builder $directQuery) use ($nameExpr, $skuWordsExpr, $tokenPrefixLike, $wordPrefixLike) {
+                $directQuery
+                    ->where(function (Builder $nameQuery) use ($nameExpr, $tokenPrefixLike, $wordPrefixLike) {
+                        $this->applySearchTokenPrefixConstraint($nameQuery, $nameExpr, $tokenPrefixLike, $wordPrefixLike);
+                    })
+                    ->orWhere(function (Builder $skuQuery) use ($skuWordsExpr, $tokenPrefixLike, $wordPrefixLike) {
+                        $this->applySearchTokenPrefixConstraint($skuQuery, $skuWordsExpr, $tokenPrefixLike, $wordPrefixLike);
+                    });
+            })
+            ->orWhereHas('attributeValues', function (Builder $attributeValueQuery) use ($tokenPrefixLike, $wordPrefixLike) {
+                $valueExpr = $this->normalizedWordsExpression('value');
+
+                $this->applySearchTokenPrefixConstraint($attributeValueQuery, $valueExpr, $tokenPrefixLike, $wordPrefixLike);
+            });
+
+        if ($includeVariationMatches) {
+            $query
+                ->orWhereHas('variations', function (Builder $variationQuery) use ($tokenPrefixLike, $wordPrefixLike) {
+                    $variationNameExpr = $this->normalizedWordsExpression('name');
+                    $variationSkuWordsExpr = $this->normalizedWordsExpression('sku');
+
+                    $variationQuery->where('status', true)
+                        ->where(function (Builder $directVariationQuery) use (
+                            $variationNameExpr,
+                            $variationSkuWordsExpr,
+                            $tokenPrefixLike,
+                            $wordPrefixLike
+                        ) {
+                            $directVariationQuery
+                                ->where(function (Builder $nameQuery) use ($variationNameExpr, $tokenPrefixLike, $wordPrefixLike) {
+                                    $this->applySearchTokenPrefixConstraint($nameQuery, $variationNameExpr, $tokenPrefixLike, $wordPrefixLike);
+                                })
+                                ->orWhere(function (Builder $skuQuery) use ($variationSkuWordsExpr, $tokenPrefixLike, $wordPrefixLike) {
+                                    $this->applySearchTokenPrefixConstraint($skuQuery, $variationSkuWordsExpr, $tokenPrefixLike, $wordPrefixLike);
+                                });
+                        });
+                })
+                ->orWhereHas('variations.attributeValues', function (Builder $attributeValueQuery) use ($tokenPrefixLike, $wordPrefixLike) {
+                    $attributeValueQuery->whereHas('product', function (Builder $productQuery) {
+                        $productQuery->where('status', true);
+                    });
+
+                    $valueExpr = $this->normalizedWordsExpression('value');
+                    $this->applySearchTokenPrefixConstraint($attributeValueQuery, $valueExpr, $tokenPrefixLike, $wordPrefixLike);
+                });
+        }
+
+        $this->applyBundleNameShortTokenConstraint($query, $tokenPrefixLike, $wordPrefixLike);
+    }
+
     protected function applyProductNameSearch(Builder $query, string $rawSearch, bool $includeVariationMatches = true): array
     {
         $normalizedName = $this->normalizeNameSearchText($rawSearch);
@@ -6540,6 +6654,36 @@ class ProductController extends Controller
             && strlen($compactName) >= 3
             && preg_match('/\s/u', trim($rawSearch)) !== 1;
         $nameTokens = $this->extractNameSearchTokens($normalizedName, $compactName);
+
+        if ($this->isShortSingleNameSearchToken($normalizedName, $compactName, $nameTokens)) {
+            $token = (string) $nameTokens[0];
+            $tokenPrefixLike = $this->escapeLike($token) . '%';
+            $wordPrefixLike = '% ' . $this->escapeLike($token) . '%';
+            $skuWordsExpr = $this->normalizedWordsExpression('products.sku');
+            $shortTokenRankingParts = [
+                "CASE WHEN {$nameExpr} = ? THEN 2600 ELSE 0 END",
+                "CASE WHEN {$nameExpr} LIKE ? ESCAPE '\\' THEN 2100 ELSE 0 END",
+                "CASE WHEN {$nameExpr} LIKE ? ESCAPE '\\' THEN 1900 ELSE 0 END",
+                "CASE WHEN {$skuWordsExpr} LIKE ? ESCAPE '\\' THEN 1550 ELSE 0 END",
+                "CASE WHEN {$skuWordsExpr} LIKE ? ESCAPE '\\' THEN 1350 ELSE 0 END",
+            ];
+            $shortTokenRankingBindings = [
+                $token,
+                $tokenPrefixLike,
+                $wordPrefixLike,
+                $tokenPrefixLike,
+                $wordPrefixLike,
+            ];
+            $shortTokenRankingSql = '(' . implode(' + ', $shortTokenRankingParts) . ')';
+
+            $query->selectRaw("{$shortTokenRankingSql} AS search_score", $shortTokenRankingBindings);
+            $query->where(function (Builder $searchQuery) use ($token, $includeVariationMatches) {
+                $this->applyProductNameShortTokenConstraint($searchQuery, $token, $includeVariationMatches);
+            });
+
+            return [$shortTokenRankingSql, $shortTokenRankingBindings];
+        }
+
         $isCompactCompositeSearch = !preg_match('/\s/u', trim($rawSearch)) && count($nameTokens) > 1;
         $tokenLikes = array_map(
             fn ($token) => '%' . $this->escapeLike($token) . '%',
@@ -6969,6 +7113,13 @@ class ProductController extends Controller
         });
     }
 
+    protected function applyNonEmptyAttributeValuePresenceConstraint(Builder $query): void
+    {
+        $query
+            ->whereNotNull('value')
+            ->whereRaw("LOWER(TRIM(COALESCE(value, ''))) NOT IN ('', '[]', '{}', 'null')");
+    }
+
     protected function applyVariationAttributeFilterGroups($query, array $filterGroups): void
     {
         foreach ($filterGroups as $filterGroup) {
@@ -6984,6 +7135,7 @@ class ProductController extends Controller
                         $inheritedAttributeQuery
                             ->whereDoesntHave('attributeValues', function (Builder $attributeValueQuery) use ($attributeId) {
                                 $attributeValueQuery->where('attribute_id', $attributeId);
+                                $this->applyNonEmptyAttributeValuePresenceConstraint($attributeValueQuery);
                             })
                             ->whereHas('parentConfigurable.attributeValues', function (Builder $attributeValueQuery) use ($attributeId, $valueArray) {
                                 $this->applyAttributeValueConstraint($attributeValueQuery, $attributeId, $valueArray);
@@ -7057,7 +7209,7 @@ class ProductController extends Controller
             ?? null
         );
 
-        if (!empty($statusValues) && Schema::hasColumn('product_links', 'bundle_option_status')) {
+        if (!empty($statusValues) && $this->schemaHasColumn('product_links', 'bundle_option_status')) {
             $statusExpr = DB::raw("LOWER(COALESCE(NULLIF(TRIM(product_links.bundle_option_status), ''), '" . self::BUNDLE_OPTION_STATUS_VISIBLE . "'))");
 
             $query
@@ -7123,7 +7275,9 @@ class ProductController extends Controller
 
     protected function productQuickFilterRankRequested(Request $request): bool
     {
-        return $request->boolean('quick_filter_rank') && ! $this->productQuickFiltersEnabled($request);
+        return $request->boolean('quick_filter_rank')
+            && ! $request->boolean('fast_picker')
+            && ! $this->productQuickFiltersEnabled($request);
     }
 
     protected function productImportQuickFilterRequested(Request $request): bool
@@ -7405,7 +7559,7 @@ class ProductController extends Controller
             ?? null
         );
 
-        if (!empty($statusValues) && Schema::hasColumn('product_links', 'bundle_option_status')) {
+        if (!empty($statusValues) && $this->schemaHasColumn('product_links', 'bundle_option_status')) {
             $placeholders = $this->sqlPlaceholders($statusValues);
             $rankingParts[] = "CASE WHEN (
                 products.type = 'bundle'
@@ -7500,7 +7654,7 @@ class ProductController extends Controller
 
     protected function resolveProductSupplierCodeSortExpression(): ?string
     {
-        if (Schema::hasTable('supplier_product_prices') && Schema::hasColumn('supplier_product_prices', 'supplier_product_code')) {
+        if (Schema::hasTable('supplier_product_prices') && $this->schemaHasColumn('supplier_product_prices', 'supplier_product_code')) {
             $preferredSupplierSort = DB::connection()->getDriverName() !== 'sqlite' && $this->productTableHasColumn('supplier_id')
                 ? 'CASE WHEN supplier_product_prices.supplier_id = products.supplier_id THEN 0 ELSE 1 END ASC,'
                 : '';
@@ -7515,7 +7669,7 @@ class ProductController extends Controller
                 LIMIT 1)";
         }
 
-        if (Schema::hasTable('products') && Schema::hasColumn('products', 'supplier_product_code')) {
+        if (Schema::hasTable('products') && $this->schemaHasColumn('products', 'supplier_product_code')) {
             return 'products.supplier_product_code';
         }
 
@@ -7529,7 +7683,7 @@ class ProductController extends Controller
                 ->contains(fn ($row) => ($row->name ?? null) === $column);
         }
 
-        return Schema::hasTable('products') && Schema::hasColumn('products', $column);
+        return Schema::hasTable('products') && $this->schemaHasColumn('products', $column);
     }
 
     protected function applyRequestedProductSort(Builder $query, string $sortBy, string $direction, string $actualStockSql): bool
@@ -8107,7 +8261,7 @@ class ProductController extends Controller
         ]);
     }
 
-    protected function loadPickerBundleSelectedVariantMap(Collection $products, $pickerAttributeFilters, array $sourceCatalogAccountIds = []): Collection
+    protected function loadPickerBundleSelectedVariantMap(Collection $products, array $sourceCatalogAccountIds = []): Collection
     {
         $variantIds = $products
             ->flatMap(function (Product $product) {
@@ -8150,8 +8304,6 @@ class ProductController extends Controller
         if (!empty($sourceCatalogAccountIds)) {
             $variantQuery->whereIn('products.account_id', $sourceCatalogAccountIds);
         }
-
-        $this->applyVariationAttributeFilters($variantQuery, $pickerAttributeFilters);
 
         return $variantQuery
             ->with([
@@ -8617,6 +8769,7 @@ class ProductController extends Controller
     protected function pickerIndex(Request $request)
     {
         $quickFiltersEnabled = $this->productQuickFiltersEnabled($request);
+        $replacePicker = $request->boolean('replace_picker');
         $parentOnly = $request->boolean('parent_only') || $request->boolean('top_level_only');
         $sourceContexts = $this->resolvePickerSourceContexts($request);
         $sourceCatalogAccountIds = $sourceContexts
@@ -8643,7 +8796,9 @@ class ProductController extends Controller
             'products.warehouse_sequence',
             'products.inventory_import_starred',
         ]);
-        $query->withExists('variations');
+        if (!$replacePicker) {
+            $query->withExists('variations');
+        }
 
         if (!empty($sourceCatalogAccountIds)) {
             $query->whereIn('products.account_id', $sourceCatalogAccountIds);
@@ -8751,7 +8906,8 @@ class ProductController extends Controller
         if ($request->filled('search')) {
             [$searchRankingSql, $searchRankingBindings] = $this->applyProductSearch(
                 $query,
-                (string) $request->input('search')
+                (string) $request->input('search'),
+                !$replacePicker
             );
         }
 
@@ -8762,13 +8918,17 @@ class ProductController extends Controller
             }
         }
 
-        if (($parentOnly || (!$request->filled('type') && !$request->boolean('allow_variants'))) && !$request->filled('parent_id')) {
+        if (($parentOnly || (!$replacePicker && !$request->filled('type') && !$request->boolean('allow_variants'))) && !$request->filled('parent_id')) {
             $query->whereDoesntHave('parentConfigurable');
+        }
+
+        if ($replacePicker && !$request->filled('type') && !$request->filled('parent_id')) {
+            $query->where('products.type', '<>', 'configurable');
         }
 
         $pickerAttributeFilters = $quickFiltersEnabled ? $request->input('attributes') : null;
 
-        $query->with([
+        $pickerRelations = [
             'unit:id,name',
             'images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
             'attributeValues:id,product_id,attribute_id,value',
@@ -8777,7 +8937,10 @@ class ProductController extends Controller
                 ->when(!empty($sourceCatalogAccountIds), fn ($query) => $query->whereIn('products.account_id', $sourceCatalogAccountIds))
                 ->select('products.id', 'products.account_id', 'products.name', 'products.sku', 'products.inventory_unit_id', 'products.profit_center_id', 'products.warehouse_sequence', 'products.inventory_import_starred')
                 ->with(['unit:id,name']),
-            'variations' => function ($variationQuery) use ($pickerAttributeFilters, $sourceCatalogAccountIds) {
+        ];
+
+        if (!$replacePicker) {
+            $pickerRelations['variations'] = function ($variationQuery) use ($pickerAttributeFilters, $sourceCatalogAccountIds) {
                 $variationQuery->withoutGlobalScope('account_id');
                 if (!empty($sourceCatalogAccountIds)) {
                     $variationQuery->whereIn('products.account_id', $sourceCatalogAccountIds);
@@ -8785,12 +8948,14 @@ class ProductController extends Controller
                 $variationQuery->where('products.status', true);
                 $variationQuery->withExists('variations');
                 $this->applyVariationAttributeFilters($variationQuery, $pickerAttributeFilters);
-            },
-            'variations.unit:id,name',
-            'variations.attributeValues:id,product_id,attribute_id,value',
-            'variations.images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
-            'variations.images.mediaAsset:id,public_id,disk,variants',
-        ]);
+            };
+            $pickerRelations[] = 'variations.unit:id,name';
+            $pickerRelations[] = 'variations.attributeValues:id,product_id,attribute_id,value';
+            $pickerRelations[] = 'variations.images:id,product_id,media_asset_id,image_url,is_primary,sort_order';
+            $pickerRelations[] = 'variations.images.mediaAsset:id,public_id,disk,variants';
+        }
+
+        $query->with($pickerRelations);
 
         if ($quickFilterRankingSql !== null) {
             $query->orderByDesc('quick_filter_rank_score');
@@ -8812,24 +8977,32 @@ class ProductController extends Controller
             : $query->paginate($perPage);
 
         $pageProducts = $paginated->getCollection();
-        $bundleOptionSearch = $request->boolean('filter_bundle_options_by_search')
+        $bundleOptionSearch = (!$replacePicker && $request->boolean('filter_bundle_options_by_search'))
             ? $this->buildPickerBundleOptionSearch($request->input('search'))
             : null;
-        $bundleOptionMatchedProductIds = $this->findPickerBundleOptionMatchedProductIds($pageProducts, $bundleOptionSearch);
+        $bundleOptionMatchedProductIds = $replacePicker
+            ? []
+            : $this->findPickerBundleOptionMatchedProductIds($pageProducts, $bundleOptionSearch);
 
-        $this->loadPickerBundleItems(
-            $pageProducts,
-            $pickerAttributeFilters,
-            $bundleOptionSearch,
-            $bundleOptionMatchedProductIds,
-            $sourceCatalogAccountIds
-        );
-        $this->appendBundleOptionPostMetaToProducts($pageProducts);
-        $selectedBundleVariantMap = $this->loadPickerBundleSelectedVariantMap($pageProducts, $pickerAttributeFilters, $sourceCatalogAccountIds);
+        if ($replacePicker) {
+            $selectedBundleVariantMap = collect();
+        } else {
+            $this->loadPickerBundleItems(
+                $pageProducts,
+                $pickerAttributeFilters,
+                $bundleOptionSearch,
+                $bundleOptionMatchedProductIds,
+                $sourceCatalogAccountIds
+            );
+            $this->appendBundleOptionPostMetaToProducts($pageProducts);
+            $selectedBundleVariantMap = $this->loadPickerBundleSelectedVariantMap($pageProducts, $sourceCatalogAccountIds);
+        }
 
-        $pickerPayload = $pageProducts->map(function (Product $product) use ($selectedBundleVariantMap, $sourceContexts) {
-            $parentProduct = $product->parentConfigurable->first();
-            $hasVariantChildren = $product->hasVariantChildren();
+        $pickerPayload = $pageProducts->map(function (Product $product) use ($selectedBundleVariantMap, $sourceContexts, $replacePicker) {
+            $parentProduct = $product->relationLoaded('parentConfigurable')
+                ? $product->parentConfigurable->first()
+                : null;
+            $hasVariantChildren = !$replacePicker && $product->hasVariantChildren();
             $attributeSummary = $this->pickerAttributeSummary($product);
             $displayName = $this->buildOrderItemDisplayName($product, $parentProduct);
             $displayName = trim($displayName) !== '' ? $displayName : $product->name;
@@ -8844,6 +9017,7 @@ class ProductController extends Controller
                 'warehouse_sequence' => $this->productWarehouseSequenceForDisplay($product),
                 'inventory_import_starred' => (bool) ($product->inventory_import_starred ?? false),
                 'parent_inventory_import_starred' => (bool) ($parentProduct?->inventory_import_starred ?? false),
+                'search_score' => (float) ($product->getAttribute('search_score') ?? 0),
                 'name' => $product->name,
                 'display_name' => $displayName,
                 'entry_kind' => $parentProduct ? 'variation' : 'product',
@@ -8869,8 +9043,8 @@ class ProductController extends Controller
                 'attribute_values' => $this->pickerAttributePayload($product),
                 'attribute_summary' => $attributeSummary,
                 'has_variations' => $hasVariantChildren,
-                'variation_count' => $product->variations->count(),
-                'variations' => $product->variations
+                'variation_count' => ($replacePicker || !$product->relationLoaded('variations')) ? 0 : $product->variations->count(),
+                'variations' => ($replacePicker || !$product->relationLoaded('variations')) ? [] : $product->variations
                     ->map(function (Product $variation) use ($product, $sourceContexts) {
                         $variationAttributeSummary = $this->pickerAttributeSummary($variation);
                         $variationDisplayName = $this->buildOrderItemDisplayName($variation, $product);
@@ -8888,6 +9062,7 @@ class ProductController extends Controller
                             'warehouse_sequence' => $this->productWarehouseSequenceForDisplay($variation),
                             'inventory_import_starred' => (bool) ($variation->inventory_import_starred ?? false),
                             'parent_inventory_import_starred' => (bool) ($product->inventory_import_starred ?? false),
+                            'search_score' => (float) ($variation->getAttribute('search_score') ?? 0),
                             'name' => $variation->name,
                             'display_name' => $variationDisplayName,
                             'entry_kind' => 'variation',
@@ -8916,7 +9091,9 @@ class ProductController extends Controller
                     })
                     ->values()
                     ->all(),
-                'bundle_options' => $this->pickerBundleOptions($product, $selectedBundleVariantMap, $sourceContexts),
+                'bundle_options' => $replacePicker
+                    ? []
+                    : $this->pickerBundleOptions($product, $selectedBundleVariantMap, $sourceContexts),
             ] + $sourcePayload;
         });
 
@@ -13291,15 +13468,39 @@ class ProductController extends Controller
     ): ?array {
         $requestedProductId = (int) $requestedItem['product_id'];
         $requestedBaseProductId = (int) ($requestedItem['bundle_item_base_product_id'] ?? 0);
-        $bundleItem = collect($option['items'] ?? [])
-            ->first(function (array $item) use ($requestedProductId, $requestedBaseProductId) {
+        $bundleItems = collect($option['items'] ?? []);
+        $bundleItem = $bundleItems
+            ->first(function (array $item) use ($requestedProductId) {
                 $itemProductId = (int) ($item['product_id'] ?? $item['id'] ?? 0);
+
+                return $itemProductId === $requestedProductId;
+            });
+
+        if (!$bundleItem) {
+            $requestedSku = Str::lower(Str::squish((string) ($requestedItem['sku'] ?? '')));
+
+            if ($requestedSku !== '') {
+                $bundleItem = $bundleItems->first(function (array $item) use ($requestedSku, $requestedBaseProductId) {
+                    $itemBaseProductId = (int) ($item['base_product_id'] ?? 0);
+                    if ($requestedBaseProductId > 0 && $itemBaseProductId > 0 && $itemBaseProductId !== $requestedBaseProductId) {
+                        return false;
+                    }
+
+                    $itemSku = Str::lower(Str::squish((string) ($item['sku'] ?? $item['display_sku'] ?? '')));
+
+                    return $itemSku !== '' && $itemSku === $requestedSku;
+                });
+            }
+        }
+
+        if (!$bundleItem) {
+            $bundleItem = $bundleItems->first(function (array $item) use ($requestedProductId, $requestedBaseProductId) {
                 $itemBaseProductId = (int) ($item['base_product_id'] ?? 0);
 
-                return $itemProductId === $requestedProductId
-                    || ($requestedBaseProductId > 0 && $itemBaseProductId === $requestedBaseProductId)
+                return ($requestedBaseProductId > 0 && $itemBaseProductId === $requestedBaseProductId)
                     || ($itemBaseProductId > 0 && $itemBaseProductId === $requestedProductId);
             });
+        }
 
         if (!$bundleItem) {
             return null;
@@ -13444,7 +13645,6 @@ class ProductController extends Controller
             $this->appendBundleOptionPostMetaToProducts($bundleProducts);
             $selectedBundleVariantMap = $this->loadPickerBundleSelectedVariantMap(
                 $bundleProducts,
-                null,
                 $sourceCatalogAccountIds
             );
 

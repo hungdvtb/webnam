@@ -13,41 +13,79 @@ use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
-class ProductPickerQuickFilterFallbackTest extends TestCase
+class ProductPickerDeclarationSearchRegressionTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_picker_quick_attribute_filter_finds_named_m2_product_when_attribute_value_is_stale(): void
+    public function test_short_name_search_does_not_match_middle_letters_in_unrelated_products(): void
     {
         $account = $this->authenticate();
-        $glazeAttribute = $this->createProductAttribute($account, 'Loai men', [
-            'Men ran',
-            'Men ran M2',
+
+        $matching = $this->createProduct($account, [
+            'name' => 'Nam ruou men LAM S2 cao 20 cm - SEN',
+            'sku' => 'ML80-NAMRUOU-S2',
         ]);
 
-        $staleProduct = $this->createProduct($account, [
-            'name' => 'Am tra men ran hoa tiet sen M2',
-            'sku' => 'ML71-AMTRARAN-SEN',
-            'status' => false,
+        $unrelated = $this->createProduct($account, [
+            'name' => 'Am tra men LAM hoa tiet - SEN - 3 chen',
+            'sku' => 'ML80-AMTRALAM-SEN-3',
         ]);
-        $this->attachProductAttributeValue($staleProduct, $glazeAttribute, 'Men ran');
-
-        $plainProduct = $this->createProduct($account, [
-            'name' => 'Am tra men ran hoa tiet sen',
-            'sku' => 'ML70-AMTRARAN-SEN',
-        ]);
-        $this->attachProductAttributeValue($plainProduct, $glazeAttribute, 'Men ran');
 
         $response = $this
             ->withHeaders($this->headers($account))
             ->getJson('/api/products?' . http_build_query([
                 'picker' => 1,
                 'fast_picker' => 1,
+                'search' => 'nam',
+                'per_page' => 20,
+            ]));
+
+        $response->assertOk();
+
+        $returnedIds = collect($response->json('data'))
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        $this->assertContains($matching->id, $returnedIds);
+        $this->assertNotContains($unrelated->id, $returnedIds);
+    }
+
+    public function test_replace_picker_keeps_variant_with_empty_attribute_value_when_parent_matches_filter(): void
+    {
+        $account = $this->authenticate();
+        $glazeAttribute = $this->createProductAttribute($account, 'Loai men', [
+            'Men lam',
+            'Men ran',
+        ]);
+
+        $parent = $this->createProduct($account, [
+            'name' => 'Ong huong men LAM',
+            'sku' => 'ML80-ONGHUONGLAM',
+            'type' => 'configurable',
+        ]);
+        $this->attachProductAttributeValue($parent, $glazeAttribute, 'Men lam');
+
+        $variant = $this->createProduct($account, [
+            'name' => 'Ong huong men LAM - S2 - Cao 20cm',
+            'sku' => 'ML80-ONGHUONG-S2-20',
+            'price' => 350000,
+        ]);
+        $this->attachProductAttributeValue($variant, $glazeAttribute, null);
+        $this->attachVariation($parent, $variant);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?' . http_build_query([
+                'picker' => 1,
+                'fast_picker' => 1,
+                'replace_picker' => 1,
+                'allow_variants' => 1,
                 'quick_filter_enabled' => 1,
-                'search' => 'am tra',
+                'search' => 'onghuong',
                 'per_page' => 20,
                 'attributes' => [
-                    $glazeAttribute->id => 'Men ran M2',
+                    $glazeAttribute->id => 'Men lam',
                 ],
             ]));
 
@@ -58,83 +96,11 @@ class ProductPickerQuickFilterFallbackTest extends TestCase
             ->map(fn ($id) => (int) $id)
             ->all();
 
-        $this->assertContains($staleProduct->id, $returnedIds);
-        $this->assertNotContains($plainProduct->id, $returnedIds);
-    }
-
-    public function test_picker_bundle_option_items_keep_selected_variant_when_quick_filter_matches_bundle_text(): void
-    {
-        $account = $this->authenticate();
-        $glazeAttribute = $this->createProductAttribute($account, 'Loai men', [
-            'Men ran',
-        ]);
-
-        $bundle = $this->createProduct($account, [
-            'type' => 'bundle',
-            'name' => 'Tron bo do tho men ran MR70 Ban tho 1m27-1m57',
-            'sku' => 'MR70',
-            'price' => 0,
-            'bundle_title' => 'Chon kich thuoc ban tho',
-        ]);
-        $this->attachProductAttributeValue($bundle, $glazeAttribute, 'Men ran');
-        $bundleItemParent = $this->createProduct($account, [
-            'type' => 'configurable',
-            'name' => 'Mam bong men RAN M5 SD',
-            'sku' => 'MAMBONG-RAN-M5-PARENT',
-            'price' => 350000,
-        ]);
-        $selectedVariant = $this->createProduct($account, [
-            'name' => 'Mam bong men RAN M5 SD - 28 cm / Sen',
-            'sku' => 'MAMBONG-RAN-M5-28-SEN',
-            'price' => 600000,
-            'expected_cost' => 290000,
-            'cost_price' => 290000,
-        ]);
-
-        $bundleItemParent->variations()->attach($selectedVariant->id, [
-            'link_type' => 'super_link',
-            'position' => 0,
-            'is_default' => true,
-        ]);
-        $bundle->bundleItems()->attach($bundleItemParent->id, [
-            'link_type' => 'bundle',
-            'position' => 0,
-            'quantity' => 1,
-            'is_required' => true,
-            'option_title' => 'Ban tho 1m27-1m57, 3 bat huong - Men ran',
-            'bundle_option_uid' => 'ban-tho-127-157-men-ran',
-            'bundle_option_status' => 'visible',
-            'variant_id' => $selectedVariant->id,
-            'price' => 600000,
-            'cost_price' => 290000,
-        ]);
-
-        $response = $this
-            ->withHeaders($this->headers($account))
-            ->getJson('/api/products?' . http_build_query([
-                'picker' => 1,
-                'fast_picker' => 1,
-                'quick_filter_enabled' => 1,
-                'per_page' => 20,
-                'attributes' => [
-                    $glazeAttribute->id => 'Men ran',
-                ],
-            ]));
-
-        $response->assertOk();
-
-        $bundleRow = collect($response->json('data'))->firstWhere('id', $bundle->id);
-        $bundleOption = collect($bundleRow['bundle_options'] ?? [])->first();
-        $bundleItem = collect($bundleOption['items'] ?? [])->first();
-
-        $this->assertNotNull($bundleRow);
-        $this->assertNotNull($bundleOption);
-        $this->assertNotNull($bundleItem);
-        $this->assertSame($bundleItemParent->id, (int) ($bundleItem['base_product_id'] ?? 0));
-        $this->assertSame($selectedVariant->id, (int) ($bundleItem['product_id'] ?? 0));
-        $this->assertSame('MAMBONG-RAN-M5-28-SEN', (string) ($bundleItem['sku'] ?? ''));
-        $this->assertSame('Mam bong men RAN M5 SD - 28 cm / Sen', (string) ($bundleItem['name'] ?? ''));
-        $this->assertSame(600000.0, (float) ($bundleItem['price'] ?? 0));
+        $this->assertSame([$variant->id], $returnedIds);
+        $response
+            ->assertJsonPath('data.0.entry_kind', 'variation')
+            ->assertJsonPath('data.0.parent_product_id', $parent->id)
+            ->assertJsonPath('data.0.sku', 'ML80-ONGHUONG-S2-20');
     }
 
     private function authenticate(): Account
@@ -191,13 +157,25 @@ class ProductPickerQuickFilterFallbackTest extends TestCase
         return $attribute->fresh('options');
     }
 
-    private function attachProductAttributeValue(Product $product, Attribute $attribute, string|array $value): ProductAttributeValue
-    {
+    private function attachProductAttributeValue(
+        Product $product,
+        Attribute $attribute,
+        string|array|null $value
+    ): ProductAttributeValue {
         return ProductAttributeValue::query()->create([
             'product_id' => $product->id,
             'attribute_id' => $attribute->id,
             'value' => is_array($value) ? json_encode(array_values($value)) : $value,
         ]);
+    }
+
+    private function attachVariation(Product $parent, Product $variation, array $overrides = []): void
+    {
+        $parent->variations()->attach($variation->id, array_merge([
+            'link_type' => 'super_link',
+            'position' => 0,
+            'is_default' => true,
+        ], $overrides));
     }
 
     private function createProduct(Account $account, array $overrides = []): Product

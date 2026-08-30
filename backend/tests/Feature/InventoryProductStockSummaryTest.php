@@ -186,6 +186,7 @@ class InventoryProductStockSummaryTest extends TestCase
             'price' => 1000000,
             'expected_cost' => 380000,
             'cost_price' => 380000,
+            'status' => true,
         ]);
 
         $bundle->bundleItems()->attach($bundleItem->id, [
@@ -236,6 +237,133 @@ class InventoryProductStockSummaryTest extends TestCase
         $this->assertSame($bundleItem->id, (int) ($bundleLine['product_id'] ?? 0));
         $this->assertSame(1000000.0, (float) ($bundleLine['price'] ?? 0));
         $this->assertSame(320000.0, (float) ($bundleLine['cost_price'] ?? 0));
+    }
+
+    public function test_refresh_order_items_prefers_exact_bundle_variant_when_base_product_repeats(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $supplier = $this->createSupplier($account);
+        $bundle = $this->createProduct($account, $supplier, [
+            'type' => 'bundle',
+            'name' => 'Tron bo nhieu bien the chung cha',
+            'sku' => 'BUNDLE-SAME-BASE',
+            'price' => 0,
+            'status' => true,
+            'bundle_title' => 'Chon kich thuoc',
+        ]);
+        $baseProduct = $this->createProduct($account, $supplier, [
+            'type' => 'configurable',
+            'name' => 'Bat huong men ran',
+            'sku' => 'BASE-BAT-HUONG',
+            'price' => 0,
+            'status' => true,
+        ]);
+        $firstVariant = $this->createProduct($account, $supplier, [
+            'name' => 'Bat huong phi 20',
+            'sku' => 'BAT-HUONG-PHI20',
+            'price' => 750000,
+            'expected_cost' => 380000,
+            'cost_price' => 380000,
+            'status' => true,
+        ]);
+        $secondVariant = $this->createProduct($account, $supplier, [
+            'name' => 'Bat huong phi 18',
+            'sku' => 'BAT-HUONG-PHI18',
+            'price' => 600000,
+            'expected_cost' => 310000,
+            'cost_price' => 310000,
+            'status' => true,
+        ]);
+
+        $baseProduct->variations()->attach($firstVariant->id, [
+            'link_type' => 'super_link',
+            'position' => 0,
+            'is_default' => true,
+        ]);
+        $baseProduct->variations()->attach($secondVariant->id, [
+            'link_type' => 'super_link',
+            'position' => 1,
+            'is_default' => false,
+        ]);
+
+        $optionUid = 'shared-base-option';
+        $bundle->bundleItems()->attach($baseProduct->id, [
+            'link_type' => 'bundle',
+            'position' => 0,
+            'quantity' => 1,
+            'is_required' => true,
+            'option_title' => 'Ban tho 1m97',
+            'bundle_option_uid' => $optionUid,
+            'bundle_option_status' => 'visible',
+            'variant_id' => $firstVariant->id,
+            'price' => 750000,
+            'cost_price' => 380000,
+        ]);
+        $bundle->bundleItems()->attach($baseProduct->id, [
+            'link_type' => 'bundle',
+            'position' => 1,
+            'quantity' => 2,
+            'is_required' => true,
+            'option_title' => 'Ban tho 1m97',
+            'bundle_option_uid' => $optionUid,
+            'bundle_option_status' => 'visible',
+            'variant_id' => $secondVariant->id,
+            'price' => 600000,
+            'cost_price' => 310000,
+        ]);
+
+        $service = app(InventoryService::class);
+        $service->createImport([
+            'supplier_id' => $supplier->id,
+            'inventory_import_status_id' => $this->completedImportStatusId(),
+            'import_date' => now()->subDay()->toDateString(),
+            'items' => [
+                [
+                    'product_id' => $firstVariant->id,
+                    'quantity' => 5,
+                    'received_quantity' => 5,
+                    'unit_cost' => 380000,
+                ],
+                [
+                    'product_id' => $secondVariant->id,
+                    'quantity' => 10,
+                    'received_quantity' => 10,
+                    'unit_cost' => 310000,
+                ],
+            ],
+        ], $account->id, $user->id);
+
+        $order = $this->createOrder($account, $user, [
+            'order_number' => 'ORD-SAME-BASE-BUNDLE',
+            'status' => 'new',
+        ]);
+        $this->createOrderItem($account, $order, $secondVariant, 3);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/products/refresh-order-items', [
+                'items' => [[
+                    'product_id' => $secondVariant->id,
+                    'entry_kind' => 'bundle_option',
+                    'bundle_parent_id' => $bundle->id,
+                    'bundle_option_uid' => $optionUid,
+                    'bundle_option_key' => 'uid:' . $optionUid,
+                    'bundle_item_base_product_id' => $baseProduct->id,
+                    'sku' => $secondVariant->sku,
+                    'name' => $secondVariant->name,
+                ]],
+            ]);
+
+        $response->assertOk();
+
+        $bundleLine = collect($response->json('items'))->firstWhere('entry_kind', 'bundle_item');
+
+        $this->assertNotNull($bundleLine);
+        $this->assertSame($secondVariant->id, (int) ($bundleLine['product_id'] ?? 0));
+        $this->assertSame('BAT-HUONG-PHI18', (string) ($bundleLine['sku'] ?? ''));
+        $this->assertSame(10, (int) ($bundleLine['computed_stock'] ?? 0));
+        $this->assertSame(3, (int) ($bundleLine['pending_export_quantity'] ?? 0));
+        $this->assertSame(7, (int) ($bundleLine['available_to_sell'] ?? 0));
     }
 
     public function test_refresh_order_items_matches_inventory_available_to_sell_when_product_snapshot_has_drift(): void

@@ -4705,6 +4705,17 @@ class ProductController extends Controller
         return str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $value);
     }
 
+    protected function bundleOptionTitleExistsSql(string $matchSql): string
+    {
+        return "EXISTS (
+            SELECT 1
+            FROM product_links
+            WHERE product_links.product_id = products.id
+                AND product_links.link_type = 'bundle'
+                AND ({$matchSql})
+        )";
+    }
+
     protected function normalizeCodeSearchText(string $value): string
     {
         return (string) Str::of($value)
@@ -4726,6 +4737,11 @@ class ProductController extends Controller
     protected function compactSearchText(string $value): string
     {
         return preg_replace('/[^a-z0-9]+/', '', $this->normalizeNameSearchText($value)) ?? '';
+    }
+
+    protected function isCompactMeterDimensionSearch(string $value): bool
+    {
+        return preg_match('/^\d+m\d*$/i', $value) === 1;
     }
 
     protected function compactCodeLooseLike(string $compactCode): ?string
@@ -5863,7 +5879,12 @@ class ProductController extends Controller
             && preg_match('/\d/u', $trimmed) === 1;
     }
 
-    protected function applyProductSearch(Builder $query, string $rawSearch, bool $includeVariationMatches = true): array
+    protected function applyProductSearch(
+        Builder $query,
+        string $rawSearch,
+        bool $includeVariationMatches = true,
+        bool $skipMatchProbes = false
+    ): array
     {
         $trimmedSearch = trim($rawSearch);
         if ($trimmedSearch === '') {
@@ -5873,27 +5894,35 @@ class ProductController extends Controller
         if ($this->looksLikeProductCodeSearch($trimmedSearch)) {
             $compactSearch = $this->compactSearchText($trimmedSearch);
             if (
+                $skipMatchProbes
+                ||
                 preg_match('/[a-z]/', $compactSearch) === 1
                 && preg_match('/\d/', $compactSearch) === 1
             ) {
-                return $this->applyProductCodeSearch($query, $trimmedSearch, $includeVariationMatches);
+                return $this->applyProductCodeSearch($query, $trimmedSearch, $includeVariationMatches, $skipMatchProbes);
             }
 
             $codeProbeQuery = clone $query;
             [$codeSearchRankingSql] = $this->applyProductCodeSearch($codeProbeQuery, $trimmedSearch, $includeVariationMatches);
 
             if ($codeSearchRankingSql !== null && $codeProbeQuery->exists()) {
-                return $this->applyProductCodeSearch($query, $trimmedSearch, $includeVariationMatches);
+                return $this->applyProductCodeSearch($query, $trimmedSearch, $includeVariationMatches, $skipMatchProbes);
             }
         }
 
-        return $this->applyProductNameSearch($query, $trimmedSearch, $includeVariationMatches);
+        return $this->applyProductNameSearch($query, $trimmedSearch, $includeVariationMatches, $skipMatchProbes);
     }
 
-    protected function applyProductCodeSearch(Builder $query, string $rawSearch, bool $includeVariationMatches = true): array
+    protected function applyProductCodeSearch(
+        Builder $query,
+        string $rawSearch,
+        bool $includeVariationMatches = true,
+        bool $skipMatchProbes = false
+    ): array
     {
         $normalizedCode = $this->normalizeCodeSearchText($rawSearch);
         $compactCode = $this->compactSearchText($rawSearch);
+        $isCompactMeterDimensionSearch = $this->isCompactMeterDimensionSearch($compactCode);
         $includeNameMatches = $this->shouldIncludeNameMatchesInCodeSearch($rawSearch);
         $normalizedName = $includeNameMatches ? $this->normalizeNameSearchText($rawSearch) : '';
         $warehouseSequenceSearch = ctype_digit($compactCode) ? (int) $compactCode : null;
@@ -5906,6 +5935,8 @@ class ProductController extends Controller
         $compactSkuExpr = $this->compactSearchExpression('products.sku');
         $nameExpr = $includeNameMatches ? $this->normalizedWordsExpression('products.name') : null;
         $compactNameExpr = $includeNameMatches ? $this->compactSearchExpression('products.name') : null;
+        $bundleOptionExpr = $this->normalizedWordsExpression('product_links.option_title');
+        $bundleOptionCompactExpr = $this->compactSearchExpression('product_links.option_title');
         $exactCodeSearch = function (Builder $searchQuery) use ($skuExpr, $compactSkuExpr, $normalizedCode, $compactCode, $warehouseSequenceSearch, $includeVariationMatches) {
             $searchQuery
                 ->where(function (Builder $directQuery) use ($skuExpr, $compactSkuExpr, $normalizedCode, $compactCode, $warehouseSequenceSearch) {
@@ -5950,12 +5981,15 @@ class ProductController extends Controller
             }
         };
 
-        $hasExactCodeMatch = (clone $query)->where($exactCodeSearch)->exists();
+        $hasExactCodeMatch = !$skipMatchProbes && (clone $query)->where($exactCodeSearch)->exists();
         $codePrefixLike = $this->escapeLike($normalizedCode) . '%';
         $codeContainsLike = '%' . $this->escapeLike($normalizedCode) . '%';
         $compactCodePrefixLike = $compactCode !== '' ? $this->escapeLike($compactCode) . '%' : null;
         $compactCodeContainsLike = $compactCode !== '' ? '%' . $this->escapeLike($compactCode) . '%' : null;
-        $compactCodeLooseLike = $compactCode !== '' ? $this->compactCodeLooseLike($compactCode) : null;
+        $compactCodeLooseLike = $compactCode !== '' && !$isCompactMeterDimensionSearch
+            ? $this->compactCodeLooseLike($compactCode)
+            : null;
+        $includeCompactSkuContains = !$isCompactMeterDimensionSearch;
         $nameAliasConstraints = $compactCode !== '' ? $this->codeSearchNameAliases($compactCode) : [];
         $useDirectAttributeCodeSearch = $compactCode !== '' && !str_starts_with($compactCode, 'bh');
         $nameContainsLike = ($includeNameMatches && $normalizedName !== '')
@@ -6010,7 +6044,7 @@ class ProductController extends Controller
             $searchRankingBindings[] = $compactCodePrefixLike;
         }
 
-        if ($compactCodeContainsLike !== null) {
+        if ($compactCodeContainsLike !== null && $includeCompactSkuContains) {
             $searchRankingParts[] = "CASE WHEN {$compactSkuExpr} LIKE ? ESCAPE '\\' THEN 1700 ELSE 0 END";
             $searchRankingBindings[] = $compactCodeContainsLike;
         }
@@ -6023,11 +6057,33 @@ class ProductController extends Controller
         if ($includeNameMatches && $nameExpr !== null && $nameContainsLike !== null) {
             $searchRankingParts[] = "CASE WHEN {$nameExpr} LIKE ? ESCAPE '\\' THEN 1600 ELSE 0 END";
             $searchRankingBindings[] = $nameContainsLike;
+            $searchRankingParts[] = 'CASE WHEN ' . $this->bundleOptionTitleExistsSql("{$bundleOptionExpr} LIKE ? ESCAPE '\\'") . ' THEN 1550 ELSE 0 END';
+            $searchRankingBindings[] = $nameContainsLike;
         }
 
         if ($includeNameMatches && $compactNameExpr !== null && $compactCodeContainsLike !== null) {
             $searchRankingParts[] = "CASE WHEN {$compactNameExpr} LIKE ? ESCAPE '\\' THEN 1500 ELSE 0 END";
             $searchRankingBindings[] = $compactCodeContainsLike;
+        }
+
+        if ($compactCode !== '') {
+            $searchRankingParts[] = 'CASE WHEN ' . $this->bundleOptionTitleExistsSql("{$bundleOptionCompactExpr} = ?") . ' THEN 2200 ELSE 0 END';
+            $searchRankingBindings[] = $compactCode;
+        }
+
+        if ($compactCodePrefixLike !== null) {
+            $searchRankingParts[] = 'CASE WHEN ' . $this->bundleOptionTitleExistsSql("{$bundleOptionCompactExpr} LIKE ? ESCAPE '\\'") . ' THEN 1800 ELSE 0 END';
+            $searchRankingBindings[] = $compactCodePrefixLike;
+        }
+
+        if ($compactCodeContainsLike !== null) {
+            $searchRankingParts[] = 'CASE WHEN ' . $this->bundleOptionTitleExistsSql("{$bundleOptionCompactExpr} LIKE ? ESCAPE '\\'") . ' THEN 1500 ELSE 0 END';
+            $searchRankingBindings[] = $compactCodeContainsLike;
+        }
+
+        if ($compactCodeLooseLike !== null) {
+            $searchRankingParts[] = 'CASE WHEN ' . $this->bundleOptionTitleExistsSql("{$bundleOptionCompactExpr} LIKE ? ESCAPE '\\'") . ' THEN 1280 ELSE 0 END';
+            $searchRankingBindings[] = $compactCodeLooseLike;
         }
 
         if ($includeNameMatches && $nameExpr !== null && $compactNameExpr !== null) {
@@ -6046,6 +6102,7 @@ class ProductController extends Controller
             $codeContainsLike,
             $compactCodeContainsLike,
             $compactCodeLooseLike,
+            $includeCompactSkuContains,
             $warehouseSequenceSearch,
             $includeNameMatches,
             $nameExpr,
@@ -6075,6 +6132,7 @@ class ProductController extends Controller
                     $codeContainsLike,
                     $compactCodeContainsLike,
                     $compactCodeLooseLike,
+                    $includeCompactSkuContains,
                     $warehouseSequenceSearch,
                     $includeNameMatches,
                     $nameExpr,
@@ -6084,7 +6142,7 @@ class ProductController extends Controller
                 ) {
                     $directQuery->whereRaw("{$skuExpr} LIKE ? ESCAPE '\\'", [$codeContainsLike]);
 
-                    if ($compactCodeContainsLike !== null) {
+                    if ($compactCodeContainsLike !== null && $includeCompactSkuContains) {
                         $directQuery->orWhereRaw("{$compactSkuExpr} LIKE ? ESCAPE '\\'", [$compactCodeContainsLike]);
                     }
 
@@ -6127,6 +6185,7 @@ class ProductController extends Controller
                     $codeContainsLike,
                     $compactCodeContainsLike,
                     $compactCodeLooseLike,
+                    $includeCompactSkuContains,
                     $warehouseSequenceSearch,
                     $includeNameMatches,
                     $nameContainsLike,
@@ -6146,6 +6205,7 @@ class ProductController extends Controller
                             $codeContainsLike,
                             $compactCodeContainsLike,
                             $compactCodeLooseLike,
+                            $includeCompactSkuContains,
                             $warehouseSequenceSearch,
                             $includeNameMatches,
                             $nameContainsLike,
@@ -6153,7 +6213,7 @@ class ProductController extends Controller
                         ) {
                             $directVariationQuery->whereRaw("{$variationSkuExpr} LIKE ? ESCAPE '\\'", [$codeContainsLike]);
 
-                            if ($compactCodeContainsLike !== null) {
+                            if ($compactCodeContainsLike !== null && $includeCompactSkuContains) {
                                 $directVariationQuery->orWhereRaw("{$variationCompactSkuExpr} LIKE ? ESCAPE '\\'", [$compactCodeContainsLike]);
                             }
 
@@ -6634,7 +6694,12 @@ class ProductController extends Controller
         $this->applyBundleNameShortTokenConstraint($query, $tokenPrefixLike, $wordPrefixLike);
     }
 
-    protected function applyProductNameSearch(Builder $query, string $rawSearch, bool $includeVariationMatches = true): array
+    protected function applyProductNameSearch(
+        Builder $query,
+        string $rawSearch,
+        bool $includeVariationMatches = true,
+        bool $skipMatchProbes = false
+    ): array
     {
         $normalizedName = $this->normalizeNameSearchText($rawSearch);
         if ($normalizedName === '') {
@@ -6643,6 +6708,8 @@ class ProductController extends Controller
 
         $nameExpr = $this->normalizedWordsExpression('products.name');
         $compactNameExpr = $this->compactSearchExpression('products.name');
+        $bundleOptionExpr = $this->normalizedWordsExpression('product_links.option_title');
+        $bundleOptionCompactExpr = $this->compactSearchExpression('product_links.option_title');
         $nameExact = $normalizedName;
         $namePrefixLike = $this->escapeLike($normalizedName) . '%';
         $nameContainsLike = '%' . $this->escapeLike($normalizedName) . '%';
@@ -6713,8 +6780,14 @@ class ProductController extends Controller
             "CASE WHEN {$nameExpr} = ? THEN 2600 ELSE 0 END",
             "CASE WHEN {$nameExpr} LIKE ? ESCAPE '\\' THEN 2100 ELSE 0 END",
             "CASE WHEN {$nameExpr} LIKE ? ESCAPE '\\' THEN 1700 ELSE 0 END",
+            'CASE WHEN ' . $this->bundleOptionTitleExistsSql("{$bundleOptionExpr} = ?") . ' THEN 2350 ELSE 0 END',
+            'CASE WHEN ' . $this->bundleOptionTitleExistsSql("{$bundleOptionExpr} LIKE ? ESCAPE '\\'") . ' THEN 1950 ELSE 0 END',
+            'CASE WHEN ' . $this->bundleOptionTitleExistsSql("{$bundleOptionExpr} LIKE ? ESCAPE '\\'") . ' THEN 1500 ELSE 0 END',
         ];
         $phraseRankingBindings = [
+            $nameExact,
+            $namePrefixLike,
+            $nameContainsLike,
             $nameExact,
             $namePrefixLike,
             $nameContainsLike,
@@ -6723,15 +6796,21 @@ class ProductController extends Controller
         if ($compactNameExact !== null) {
             $phraseRankingParts[] = "CASE WHEN {$compactNameExpr} = ? THEN 2200 ELSE 0 END";
             $phraseRankingBindings[] = $compactNameExact;
+            $phraseRankingParts[] = 'CASE WHEN ' . $this->bundleOptionTitleExistsSql("{$bundleOptionCompactExpr} = ?") . ' THEN 2150 ELSE 0 END';
+            $phraseRankingBindings[] = $compactNameExact;
         }
 
         if ($compactNamePrefixLike !== null) {
             $phraseRankingParts[] = "CASE WHEN {$compactNameExpr} LIKE ? ESCAPE '\\' THEN 1850 ELSE 0 END";
             $phraseRankingBindings[] = $compactNamePrefixLike;
+            $phraseRankingParts[] = 'CASE WHEN ' . $this->bundleOptionTitleExistsSql("{$bundleOptionCompactExpr} LIKE ? ESCAPE '\\'") . ' THEN 1750 ELSE 0 END';
+            $phraseRankingBindings[] = $compactNamePrefixLike;
         }
 
         if ($compactNameContainsLike !== null) {
             $phraseRankingParts[] = "CASE WHEN {$compactNameExpr} LIKE ? ESCAPE '\\' THEN 1550 ELSE 0 END";
+            $phraseRankingBindings[] = $compactNameContainsLike;
+            $phraseRankingParts[] = 'CASE WHEN ' . $this->bundleOptionTitleExistsSql("{$bundleOptionCompactExpr} LIKE ? ESCAPE '\\'") . ' THEN 1450 ELSE 0 END';
             $phraseRankingBindings[] = $compactNameContainsLike;
         }
 
@@ -6742,6 +6821,26 @@ class ProductController extends Controller
         }
 
         $phraseRankingSql = '(' . implode(' + ', $phraseRankingParts) . ')';
+
+        if ($skipMatchProbes) {
+            $query->selectRaw("{$phraseRankingSql} AS search_score", $phraseRankingBindings);
+            $query->where(function (Builder $searchQuery) use (
+                $nameContainsLike,
+                $compactNameContainsLike,
+                $includeVariationMatches,
+                $includeCompactSkuMatches
+            ) {
+                $this->applyProductNamePhraseConstraint(
+                    $searchQuery,
+                    $nameContainsLike,
+                    $compactNameContainsLike,
+                    $includeVariationMatches,
+                    $includeCompactSkuMatches
+                );
+            });
+
+            return [$phraseRankingSql, $phraseRankingBindings];
+        }
 
         $hasPhraseMatch = (clone $query)
             ->where(function (Builder $searchQuery) use (
@@ -8209,7 +8308,8 @@ class ProductController extends Controller
         $pickerAttributeFilters,
         ?array $bundleOptionSearch = null,
         array $bundleOptionMatchedProductIds = [],
-        array $sourceCatalogAccountIds = []
+        array $sourceCatalogAccountIds = [],
+        bool $lightPicker = false
     ): void {
         if ($products->isEmpty()) {
             return;
@@ -8222,7 +8322,7 @@ class ProductController extends Controller
             ->values()
             ->all();
 
-        $products->load([
+        $bundleRelations = [
             'bundleItems' => function ($bundleQuery) use ($bundleOptionSearch, $matchedProductIds, $sourceCatalogAccountIds) {
                 $bundleQuery->withoutGlobalScope('account_id');
                 if (!empty($sourceCatalogAccountIds)) {
@@ -8257,8 +8357,13 @@ class ProductController extends Controller
             'bundleItems.unit:id,name',
             'bundleItems.attributeValues:id,product_id,attribute_id,value',
             'bundleItems.images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
-            'bundleItems.images.mediaAsset:id,public_id,disk,variants',
-        ]);
+        ];
+
+        if (!$lightPicker) {
+            $bundleRelations[] = 'bundleItems.images.mediaAsset:id,public_id,disk,variants';
+        }
+
+        $products->load($bundleRelations);
     }
 
     protected function loadPickerBundleSelectedVariantMap(Collection $products, array $sourceCatalogAccountIds = []): Collection
@@ -8316,7 +8421,7 @@ class ProductController extends Controller
             ->keyBy(fn (Product $product) => (int) $product->id);
     }
 
-    protected function pickerPrimaryImage(?Product $product): ?string
+    protected function pickerPrimaryImage(?Product $product, bool $preferRawImage = false): ?string
     {
         if (!$product) {
             return null;
@@ -8324,6 +8429,10 @@ class ProductController extends Controller
 
         $primaryImage = $product->images->firstWhere('is_primary', true)
             ?: $product->images->sortBy('sort_order')->first();
+
+        if ($preferRawImage) {
+            return $primaryImage?->getRawOriginal('image_url') ?: $primaryImage?->image_url;
+        }
 
         return $primaryImage?->thumbnail_url ?: $primaryImage?->image_url;
     }
@@ -8384,7 +8493,12 @@ class ProductController extends Controller
         return $parentName;
     }
 
-    protected function pickerBundleOptions(Product $product, ?Collection $selectedVariantMap = null, ?Collection $sourceContexts = null): array
+    protected function pickerBundleOptions(
+        Product $product,
+        ?Collection $selectedVariantMap = null,
+        ?Collection $sourceContexts = null,
+        bool $preferRawImages = false
+    ): array
     {
         if ($product->type !== 'bundle' || !$product->relationLoaded('bundleItems')) {
             return [];
@@ -8411,7 +8525,7 @@ class ProductController extends Controller
                     ? 'post:' . $optionPostId
                     : 'title:' . Str::lower($optionTitle);
             })
-            ->map(function ($items, string $groupKey) use ($selectedVariantMap, $sourceContexts) {
+            ->map(function ($items, string $groupKey) use ($selectedVariantMap, $sourceContexts, $preferRawImages) {
                 /** @var Product|null $firstItem */
                 $firstItem = $items->first();
                 if (!$firstItem) {
@@ -8429,7 +8543,7 @@ class ProductController extends Controller
 
                 $optionStatus = $this->normalizeBundleOptionStatus($firstItem->pivot?->bundle_option_status ?? null);
 
-                $resolvedItems = $items->map(function (Product $bundleItem) use ($selectedVariantMap, $sourceContexts) {
+                $resolvedItems = $items->map(function (Product $bundleItem) use ($selectedVariantMap, $sourceContexts, $preferRawImages) {
                     $selectedVariantId = filled($bundleItem->pivot?->variant_id ?? null)
                         ? (int) $bundleItem->pivot->variant_id
                         : null;
@@ -8469,8 +8583,8 @@ class ProductController extends Controller
                             ?? $resolvedProduct->cost_price
                             ?? $resolvedProduct->expected_cost
                             ?? 0),
-                        'main_image' => $this->pickerPrimaryImage($selectedVariant)
-                            ?: $this->pickerPrimaryImage($bundleItem),
+                        'main_image' => $this->pickerPrimaryImage($selectedVariant, $preferRawImages)
+                            ?: $this->pickerPrimaryImage($bundleItem, $preferRawImages),
                         'attribute_values' => $this->pickerAttributePayload($resolvedProduct),
                         'option_label' => $this->pickerAttributeSummary($resolvedProduct),
                         'variant_name' => $selectedVariant?->name,
@@ -8770,6 +8884,7 @@ class ProductController extends Controller
     {
         $quickFiltersEnabled = $this->productQuickFiltersEnabled($request);
         $replacePicker = $request->boolean('replace_picker');
+        $lightPicker = $request->boolean('light_picker');
         $parentOnly = $request->boolean('parent_only') || $request->boolean('top_level_only');
         $sourceContexts = $this->resolvePickerSourceContexts($request);
         $sourceCatalogAccountIds = $sourceContexts
@@ -8879,13 +8994,33 @@ class ProductController extends Controller
             $this->applyProductImportQuickFilter($query);
         }
 
-        // Apply parent variation filter if requested
+        $requestedParentIds = collect();
         if ($request->filled('parent_id')) {
-            $parentId = (int) $request->parent_id;
+            $requestedParentIds->push($request->input('parent_id'));
+        }
+        if ($request->filled('parent_ids')) {
+            $rawParentIds = is_array($request->input('parent_ids'))
+                ? $request->input('parent_ids')
+                : explode(',', (string) $request->input('parent_ids'));
+            $requestedParentIds = $requestedParentIds->merge($rawParentIds);
+        }
+        $requestedParentIds = $requestedParentIds
+            ->map(fn ($id) => is_numeric($id) ? (int) $id : null)
+            ->filter()
+            ->unique()
+            ->values();
+        $hasParentVariationFilter = $requestedParentIds->isNotEmpty();
+
+        // Apply parent variation filter if requested
+        if ($hasParentVariationFilter) {
             $childIds = \Illuminate\Support\Facades\DB::table('product_links')
-                ->where('product_id', $parentId)
+                ->whereIn('product_id', $requestedParentIds->all())
                 ->where('link_type', 'super_link')
-                ->pluck('linked_product_id');
+                ->pluck('linked_product_id')
+                ->map(fn ($id) => is_numeric($id) ? (int) $id : null)
+                ->filter()
+                ->unique()
+                ->values();
 
             if ($childIds->isEmpty()) {
                 $query->whereRaw('1 = 0'); // Ensure no results if no siblings exist
@@ -8907,7 +9042,8 @@ class ProductController extends Controller
             [$searchRankingSql, $searchRankingBindings] = $this->applyProductSearch(
                 $query,
                 (string) $request->input('search'),
-                !$replacePicker
+                !$replacePicker,
+                $lightPicker
             );
         }
 
@@ -8918,11 +9054,11 @@ class ProductController extends Controller
             }
         }
 
-        if (($parentOnly || (!$replacePicker && !$request->filled('type') && !$request->boolean('allow_variants'))) && !$request->filled('parent_id')) {
+        if (($parentOnly || (!$replacePicker && !$request->filled('type') && !$request->boolean('allow_variants'))) && !$hasParentVariationFilter) {
             $query->whereDoesntHave('parentConfigurable');
         }
 
-        if ($replacePicker && !$request->filled('type') && !$request->filled('parent_id')) {
+        if ($replacePicker && !$request->filled('type') && !$hasParentVariationFilter) {
             $query->where('products.type', '<>', 'configurable');
         }
 
@@ -8930,7 +9066,6 @@ class ProductController extends Controller
 
         $pickerRelations = [
             'unit:id,name',
-            'images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
             'attributeValues:id,product_id,attribute_id,value',
             'parentConfigurable' => fn ($parentQuery) => $parentQuery
                 ->withoutGlobalScope('account_id')
@@ -8940,6 +9075,7 @@ class ProductController extends Controller
         ];
 
         if (!$replacePicker) {
+            $pickerRelations[] = 'images:id,product_id,media_asset_id,image_url,is_primary,sort_order';
             $pickerRelations['variations'] = function ($variationQuery) use ($pickerAttributeFilters, $sourceCatalogAccountIds) {
                 $variationQuery->withoutGlobalScope('account_id');
                 if (!empty($sourceCatalogAccountIds)) {
@@ -8952,7 +9088,9 @@ class ProductController extends Controller
             $pickerRelations[] = 'variations.unit:id,name';
             $pickerRelations[] = 'variations.attributeValues:id,product_id,attribute_id,value';
             $pickerRelations[] = 'variations.images:id,product_id,media_asset_id,image_url,is_primary,sort_order';
-            $pickerRelations[] = 'variations.images.mediaAsset:id,public_id,disk,variants';
+            if (!$lightPicker) {
+                $pickerRelations[] = 'variations.images.mediaAsset:id,public_id,disk,variants';
+            }
         }
 
         $query->with($pickerRelations);
@@ -8992,13 +9130,14 @@ class ProductController extends Controller
                 $pickerAttributeFilters,
                 $bundleOptionSearch,
                 $bundleOptionMatchedProductIds,
-                $sourceCatalogAccountIds
+                $sourceCatalogAccountIds,
+                $lightPicker
             );
             $this->appendBundleOptionPostMetaToProducts($pageProducts);
             $selectedBundleVariantMap = $this->loadPickerBundleSelectedVariantMap($pageProducts, $sourceCatalogAccountIds);
         }
 
-        $pickerPayload = $pageProducts->map(function (Product $product) use ($selectedBundleVariantMap, $sourceContexts, $replacePicker) {
+        $pickerPayload = $pageProducts->map(function (Product $product) use ($selectedBundleVariantMap, $sourceContexts, $replacePicker, $lightPicker) {
             $parentProduct = $product->relationLoaded('parentConfigurable')
                 ? $product->parentConfigurable->first()
                 : null;
@@ -9039,13 +9178,13 @@ class ProductController extends Controller
                 'profit_center_id' => $product->profit_center_id !== null
                     ? (int) $product->profit_center_id
                     : ($parentProduct?->profit_center_id !== null ? (int) $parentProduct->profit_center_id : null),
-                'main_image' => $this->pickerPrimaryImage($product),
+                'main_image' => $replacePicker ? null : $this->pickerPrimaryImage($product, $lightPicker),
                 'attribute_values' => $this->pickerAttributePayload($product),
                 'attribute_summary' => $attributeSummary,
                 'has_variations' => $hasVariantChildren,
                 'variation_count' => ($replacePicker || !$product->relationLoaded('variations')) ? 0 : $product->variations->count(),
                 'variations' => ($replacePicker || !$product->relationLoaded('variations')) ? [] : $product->variations
-                    ->map(function (Product $variation) use ($product, $sourceContexts) {
+                    ->map(function (Product $variation) use ($product, $sourceContexts, $lightPicker) {
                         $variationAttributeSummary = $this->pickerAttributeSummary($variation);
                         $variationDisplayName = $this->buildOrderItemDisplayName($variation, $product);
                         $variationDisplayName = trim((string) $variationDisplayName) !== ''
@@ -9083,8 +9222,8 @@ class ProductController extends Controller
                             'profit_center_id' => $variation->profit_center_id !== null
                                 ? (int) $variation->profit_center_id
                                 : ($product->profit_center_id !== null ? (int) $product->profit_center_id : null),
-                            'main_image' => $this->pickerPrimaryImage($variation)
-                                ?: $this->pickerPrimaryImage($product),
+                            'main_image' => $this->pickerPrimaryImage($variation, $lightPicker)
+                                ?: $this->pickerPrimaryImage($product, $lightPicker),
                             'attribute_values' => $this->pickerAttributePayload($variation),
                             'attribute_summary' => $variationAttributeSummary,
                         ] + $variationSourcePayload;
@@ -9093,9 +9232,15 @@ class ProductController extends Controller
                     ->all(),
                 'bundle_options' => $replacePicker
                     ? []
-                    : $this->pickerBundleOptions($product, $selectedBundleVariantMap, $sourceContexts),
+                    : $this->pickerBundleOptions($product, $selectedBundleVariantMap, $sourceContexts, $lightPicker),
             ] + $sourcePayload;
         });
+
+        if ($lightPicker) {
+            $paginated->setCollection($pickerPayload);
+
+            return response()->json($paginated);
+        }
 
         $inventorySourceAccountByProductId = $pickerPayload
             ->flatMap(function (array $product) {

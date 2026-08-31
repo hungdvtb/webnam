@@ -4558,7 +4558,7 @@ class OrderController extends Controller
         }
 
         $productIds = $order->items
-            ->pluck('product_id')
+            ->map(fn (OrderItem $item) => $this->printableProductIdForStorageLookup($item))
             ->map(fn ($id) => (int) $id)
             ->filter()
             ->unique()
@@ -4596,9 +4596,9 @@ class OrderController extends Controller
                 continue;
             }
 
-            $orderedProduct = $order->items
-                ->first(fn (OrderItem $item) => (int) $item->product_id === (int) $productId)
-                ?->product;
+            $sourceItem = $order->items
+                ->first(fn (OrderItem $item) => $this->printableProductIdForStorageLookup($item) === (int) $productId);
+            $orderedProduct = $sourceItem?->actualProduct ?: $sourceItem?->product;
 
             if ($this->printableProductHasStock($orderedProduct)) {
                 continue;
@@ -4778,7 +4778,7 @@ class OrderController extends Controller
                             $pickProduct = $item->actualProduct ?: $item->product;
                             $warehouseSequence = $this->warehouseSequenceForProduct($pickProduct);
                             $replacementProductPayload = $this->printableReplacementProductPayload(
-                                $replacementProductMap[(int) $item->product_id] ?? null,
+                                $replacementProductMap[$this->printableProductIdForStorageLookup($item)] ?? null,
                                 $storageLocationMap
                             );
 

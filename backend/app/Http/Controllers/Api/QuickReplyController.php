@@ -1627,14 +1627,17 @@ class QuickReplyController extends Controller
 
         $scriptPath = $root . DIRECTORY_SEPARATOR . 'send_quick_reply_to_zalo.py';
         $payloadPath = $root . DIRECTORY_SEPARATOR . 'zalo-payload-' . Str::lower(Str::random(12)) . '.json';
+        $textPasteDelayMs = (int) env('QUICK_REPLY_ZALO_TEXT_PASTE_DELAY_MS', $zaloTarget === 'web' ? 700 : 250);
+        $imagePasteDelayMs = (int) env('QUICK_REPLY_ZALO_IMAGE_PASTE_DELAY_MS', $zaloTarget === 'web' ? 2400 : 1600);
+        $betweenStepsDelayMs = (int) env('QUICK_REPLY_ZALO_BETWEEN_STEPS_DELAY_MS', $zaloTarget === 'web' ? 750 : 450);
         $payload = [
             'steps' => $steps,
             'zalo_target' => $zaloTarget,
             'window_keywords' => $this->zaloWindowKeywords($zaloTarget),
-            'text_paste_delay_ms' => (int) env('QUICK_REPLY_ZALO_TEXT_PASTE_DELAY_MS', 250),
+            'text_paste_delay_ms' => $textPasteDelayMs,
             'after_text_send_delay_ms' => (int) env('QUICK_REPLY_ZALO_AFTER_TEXT_DELAY_MS', 700),
-            'image_paste_delay_ms' => (int) env('QUICK_REPLY_ZALO_IMAGE_PASTE_DELAY_MS', 1600),
-            'between_steps_delay_ms' => (int) env('QUICK_REPLY_ZALO_BETWEEN_STEPS_DELAY_MS', 450),
+            'image_paste_delay_ms' => $imagePasteDelayMs,
+            'between_steps_delay_ms' => $betweenStepsDelayMs,
         ];
 
         File::put($scriptPath, $this->zaloAutomationPythonScript());
@@ -1745,7 +1748,7 @@ class QuickReplyController extends Controller
     {
         $target = $this->normalizeZaloTarget($target);
         $raw = $target === 'web'
-            ? trim((string) env('QUICK_REPLY_ZALO_WEB_WINDOW_KEYWORDS', 'Zalo - Google Chrome,My Z.com - Google Chrome,chat.zalo.me - Google Chrome,web.zalo.me - Google Chrome'))
+            ? trim((string) env('QUICK_REPLY_ZALO_WEB_WINDOW_KEYWORDS', 'Zalo -,Zalo - Google Chrome,My Z.com - Google Chrome,chat.zalo.me - Google Chrome,web.zalo.me - Google Chrome'))
             : trim((string) env('QUICK_REPLY_ZALO_WINDOW_KEYWORDS', 'Zalo'));
         $keywords = preg_split('/[,;|]+/', $raw) ?: [];
 
@@ -2048,6 +2051,14 @@ def sleep_ms(value):
     time.sleep(max(int(value or 0), 0) / 1000)
 
 
+def payload_delay_ms(payload, key, default_value, minimum_value=0):
+    try:
+        delay = int(payload.get(key, default_value) or default_value)
+    except Exception:
+        delay = default_value
+    return max(delay, minimum_value)
+
+
 def window_text(hwnd):
     length = GetWindowTextLengthW(hwnd)
     if length <= 0:
@@ -2055,6 +2066,23 @@ def window_text(hwnd):
     buffer = ctypes.create_unicode_buffer(length + 1)
     GetWindowTextW(hwnd, buffer, length + 1)
     return buffer.value
+
+
+def window_process_id(hwnd):
+    if not hwnd:
+        return 0
+    process_id = wintypes.DWORD()
+    GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
+    return int(process_id.value or 0)
+
+
+def foreground_belongs_to_window(hwnd):
+    foreground = GetForegroundWindow()
+    if foreground == hwnd:
+        return True
+    target_process_id = window_process_id(hwnd)
+    foreground_process_id = window_process_id(foreground)
+    return bool(target_process_id and target_process_id == foreground_process_id)
 
 
 def wants_web_target(target):
@@ -2070,6 +2098,17 @@ def looks_like_browser(title):
 def looks_like_quick_reply_window(title):
     lowered = str(title or "").lower()
     return any(part in lowered for part in QUICK_REPLY_TITLE_PARTS)
+
+
+def looks_like_zalo_web_window(title):
+    lowered = str(title or "").lower()
+    return looks_like_browser(title) and not looks_like_quick_reply_window(title) and any(part in lowered for part in ZALO_WEB_TITLE_PARTS)
+
+
+def effective_zalo_target(requested_target, title):
+    if wants_web_target(requested_target) or looks_like_zalo_web_window(title):
+        return "web"
+    return "pc"
 
 
 def find_zalo_window(keywords, target="pc"):
@@ -2110,8 +2149,12 @@ def find_zalo_window(keywords, target="pc"):
                 raise RuntimeError("Đang thấy cửa sổ có chữ Zalo nhưng chưa đúng Zalo Web Chrome. Hãy mở tab Zalo web trên Chrome rồi thử lại.")
             raise RuntimeError("Không tìm thấy cửa sổ Zalo Web Chrome. Hãy mở Zalo web trên Chrome và mở đúng khung chat khách trước.")
         if fallback:
-            raise RuntimeError("Đang chỉ thấy cửa sổ trình duyệt/panel có chữ Zalo, chưa thấy Zalo Desktop. Hãy mở Zalo Desktop rồi thử lại.")
-        raise RuntimeError("Không tìm thấy cửa sổ Zalo. Hãy mở Zalo Desktop và mở đúng khung chat khách trước.")
+            web_fallback = [item for item in fallback if looks_like_zalo_web_window(item[1])]
+            if web_fallback:
+                chrome = [item for item in web_fallback if "google chrome" in item[1].lower()]
+                return (chrome or web_fallback)[0]
+            raise RuntimeError("Đang chỉ thấy cửa sổ trình duyệt/panel có chữ Zalo, chưa thấy Zalo Desktop hoặc Zalo Web Chrome. Hãy mở đúng khung chat Zalo rồi thử lại.")
+        raise RuntimeError("Không tìm thấy cửa sổ Zalo. Hãy mở Zalo Desktop hoặc Zalo Web Chrome và mở đúng khung chat khách trước.")
 
     if target_web:
         chrome = [item for item in matches if "google chrome" in item[1].lower()]
@@ -2149,26 +2192,33 @@ def focus_window(hwnd, title):
         if attached_foreground:
             AttachThreadInput(current_thread, foreground_thread, False)
 
-    time.sleep(0.25)
-    if GetForegroundWindow() != hwnd:
-        raise RuntimeError(f"Không đưa được cửa sổ Zalo lên trước: {title}")
+    for _ in range(4):
+        time.sleep(0.18)
+        if foreground_belongs_to_window(hwnd):
+            return
+        BringWindowToTop(hwnd)
+        SetForegroundWindow(hwnd)
+
+    raise RuntimeError(f"Không đưa được cửa sổ Zalo lên trước: {title}")
 
 
-def click_chat_input(hwnd):
+def click_chat_input(hwnd, target="pc"):
     rect = RECT()
     if not GetWindowRect(hwnd, ctypes.byref(rect)):
         return
 
     width = max(rect.right - rect.left, 1)
     height = max(rect.bottom - rect.top, 1)
-    x = rect.left + int(width * 0.50)
-    y = rect.top + int(height * 0.965)
+    y_ratios = [0.955, 0.965] if wants_web_target(target) else [0.965]
 
-    if SetCursorPos(x, y):
-        mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-        time.sleep(0.04)
-        mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-        time.sleep(0.12)
+    for y_ratio in y_ratios:
+        x = rect.left + int(width * 0.50)
+        y = rect.top + int(height * y_ratio)
+        if SetCursorPos(x, y):
+            mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+            time.sleep(0.04)
+            mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+            time.sleep(0.12)
 
 
 def alloc_clipboard_payload(payload):
@@ -2277,8 +2327,14 @@ def main():
     target = payload.get("zalo_target") or payload.get("target") or "pc"
 
     hwnd, title = find_zalo_window(keywords, target)
+    target = effective_zalo_target(target, title)
     focus_window(hwnd, title)
-    click_chat_input(hwnd)
+    click_chat_input(hwnd, target)
+
+    web_target = wants_web_target(target)
+    text_paste_delay_ms = payload_delay_ms(payload, "text_paste_delay_ms", 700 if web_target else 250, 700 if web_target else 0)
+    image_paste_delay_ms = payload_delay_ms(payload, "image_paste_delay_ms", 2400 if web_target else 1600, 2400 if web_target else 0)
+    between_steps_delay_ms = payload_delay_ms(payload, "between_steps_delay_ms", 750 if web_target else 450, 750 if web_target else 0)
 
     sent_text = 0
     sent_images = 0
@@ -2296,12 +2352,12 @@ def main():
         if text:
             set_clipboard_text(text)
             ctrl_v()
-            sleep_ms(payload.get("text_paste_delay_ms", 250))
+            sleep_ms(text_paste_delay_ms)
 
         if images:
             set_clipboard_files(images)
             ctrl_v()
-            sleep_ms(payload.get("image_paste_delay_ms", 1600))
+            sleep_ms(image_paste_delay_ms)
 
         press_enter()
         sent_steps += 1
@@ -2310,12 +2366,12 @@ def main():
         if images:
             sent_images += len(images)
 
-        sleep_ms(payload.get("between_steps_delay_ms", 450))
+        sleep_ms(between_steps_delay_ms)
 
     if sent_steps == 0:
         raise RuntimeError("Không có nội dung hoặc ảnh để gửi sang Zalo.")
 
-    print(json.dumps({"ok": True, "window_title": title, "sent_steps": sent_steps, "sent_text": sent_text, "sent_images": sent_images}, ensure_ascii=True))
+    print(json.dumps({"ok": True, "window_title": title, "zalo_target": target, "sent_steps": sent_steps, "sent_text": sent_text, "sent_images": sent_images}, ensure_ascii=True))
 
 
 if __name__ == "__main__":
@@ -2427,6 +2483,7 @@ def window_text(hwnd):
     return buffer.value
 
 
+
 def window_matches(title, keywords):
     lowered = title.lower()
     needles = [str(keyword).strip().lower() for keyword in keywords if str(keyword).strip()]
@@ -2463,6 +2520,79 @@ def list_windows():
     EnumWindows(callback, 0)
     return windows
 
+
+WEB_BROWSER_TITLE_PARTS = ["google chrome", "chrome", "microsoft edge", "edge", "firefox", "coc coc"]
+QUICK_REPLY_TITLE_PARTS = ["trả lời nhanh", "tra loi nhanh", "quick-replies", "localhost", "sidebar"]
+ZALO_WEB_TITLE_PARTS = ["zalo", "my z.com", "chat.zalo.me", "web.zalo.me"]
+
+
+def wants_web_target(target):
+    normalized = str(target or "pc").strip().lower()
+    return normalized in ("web", "chrome", "zalo_web", "zalo-web")
+
+
+def looks_like_browser(title):
+    lowered = str(title or "").lower()
+    return any(part in lowered for part in WEB_BROWSER_TITLE_PARTS)
+
+
+def looks_like_quick_reply_window(title):
+    lowered = str(title or "").lower()
+    return any(part in lowered for part in QUICK_REPLY_TITLE_PARTS)
+
+
+def looks_like_zalo_web_window(title):
+    lowered = str(title or "").lower()
+    return looks_like_browser(title) and not looks_like_quick_reply_window(title) and any(part in lowered for part in ZALO_WEB_TITLE_PARTS)
+
+
+def find_zalo_window(keywords, target, label):
+    target_web = wants_web_target(target)
+    matches = []
+    fallback = []
+
+    for hwnd, title in list_windows():
+        score = window_match_score(title, keywords)
+        if score[0] <= 0:
+            continue
+        item = (score, hwnd, title)
+        if target_web:
+            if looks_like_zalo_web_window(title):
+                matches.append(item)
+            else:
+                fallback.append(item)
+        elif looks_like_browser(title):
+            fallback.append(item)
+        else:
+            matches.append(item)
+
+    if not matches:
+        if target_web:
+            if fallback:
+                raise RuntimeError("Đang thấy cửa sổ có chữ Zalo nhưng chưa đúng Zalo Web Chrome. Hãy mở tab Zalo web trên Chrome rồi thử lại.")
+            raise RuntimeError("Không tìm thấy cửa sổ Zalo Web Chrome. Hãy mở Zalo web trên Chrome rồi thử lại.")
+
+        web_fallback = [item for item in fallback if looks_like_zalo_web_window(item[2])]
+        if web_fallback:
+            web_fallback.sort(key=lambda item: item[0], reverse=True)
+            chrome = [item for item in web_fallback if "google chrome" in item[2].lower()]
+            choice = (chrome or web_fallback)[0]
+            return choice[1], choice[2]
+
+        if fallback:
+            raise RuntimeError("Đang chỉ thấy cửa sổ trình duyệt/panel có chữ Zalo, chưa thấy Zalo Desktop hoặc Zalo Web Chrome. Hãy mở đúng khung chat Zalo rồi thử lại.")
+        raise RuntimeError(f"Không tìm thấy cửa sổ {label}. Hãy mở {label} rồi thử lại.")
+
+    matches.sort(key=lambda item: item[0], reverse=True)
+    if target_web:
+        chrome = [item for item in matches if "google chrome" in item[2].lower()]
+        choice = (chrome or matches)[0]
+        return choice[1], choice[2]
+
+    exact = [item for item in matches if item[2].strip().lower() == "zalo"]
+    starts_with_zalo = [item for item in matches if item[2].strip().lower().startswith("zalo")]
+    choice = (exact or starts_with_zalo or matches)[0]
+    return choice[1], choice[2]
 
 def find_window(keywords, label, exclude=None):
     exclude = set(exclude or [])
@@ -2612,7 +2742,7 @@ def main():
     zalo_target = str(payload.get("zalo_target") or "pc").strip().lower()
     zalo_label = "Zalo Web Chrome" if zalo_target == "web" else "Zalo"
 
-    zalo_hwnd, zalo_title = find_window(zalo_keywords, zalo_label)
+    zalo_hwnd, zalo_title = find_zalo_window(zalo_keywords, zalo_target, zalo_label)
     browser_hwnd = None
     browser_title = ""
     browser_error = ""
@@ -2888,6 +3018,7 @@ def window_text(hwnd):
     return buffer.value
 
 
+
 WEB_BROWSER_TITLE_PARTS = ["google chrome", "chrome", "microsoft edge", "edge", "firefox", "coc coc"]
 QUICK_REPLY_TITLE_PARTS = ["trả lời nhanh", "tra loi nhanh", "quick-replies", "localhost", "sidebar"]
 ZALO_WEB_TITLE_PARTS = ["zalo", "my z.com", "chat.zalo.me", "web.zalo.me"]
@@ -2906,6 +3037,17 @@ def looks_like_browser(title):
 def looks_like_quick_reply_window(title):
     lowered = str(title or "").lower()
     return any(part in lowered for part in QUICK_REPLY_TITLE_PARTS)
+
+
+def looks_like_zalo_web_window(title):
+    lowered = str(title or "").lower()
+    return looks_like_browser(title) and not looks_like_quick_reply_window(title) and any(part in lowered for part in ZALO_WEB_TITLE_PARTS)
+
+
+def effective_zalo_target(requested_target, title):
+    if wants_web_target(requested_target) or looks_like_zalo_web_window(title):
+        return "web"
+    return "pc"
 
 
 def find_zalo_window(keywords, target="pc"):
@@ -2944,8 +3086,12 @@ def find_zalo_window(keywords, target="pc"):
                 raise RuntimeError("Đang thấy cửa sổ có chữ Zalo nhưng chưa đúng Zalo Web Chrome. Hãy mở tab Zalo web trên Chrome rồi thử lại.")
             raise RuntimeError("Không tìm thấy cửa sổ Zalo Web Chrome. Hãy mở Zalo web trên Chrome rồi thử lại.")
         if fallback:
-            raise RuntimeError("Đang chỉ thấy cửa sổ trình duyệt/panel có chữ Zalo, chưa thấy Zalo Desktop. Hãy mở Zalo Desktop rồi thử lại.")
-        raise RuntimeError("Không tìm thấy cửa sổ Zalo. Hãy mở Zalo Desktop rồi thử lại.")
+            web_fallback = [item for item in fallback if looks_like_zalo_web_window(item[1])]
+            if web_fallback:
+                chrome = [item for item in web_fallback if "google chrome" in item[1].lower()]
+                return (chrome or web_fallback)[0]
+            raise RuntimeError("Đang chỉ thấy cửa sổ trình duyệt/panel có chữ Zalo, chưa thấy Zalo Desktop hoặc Zalo Web Chrome. Hãy mở đúng khung chat Zalo rồi thử lại.")
+        raise RuntimeError("Không tìm thấy cửa sổ Zalo. Hãy mở Zalo Desktop hoặc Zalo Web Chrome và mở đúng khung chat khách trước.")
 
     if target_web:
         chrome = [item for item in matches if "google chrome" in item[1].lower()]

@@ -48,7 +48,8 @@ const GALLERY_FILTERS = [
     { value: 'favorite', label: 'Yêu thích', icon: 'favorite' },
 ];
 
-const SIDEBAR_BROWSER_KEYWORDS = ['Trả lời nhanh Zalo Sidebar', 'Trả lời nhanh', 'quick-replies', 'localhost'];
+const SIDEBAR_BASE_TITLE = 'Trả lời nhanh Zalo Sidebar';
+const SIDEBAR_READY_SELECTOR = '[data-quick-reply-sidebar-root="true"]';
 const ZALO_TARGET_STORAGE_KEY = 'quick-replies-zalo-target';
 const ZALO_TARGET_OPTIONS = [
     { value: 'pc', label: 'Zalo PC', shortLabel: 'PC', icon: 'desktop_windows' },
@@ -56,6 +57,9 @@ const ZALO_TARGET_OPTIONS = [
 ];
 
 const normalizeZaloTarget = (value) => (String(value || '').trim().toLowerCase() === 'web' ? 'web' : 'pc');
+const sidebarTitleForTarget = (value) => `${SIDEBAR_BASE_TITLE} ${normalizeZaloTarget(value) === 'web' ? 'Web' : 'PC'}`;
+const sidebarWindowNameForTarget = (value) => `quick-reply-zalo-sidebar-${normalizeZaloTarget(value)}`;
+const sidebarBrowserKeywordsForTarget = (value) => [sidebarTitleForTarget(value)];
 
 const readInitialZaloTarget = () => {
     if (typeof window === 'undefined') {
@@ -422,6 +426,39 @@ const sidebarWindowMetrics = () => {
     };
 };
 
+const sleep = (delay) => new Promise((resolve) => window.setTimeout(resolve, delay));
+
+const waitForSidebarWindowReady = async (sidebarWindow, sidebarUrl, timeoutMs = 4500) => {
+    const startTime = Date.now();
+    let reloaded = false;
+
+    while (Date.now() - startTime < timeoutMs) {
+        if (!sidebarWindow || sidebarWindow.closed) {
+            return false;
+        }
+
+        try {
+            const doc = sidebarWindow.document;
+            const bodyReady = doc?.body?.dataset?.quickReplySidebarReady === '1';
+            if (bodyReady || doc?.querySelector?.(SIDEBAR_READY_SELECTOR)) {
+                return true;
+            }
+
+            const href = String(sidebarWindow.location?.href || '');
+            if (!reloaded && Date.now() - startTime > 1200 && (href === 'about:blank' || href.includes('/admin/quick-replies'))) {
+                sidebarWindow.location.href = sidebarUrl.toString();
+                reloaded = true;
+            }
+        } catch {
+            // The popup can be briefly inaccessible while Chrome is navigating.
+        }
+
+        await sleep(150);
+    }
+
+    return false;
+};
+
 function QuickReplies() {
     const isSidebarMode = useMemo(() => {
         if (typeof window === 'undefined') {
@@ -483,7 +520,7 @@ function QuickReplies() {
     const [replyImagePreview, setReplyImagePreview] = useState(null);
     const [replyImageHoverPreview, setReplyImageHoverPreview] = useState(null);
     const zaloMirrorObjectUrlRef = useRef('');
-    const sidebarWindowRef = useRef(null);
+    const sidebarWindowsRef = useRef({ pc: null, web: null });
     const pancakeImportInputRef = useRef(null);
     const pancakeImportModeRef = useRef('merge');
     const bulkSelectAllRef = useRef(null);
@@ -560,7 +597,8 @@ function QuickReplies() {
         const previousTitle = document.title;
         const previousHtmlOverflowX = document.documentElement.style.overflowX;
         const previousBodyOverflowX = document.body.style.overflowX;
-        document.title = 'Trả lời nhanh Zalo Sidebar';
+        document.title = sidebarTitleForTarget(zaloTarget);
+        document.body.dataset.quickReplySidebarReady = '1';
         document.documentElement.style.overflowX = 'hidden';
         document.body.style.overflowX = 'hidden';
 
@@ -587,7 +625,7 @@ function QuickReplies() {
                 gap: 0,
                 require_browser: false,
                 manage_browser: true,
-                browser_window_keywords: SIDEBAR_BROWSER_KEYWORDS,
+                browser_window_keywords: sidebarBrowserKeywordsForTarget(zaloTarget),
                 zalo_target: zaloTarget,
             }).then((response) => {
                 setMessage(response?.data?.message || '');
@@ -615,6 +653,7 @@ function QuickReplies() {
             resizeTimeouts.forEach((timeoutId) => window.clearTimeout(timeoutId));
             dockTimeouts.forEach((timeoutId) => window.clearTimeout(timeoutId));
             document.title = previousTitle;
+            delete document.body.dataset.quickReplySidebarReady;
             document.documentElement.style.overflowX = previousHtmlOverflowX;
             document.body.style.overflowX = previousBodyOverflowX;
         };
@@ -1909,7 +1948,9 @@ function QuickReplies() {
             setSendDraft(null);
             setMessage(response?.data?.message || 'Đã gửi mẫu sang chat Zalo đang mở.');
         } catch (err) {
-            setError(err?.response?.data?.message || err?.message || 'Không gửi được sang Zalo. Hãy mở đúng khung chat Zalo rồi thử lại.');
+            const targetName = zaloTarget === 'web' ? 'Zalo Web Chrome' : 'Zalo PC';
+            setMessage('');
+            setError(await apiErrorMessage(err, `Không gửi được sang ${targetName}. Hãy mở đúng khung chat rồi thử lại.`));
         } finally {
             setCopyingId(null);
         }
@@ -2063,35 +2104,26 @@ function QuickReplies() {
         }
     };
 
-    const splitZaloWindows = async () => {
-        setSplittingZalo(true);
-        setError('');
-        setMessage('');
-
-        try {
-            const response = await quickReplyApi.splitZalo({ zalo_target: zaloTarget });
-            setMessage(response?.data?.message || 'Đã chia màn hình Zalo.');
-        } catch (err) {
-            setError(err?.response?.data?.message || err?.message || 'Không chia được màn hình. Hãy mở Zalo Desktop rồi thử lại.');
-        } finally {
-            setSplittingZalo(false);
-        }
-    };
 
     const openZaloSidebar = async () => {
+        const panelTarget = normalizeZaloTarget(zaloTarget);
+        const targetOption = ZALO_TARGET_OPTIONS.find((option) => option.value === panelTarget) || ZALO_TARGET_OPTIONS[0];
+        const targetLabel = targetOption.label;
+        const targetAppName = panelTarget === 'web' ? 'Zalo Web Chrome' : 'Zalo Desktop';
         const metrics = sidebarWindowMetrics();
         const sidebarUrl = new URL('/admin/quick-replies', window.location.origin);
         sidebarUrl.searchParams.set('mode', 'zalo-sidebar');
         sidebarUrl.searchParams.set('dock', '0');
-        sidebarUrl.searchParams.set('zalo_target', zaloTarget);
+        sidebarUrl.searchParams.set('zalo_target', panelTarget);
 
         setSplittingZalo(true);
         setError('');
         setMessage('');
 
         try {
-            if (sidebarWindowRef.current && !sidebarWindowRef.current.closed) {
-                sidebarWindowRef.current.close();
+            const currentPanel = sidebarWindowsRef.current[panelTarget];
+            if (currentPanel && !currentPanel.closed) {
+                currentPanel.close();
             }
 
             const popupFeatures = [
@@ -2107,18 +2139,30 @@ function QuickReplies() {
                 'resizable=yes',
                 'scrollbars=yes',
             ].join(',');
-            const sidebarWindow = window.open('', 'quick-reply-zalo-sidebar', popupFeatures);
+            const sidebarWindow = window.open(sidebarUrl.toString(), sidebarWindowNameForTarget(panelTarget), popupFeatures);
+            let sidebarReady = false;
             if (sidebarWindow) {
-                sidebarWindowRef.current = sidebarWindow;
+                sidebarWindowsRef.current[panelTarget] = sidebarWindow;
                 try {
-                    sidebarWindow.document.title = 'Trả lời nhanh Zalo Sidebar';
-                    sidebarWindow.location.replace(sidebarUrl.toString());
+                    sidebarWindow.focus();
                     sidebarWindow.resizeTo(metrics.width, metrics.height);
                     sidebarWindow.moveTo(metrics.left, metrics.top);
                 } catch {
-                    sidebarWindow.location.href = sidebarUrl.toString();
+                    // Some browsers block moving popup windows, but the backend split step can still dock it.
                 }
-                await new Promise((resolve) => window.setTimeout(resolve, 350));
+                sidebarReady = await waitForSidebarWindowReady(sidebarWindow, sidebarUrl);
+            }
+
+            if (sidebarWindow && !sidebarReady) {
+                try {
+                    sidebarWindow.close();
+                } catch {
+                    // Ignore close errors; the main page will show a clear retry message.
+                }
+                if (sidebarWindowsRef.current[panelTarget] === sidebarWindow) {
+                    sidebarWindowsRef.current[panelTarget] = null;
+                }
+                throw new Error('Panel trả lời nhanh chưa tải xong. Mình đã thử nạp lại cửa sổ panel, bạn bấm Panel phải lần nữa nếu vẫn thấy trắng.');
             }
 
             const response = await quickReplyApi.splitZalo({
@@ -2127,23 +2171,22 @@ function QuickReplies() {
                 sidebar_url: sidebarWindow ? '' : sidebarUrl.toString(),
                 require_browser: false,
                 manage_browser: !sidebarWindow,
-                browser_window_keywords: SIDEBAR_BROWSER_KEYWORDS,
-                zalo_target: zaloTarget,
+                browser_window_keywords: sidebarBrowserKeywordsForTarget(panelTarget),
+                zalo_target: panelTarget,
                 gap: 0,
             });
             const result = response?.data?.result || {};
             if (!sidebarWindow && !result.browser_found) {
-                setMessage('Đã đặt Zalo bên trái. Nếu panel chưa hiện, bật cho phép popup rồi bấm Panel phải lại.');
+                setMessage(`Đã đặt ${targetLabel} bên trái. Nếu panel chưa hiện, bật cho phép popup rồi bấm Panel phải lại.`);
             } else {
-                setMessage(response?.data?.message || 'Đã mở panel trả lời nhanh bên phải.');
+                setMessage(response?.data?.message || `Đã mở panel ${targetLabel} bên phải.`);
             }
         } catch (err) {
-            setError(await apiErrorMessage(err, 'Không mở được panel bên phải. Hãy mở Zalo Desktop rồi thử lại.'));
+            setError(await apiErrorMessage(err, `Không mở được panel ${targetLabel} bên phải. Hãy mở ${targetAppName} rồi thử lại.`));
         } finally {
             setSplittingZalo(false);
         }
     };
-
     const loadZaloMirrorScreenshot = useCallback(async ({ silent = false } = {}) => {
         if (!zaloMirrorOpen) {
             return;
@@ -2793,6 +2836,12 @@ function QuickReplies() {
                             </button>
                         </div>
 
+                        {(message || error) && (
+                            <div className={`mx-3 mt-3 rounded-sm border px-3 py-2 text-[12px] font-bold sm:mx-5 ${error ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-sky-200 bg-sky-50 text-sky-700'}`}>
+                                {error || message}
+                            </div>
+                        )}
+
                         <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3 sm:px-5">
                             <div className="grid gap-2.5">
                                 {sendDraft.contents.map((content, contentIndex) => {
@@ -2883,7 +2932,7 @@ function QuickReplies() {
 
     if (isSidebarMode) {
         return (
-            <div className="flex h-screen w-screen max-w-[420px] flex-col overflow-hidden border-l border-slate-200 bg-[#eef3f8] text-slate-900">
+            <div data-quick-reply-sidebar-root="true" className="flex h-screen w-screen max-w-[420px] flex-col overflow-hidden border-l border-slate-200 bg-[#eef3f8] text-slate-900">
                 {galleryModal}
                 {replyImageHoverPreviewBubble}
                 {replyImagePreviewModal}

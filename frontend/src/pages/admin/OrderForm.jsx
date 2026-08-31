@@ -137,9 +137,18 @@ const SEARCH_ENTRY_VARIATION = 'variation';
 const SEARCH_ENTRY_BUNDLE_OPTION = 'bundle_option';
 const ACTUAL_PRODUCT_PICKER_TAB_MANUAL = 'manual';
 const ACTUAL_PRODUCT_PICKER_TAB_WAREHOUSE = 'warehouse';
+const ACTUAL_PRODUCT_REPLACE_SCOPE_SINGLE = 'single';
+const ACTUAL_PRODUCT_REPLACE_SCOPE_GROUP = 'group';
+const ACTUAL_PRODUCT_PICKER_RESULT_TAB_PRODUCTS = 'products';
+const ACTUAL_PRODUCT_PICKER_RESULT_TAB_HISTORY = 'history';
+const WAREHOUSE_PICKING_HISTORY_STORAGE_KEY_PREFIX = 'warehouse_picking_replacement_history_v1';
+const WAREHOUSE_PICKING_HISTORY_LIMIT = 6;
+const WAREHOUSE_PICKING_HISTORY_MAX_SOURCES = 400;
 const ORDER_FORM_REPLACE_PICKER_SEARCH_DELAY_MS = 140;
 const ORDER_FORM_REPLACE_PICKER_TOP = 104;
 const ORDER_FORM_REPLACE_PICKER_MIN_HEIGHT = 320;
+const ORDER_FORM_REPLACE_PICKER_PREFETCH_DELAY_MS = 0;
+const ORDER_FORM_REPLACE_PICKER_PREFETCH_FAMILY_LIMIT = 24;
 const orderFormColumnOrderStorageKey = 'order_form_column_order';
 const orderFormVisibleColumnsStorageKey = 'order_form_visible_columns';
 const orderFormColumnWidthsStorageKey = 'order_column_widths';
@@ -997,6 +1006,62 @@ const isShortSingleAlphaProductSearch = (query, compactQuery, tokens) => (
     && query.length <= 3
     && /^[a-z]+$/.test(query)
 );
+const isCompactMeterDimensionProductSearch = (compactQuery) => /^\d+m\d*$/.test(compactQuery);
+const productSearchMeterDimensionMatches = (values, compactQuery) => {
+    if (!isCompactMeterDimensionProductSearch(compactQuery)) return false;
+
+    const dimensionPattern = new RegExp(`(^|[^a-z0-9])${compactQuery}\\d*($|[^a-z0-9])`, 'i');
+    return (Array.isArray(values) ? values : []).some((value) => (
+        dimensionPattern.test(` ${normalizeProductSearchText(value)} `)
+    ));
+};
+const collectProductSearchTextValues = (product) => {
+    if (!product || typeof product !== 'object') return [];
+
+    const values = [];
+    const pushValue = (value) => {
+        const normalizedValue = normalizeCanvasText(value);
+        if (normalizedValue) {
+            values.push(normalizedValue);
+        }
+    };
+
+    [
+        product?.display_name,
+        product?.name,
+        product?.display_sku,
+        product?.sku,
+        product?.parent_product_name,
+        product?.parent_product_sku,
+        product?.option_label,
+        product?.bundle_parent_name,
+        product?.bundle_option_title,
+        product?.raw_bundle_option_title,
+        product?.bundle_title,
+        product?.bundle_config_title,
+        product?.option_post_title,
+        product?.attribute_summary,
+    ].forEach(pushValue);
+
+    if (Array.isArray(product?.search_keywords)) {
+        product.search_keywords.forEach(pushValue);
+    }
+
+    (Array.isArray(product?.bundle_options) ? product.bundle_options : []).forEach((bundleOption) => {
+        [
+            bundleOption?.option_title,
+            bundleOption?.raw_option_title,
+            bundleOption?.title,
+            bundleOption?.bundle_option_title,
+            bundleOption?.raw_bundle_option_title,
+            bundleOption?.option_post_title,
+            bundleOption?.bundle_title,
+            bundleOption?.bundle_config_title,
+        ].forEach(pushValue);
+    });
+
+    return values;
+};
 const getStoredProductSearchHistory = () => {
     if (typeof window === 'undefined') return [];
 
@@ -1458,6 +1523,40 @@ const normalizeStoredProductQuickSetupBundleItems = (items = []) => (
         })
         .filter(Boolean)
 );
+const normalizeStoredProductQuickSetupBundleOptions = (options = []) => (
+    (Array.isArray(options) ? options : [])
+        .map((option) => {
+            const bundleItems = normalizeStoredProductQuickSetupBundleItems(option?.items || option?.bundle_items);
+            if (bundleItems.length === 0) return null;
+
+            const optionTitle = normalizeCanvasText(
+                option?.option_title
+                || option?.bundle_option_title
+                || resolveBundleOptionTitle(option)
+            );
+            const optionKey = normalizeCanvasText(option?.key || option?.bundle_option_key || resolveBundleOptionKey(option));
+            const optionUid = normalizeCanvasText(option?.uid || option?.bundle_option_uid || option?.option_uid);
+            const optionPrice = resolveBundleOptionEntryPrice(option, bundleItems);
+
+            return {
+                ...option,
+                key: optionKey,
+                uid: optionUid,
+                bundle_option_uid: optionUid,
+                bundle_option_key: optionKey,
+                bundle_option_status: normalizeCanvasText(option?.bundle_option_status || 'visible'),
+                option_title: optionTitle,
+                raw_option_title: normalizeCanvasText(option?.raw_option_title || option?.raw_bundle_option_title || option?.option_title || optionTitle),
+                option_post_id: Number(option?.option_post_id) || undefined,
+                option_post_title: normalizeCanvasText(option?.option_post_title),
+                subtotal: optionPrice,
+                bundle_option_total_price: resolveMoneyValue(option?.bundle_option_total_price, optionPrice, 0),
+                bundle_option_discounted_price: resolveMoneyValue(option?.bundle_option_discounted_price, optionPrice, 0),
+                items: bundleItems,
+            };
+        })
+        .filter(Boolean)
+);
 const normalizeStoredProductQuickSetupItems = (items = []) => {
     const seenEntryKeys = new Set();
 
@@ -1510,6 +1609,9 @@ const normalizeStoredProductQuickSetupItems = (items = []) => {
             const bundleOptionUid = entryKind === SEARCH_ENTRY_BUNDLE_OPTION
                 ? normalizeCanvasText(item?.bundle_option_uid || item?.uid || item?.option_uid)
                 : '';
+            const bundleOptions = entryKind === SEARCH_ENTRY_BUNDLE_OPTION
+                ? []
+                : normalizeStoredProductQuickSetupBundleOptions(item?.bundle_options);
 
             return {
                 id: entryKind === SEARCH_ENTRY_BUNDLE_OPTION ? entryKey : productId,
@@ -1530,6 +1632,9 @@ const normalizeStoredProductQuickSetupItems = (items = []) => {
                 attribute_values: Array.isArray(item?.attribute_values) ? item.attribute_values : [],
                 parent_attribute_values: Array.isArray(item?.parent_attribute_values) ? item.parent_attribute_values : [],
                 type: String(item?.type ?? '').trim(),
+                ...(entryKind !== SEARCH_ENTRY_BUNDLE_OPTION && bundleOptions.length > 0 ? {
+                    bundle_options: bundleOptions,
+                } : {}),
                 entry_kind: entryKind,
                 parent_product_id: Number.isFinite(parentProductId) && parentProductId > 0 ? parentProductId : null,
                 parent_product_name: String(item?.parent_product_name ?? '').trim(),
@@ -1846,6 +1951,9 @@ const scoreProductSearchResult = (product, rawTerm) => {
     const query = normalizeProductSearchText(rawTerm);
     if (!query) return 1;
 
+    const searchableTextValues = collectProductSearchTextValues(product);
+    const searchableText = normalizeProductSearchText(searchableTextValues.join(' '));
+    const compactSearchableText = compactProductSearchText(searchableTextValues.join(' '));
     const name = normalizeProductSearchText(product?.display_name || product?.name);
     const compactName = compactProductSearchText(product?.display_name || product?.name);
     const sku = normalizeProductSearchText(product?.display_sku || product?.sku);
@@ -1864,22 +1972,35 @@ const scoreProductSearchResult = (product, rawTerm) => {
     const tokens = tokenizeProductSearch(rawTerm);
     const compactLeadToken = isCompactCompositeProductSearch(rawTerm) ? getCompactProductSearchLeadToken(rawTerm) : '';
     const isShortSingleAlphaQuery = isShortSingleAlphaProductSearch(query, compactQuery, tokens);
+    const isCompactMeterDimensionQuery = isCompactMeterDimensionProductSearch(compactQuery);
 
     if (
         isShortSingleAlphaQuery
         && !productSearchShortTokenMatches(product?.display_name || product?.name, compactName, query)
         && !productSearchShortTokenMatches(product?.display_sku || product?.sku, compactSku, query)
         && !productSearchShortTokenMatches(keywordText, compactKeywordText, query)
+        && !productSearchShortTokenMatches(searchableText, compactSearchableText, query)
     ) {
         return 0;
     }
 
+    const phraseInSearchableText = Boolean(query) && searchableText.includes(query);
+    const phraseInCompactSearchableText = Boolean(compactQuery) && compactSearchableText.includes(compactQuery);
     const phraseInName = Boolean(query) && name.includes(query);
     const phraseInCompactName = Boolean(compactQuery) && compactName.includes(compactQuery);
     const phraseInSku = Boolean(query) && sku.includes(query);
     const phraseInCompactSku = Boolean(compactQuery) && compactSku.includes(compactQuery);
     const phraseInKeywords = Boolean(query) && keywordText.includes(query);
     const phraseInCompactKeywords = Boolean(compactQuery) && compactKeywordText.includes(compactQuery);
+
+    if (
+        isCompactMeterDimensionQuery
+        && !productSearchMeterDimensionMatches(searchableTextValues, compactQuery)
+        && !phraseInSku
+        && !(compactSku === compactQuery || compactSku.startsWith(compactQuery))
+    ) {
+        return 0;
+    }
 
     const nameTokenMatches = tokens.reduce((count, token) => {
         const compactToken = compactProductSearchText(token);
@@ -1896,6 +2017,13 @@ const scoreProductSearchResult = (product, rawTerm) => {
             || (compactToken && compactKeywordText.includes(compactToken))
         );
     }, 0);
+    const searchableTextTokenMatches = tokens.reduce((count, token) => {
+        const compactToken = compactProductSearchText(token);
+        return count + Number(
+            searchableText.includes(token)
+            || (compactToken && compactSearchableText.includes(compactToken))
+        );
+    }, 0);
     const combinedTokenMatches = tokens.reduce((count, token) => {
         const compactToken = compactProductSearchText(token);
         return count + Number(
@@ -1905,11 +2033,22 @@ const scoreProductSearchResult = (product, rawTerm) => {
             || (compactToken && compactSku.includes(compactToken))
             || keywordText.includes(token)
             || (compactToken && compactKeywordText.includes(compactToken))
+            || searchableText.includes(token)
+            || (compactToken && compactSearchableText.includes(compactToken))
         );
     }, 0);
 
     const minimumRelevantMatches = tokens.length <= 1 ? 1 : Math.max(2, tokens.length - 1);
-    if (!phraseInName && !phraseInCompactName && !phraseInSku && !phraseInCompactSku && !phraseInKeywords && !phraseInCompactKeywords) {
+    if (
+        !phraseInName
+        && !phraseInCompactName
+        && !phraseInSku
+        && !phraseInCompactSku
+        && !phraseInKeywords
+        && !phraseInCompactKeywords
+        && !phraseInSearchableText
+        && !phraseInCompactSearchableText
+    ) {
         if (tokens.length === 0) return 0;
         if (combinedTokenMatches < minimumRelevantMatches) return 0;
     }
@@ -1923,6 +2062,7 @@ const scoreProductSearchResult = (product, rawTerm) => {
     if (phraseInName) score += 820;
     if (phraseInCompactName) score += 780;
     if (phraseInKeywords || phraseInCompactKeywords) score += 540;
+    if (phraseInSearchableText || phraseInCompactSearchableText) score += 500;
     if (sku.startsWith(query) || (compactQuery && compactSku.startsWith(compactQuery))) score += 760;
     if (name.startsWith(query)) score += 700;
     if (compactQuery && compactName.startsWith(compactQuery)) score += 640;
@@ -1933,12 +2073,377 @@ const scoreProductSearchResult = (product, rawTerm) => {
     score += nameTokenMatches * 50;
     score += skuTokenMatches * 70;
     score += keywordTokenMatches * 65;
+    score += searchableTextTokenMatches * 40;
 
     if (tokens.length > 1 && combinedTokenMatches === tokens.length) score += 260;
     if (tokens.length > 1 && nameTokenMatches === tokens.length) score += 120;
     if (tokens.length > 2 && combinedTokenMatches === minimumRelevantMatches) score -= 40;
 
     return Math.max(score, 0);
+};
+const getOrderLineReplacementFamilyParentId = (entry) => {
+    if (!entry || typeof entry !== 'object') return 0;
+
+    return [
+        entry?.parent_product_id,
+        entry?.options?.variant_parent_id,
+        entry?.bundle_item_base_product_id,
+        entry?.options?.bundle_item_base_product_id,
+        entry?.base_product_id,
+    ].map((value) => Number(value) || 0).find((value) => value > 0) || 0;
+};
+const collectOrderLineReplacementFamilyParentIds = (items = []) => (
+    Array.from(new Set(
+        (Array.isArray(items) ? items : [])
+            .map(getOrderLineReplacementFamilyParentId)
+            .filter((value) => value > 0)
+    ))
+);
+const groupOrderLineReplacementFamilyEntries = (entries = []) => {
+    const groupedEntries = new Map();
+
+    (Array.isArray(entries) ? entries : []).forEach((entry) => {
+        const familyParentId = getOrderLineReplacementFamilyParentId(entry);
+        if (!familyParentId) return;
+
+        const familyEntries = groupedEntries.get(familyParentId) || [];
+        familyEntries.push(entry);
+        groupedEntries.set(familyParentId, familyEntries);
+    });
+
+    return groupedEntries;
+};
+const getActualReplacementTargetProductId = (entry) => Number(
+    entry?.target_product_id
+    ?? entry?.product_id
+    ?? entry?.id
+    ?? 0
+) || 0;
+const getOrderLineBundleReplacementGroupKey = (line) => {
+    const options = line?.options || {};
+    const bundleParentId = Number(options?.bundle_parent_id ?? line?.bundle_parent_id ?? 0) || 0;
+    const optionIdentity = normalizeCanvasText(
+        options?.bundle_option_uid
+        || options?.bundle_option_key
+        || options?.bundle_option_title
+        || options?.bundle_option_post_title
+        || line?.bundle_option_uid
+        || line?.bundle_option_key
+        || line?.bundle_option_title
+    );
+
+    if (!bundleParentId || !optionIdentity) return '';
+
+    return `bundle:${bundleParentId}:${normalizeProductSearchText(optionIdentity)}`;
+};
+const buildDefaultActualProductReplaceGroupLineIds = (items = [], activeLineId = '', selectedLineIds = new Set()) => {
+    const normalizedActiveLineId = normalizeCanvasText(activeLineId);
+    const normalizedSelectedLineIds = new Set(
+        Array.from(selectedLineIds || [])
+            .map(normalizeCanvasText)
+            .filter(Boolean)
+    );
+    const normalizedItems = Array.isArray(items) ? items : [];
+    const validLineIds = new Set(
+        normalizedItems.map((item) => normalizeCanvasText(item?.line_id)).filter(Boolean)
+    );
+    const activeLine = normalizedItems.find((item) => normalizeCanvasText(item?.line_id) === normalizedActiveLineId);
+
+    if (normalizedActiveLineId && normalizedSelectedLineIds.has(normalizedActiveLineId) && normalizedSelectedLineIds.size > 1) {
+        const selectedIds = Array.from(normalizedSelectedLineIds).filter((lineId) => validLineIds.has(lineId));
+        if (selectedIds.length > 0) {
+            return new Set(selectedIds);
+        }
+    }
+
+    const bundleGroupKey = getOrderLineBundleReplacementGroupKey(activeLine);
+    if (bundleGroupKey) {
+        const bundleLineIds = normalizedItems
+            .filter((item) => getOrderLineBundleReplacementGroupKey(item) === bundleGroupKey)
+            .map((item) => normalizeCanvasText(item?.line_id))
+            .filter(Boolean);
+
+        if (bundleLineIds.length > 0) {
+            return new Set(bundleLineIds);
+        }
+    }
+
+    const familyParentId = getOrderLineReplacementFamilyParentId(activeLine);
+    if (familyParentId > 0) {
+        const familyLineIds = normalizedItems
+            .filter((item) => getOrderLineReplacementFamilyParentId(item) === familyParentId)
+            .map((item) => normalizeCanvasText(item?.line_id))
+            .filter(Boolean);
+
+        if (familyLineIds.length > 0) {
+            return new Set(familyLineIds);
+        }
+    }
+
+    return normalizedActiveLineId ? new Set([normalizedActiveLineId]) : new Set();
+};
+const buildActualProductReplaceGroupLines = (items = [], selectedLineIds = new Set()) => {
+    const selectedIds = new Set(Array.from(selectedLineIds || []).map(normalizeCanvasText).filter(Boolean));
+
+    return (Array.isArray(items) ? items : [])
+        .map((item, index) => ({
+            item,
+            lineId: normalizeCanvasText(item?.line_id),
+            lineNumber: getOrderLineDisplaySequence(item, index),
+        }))
+        .filter((entry) => entry.lineId && selectedIds.has(entry.lineId));
+};
+const getActualReplacementAttributeMap = (entry) => {
+    if (!entry || typeof entry !== 'object') return {};
+
+    const map = {};
+    const assignValue = (attributeId, value) => {
+        const normalizedAttributeId = String(attributeId ?? '').trim();
+        if (!normalizedAttributeId) return;
+
+        const values = parseProductAttributeValueList(value);
+        if (values.length === 0) return;
+
+        map[normalizedAttributeId] = values.map(normalizeProductSearchText).filter(Boolean);
+    };
+
+    [entry?.product_attributes, entry?.attributes_map, entry?.attributes].forEach((source) => {
+        if (!source || typeof source !== 'object' || Array.isArray(source)) return;
+
+        Object.entries(source).forEach(([attributeId, value]) => assignValue(attributeId, value));
+    });
+
+    getPickerAttributeValues(entry).forEach((attributeValue) => {
+        assignValue(attributeValue?.attribute_id ?? attributeValue?.attribute?.id, attributeValue?.value);
+    });
+
+    return map;
+};
+const actualReplacementAttributeValuesEqual = (left = [], right = []) => {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length === 0 || right.length === 0) {
+        return false;
+    }
+
+    const rightSet = new Set(right);
+    return left.some((value) => value && rightSet.has(value));
+};
+const collectActualReplacementChangedAttributeIds = (sourceLine, targetEntry) => {
+    const sourceAttributes = getActualReplacementAttributeMap(sourceLine);
+    const targetAttributes = getActualReplacementAttributeMap(targetEntry);
+
+    return Object.keys(sourceAttributes).filter((attributeId) => (
+        targetAttributes[attributeId]
+        && !actualReplacementAttributeValuesEqual(sourceAttributes[attributeId], targetAttributes[attributeId])
+    ));
+};
+const scoreActualProductGroupReplacementCandidate = (
+    sourceLine,
+    candidate,
+    targetEntry,
+    changedAttributeIds = []
+) => {
+    if (!candidate || typeof candidate !== 'object') return Number.NEGATIVE_INFINITY;
+
+    const sourceProductId = Number(sourceLine?.product_id) || 0;
+    const candidateProductId = getActualReplacementTargetProductId(candidate);
+    const sourceFamilyParentId = getOrderLineReplacementFamilyParentId(sourceLine);
+    const candidateFamilyParentId = getOrderLineReplacementFamilyParentId(candidate);
+    const sourceAttributes = getActualReplacementAttributeMap(sourceLine);
+    const targetAttributes = getActualReplacementAttributeMap(targetEntry);
+    const candidateAttributes = getActualReplacementAttributeMap(candidate);
+    const sourceSkuParts = normalizeProductSearchText(sourceLine?.sku || sourceLine?.snapshot_sku)
+        .split(/\s+/)
+        .filter(Boolean);
+    const candidateSkuText = normalizeProductSearchText(candidate?.display_sku || candidate?.sku);
+    const sourceNameTokens = tokenizeProductSearch(sourceLine?.name || sourceLine?.snapshot_name);
+    const candidateNameText = normalizeProductSearchText(candidate?.display_name || candidate?.name);
+    let score = 0;
+
+    if (candidateProductId > 0 && sourceProductId > 0 && candidateProductId === sourceProductId) {
+        score -= 1200;
+    }
+
+    if (sourceFamilyParentId > 0 && candidateFamilyParentId === sourceFamilyParentId) {
+        score += 5000;
+    }
+
+    changedAttributeIds.forEach((attributeId) => {
+        if (
+            candidateAttributes[attributeId]
+            && targetAttributes[attributeId]
+            && actualReplacementAttributeValuesEqual(candidateAttributes[attributeId], targetAttributes[attributeId])
+        ) {
+            score += 1700;
+        } else {
+            score -= 2600;
+        }
+    });
+
+    Object.entries(sourceAttributes).forEach(([attributeId, values]) => {
+        if (changedAttributeIds.includes(attributeId) || !candidateAttributes[attributeId]) return;
+        if (actualReplacementAttributeValuesEqual(values, candidateAttributes[attributeId])) {
+            score += 420;
+        }
+    });
+
+    sourceSkuParts.forEach((part) => {
+        if (part && candidateSkuText.includes(part)) {
+            score += 120;
+        }
+    });
+
+    sourceNameTokens.forEach((token) => {
+        if (token && candidateNameText.includes(token)) {
+            score += 90;
+        }
+    });
+
+    return score;
+};
+const normalizeBundleItemReplacementEntry = (bundleItem, targetEntry = {}) => {
+    const productId = getBundleItemProductId(bundleItem);
+    const parentProductId = Number(bundleItem?.base_product_id ?? bundleItem?.parent_product_id ?? 0) || 0;
+
+    return normalizeProductPickerEntry({
+        ...bundleItem,
+        entry_id: `bundle-group-replacement-${productId || normalizeCanvasText(bundleItem?.sku)}`,
+        entry_kind: parentProductId > 0 ? SEARCH_ENTRY_VARIATION : SEARCH_ENTRY_PRODUCT,
+        id: productId,
+        product_id: productId,
+        target_product_id: productId,
+        parent_product_id: parentProductId || undefined,
+        parent_product_name: normalizeCanvasText(bundleItem?.parent_product_name || bundleItem?.base_product_name || targetEntry?.bundle_parent_name),
+        name: normalizeCanvasText(bundleItem?.name || bundleItem?.display_name) || `Sản phẩm #${productId}`,
+        display_name: normalizeCanvasText(bundleItem?.display_name || bundleItem?.name) || `Sản phẩm #${productId}`,
+        sku: normalizeCanvasText(bundleItem?.sku || bundleItem?.display_sku),
+        display_sku: normalizeCanvasText(bundleItem?.display_sku || bundleItem?.sku),
+        option_label: normalizeCanvasText(bundleItem?.option_label || bundleItem?.variant_label || buildAttributeValueSummary(bundleItem)),
+        ...resolveProductSourceFields(bundleItem, targetEntry),
+    });
+};
+const findBundleOptionGroupReplacementEntry = (sourceLine, bundleItems = [], usedProductIds = new Set(), targetEntry = {}) => {
+    const sourceFamilyParentId = getOrderLineReplacementFamilyParentId(sourceLine);
+    const normalizedBundleItems = (Array.isArray(bundleItems) ? bundleItems : [])
+        .map((bundleItem) => normalizeBundleItemReplacementEntry(bundleItem, targetEntry))
+        .filter((entry) => getActualReplacementTargetProductId(entry) > 0);
+
+    const exactFamilyCandidates = sourceFamilyParentId > 0
+        ? normalizedBundleItems.filter((entry) => getOrderLineReplacementFamilyParentId(entry) === sourceFamilyParentId)
+        : [];
+    const candidatePool = exactFamilyCandidates.length > 0 ? exactFamilyCandidates : normalizedBundleItems;
+    const scoredCandidates = candidatePool
+        .filter((entry) => !usedProductIds.has(getActualReplacementTargetProductId(entry)))
+        .map((entry) => ({
+            entry,
+            score: (
+                (sourceFamilyParentId > 0 && getOrderLineReplacementFamilyParentId(entry) === sourceFamilyParentId ? 8000 : 0)
+                + scoreProductSearchResult(entry, sourceLine?.sku || sourceLine?.name || '')
+            ),
+        }))
+        .sort((left, right) => right.score - left.score);
+
+    return scoredCandidates[0]?.entry || null;
+};
+const buildActualProductGroupReplacementPreview = ({
+    groupLines = [],
+    activeLine = null,
+    targetEntry = null,
+    availableEntries = [],
+} = {}) => {
+    const normalizedGroupLines = (Array.isArray(groupLines) ? groupLines : [])
+        .filter((entry) => entry?.item && normalizeCanvasText(entry?.item?.line_id));
+    if (normalizedGroupLines.length === 0 || !targetEntry) {
+        return [];
+    }
+
+    const activeLineId = normalizeCanvasText(activeLine?.line_id);
+    const normalizedTargetEntry = normalizeProductPickerEntry(targetEntry);
+    const isBundleTarget = isBundleOptionPickerEntry(normalizedTargetEntry)
+        && Array.isArray(normalizedTargetEntry?.bundle_items)
+        && normalizedTargetEntry.bundle_items.length > 0;
+    const activeSourceLine = normalizedGroupLines.find((entry) => entry.lineId === activeLineId)?.item
+        || normalizedGroupLines[0]?.item
+        || activeLine;
+    const changedAttributeIds = collectActualReplacementChangedAttributeIds(activeSourceLine, normalizedTargetEntry);
+    const candidateEntries = mergeActualProductReplacementEntries(
+        [normalizedTargetEntry],
+        availableEntries,
+        isBundleTarget ? normalizedTargetEntry.bundle_items.map((bundleItem) => normalizeBundleItemReplacementEntry(bundleItem, normalizedTargetEntry)) : []
+    );
+    const usedProductIds = new Set();
+
+    return normalizedGroupLines.map((groupLine) => {
+        const sourceLine = groupLine.item;
+        const sourceLineId = normalizeCanvasText(sourceLine?.line_id);
+        let replacementEntry = null;
+
+        if (isBundleTarget) {
+            replacementEntry = findBundleOptionGroupReplacementEntry(
+                sourceLine,
+                normalizedTargetEntry.bundle_items,
+                usedProductIds,
+                normalizedTargetEntry
+            );
+        } else if (sourceLineId === activeLineId) {
+            replacementEntry = normalizedTargetEntry;
+        } else {
+            const sourceFamilyParentId = getOrderLineReplacementFamilyParentId(sourceLine);
+            const familyCandidates = candidateEntries.filter((entry) => (
+                sourceFamilyParentId > 0
+                && getOrderLineReplacementFamilyParentId(entry) === sourceFamilyParentId
+            ));
+            const candidatePool = familyCandidates.length > 0 ? familyCandidates : candidateEntries;
+            const scoredCandidates = candidatePool
+                .filter((entry) => !usedProductIds.has(getActualReplacementTargetProductId(entry)))
+                .map((entry) => ({
+                    entry,
+                    score: scoreActualProductGroupReplacementCandidate(
+                        sourceLine,
+                        entry,
+                        normalizedTargetEntry,
+                        changedAttributeIds
+                    ),
+                }))
+                .filter(({ score }) => score > (changedAttributeIds.length > 0 ? 1000 : 4200))
+                .sort((left, right) => right.score - left.score);
+
+            replacementEntry = scoredCandidates[0]?.entry || null;
+        }
+
+        const replacementProductId = getActualReplacementTargetProductId(replacementEntry);
+        if (replacementProductId > 0) {
+            usedProductIds.add(replacementProductId);
+        }
+
+        const replacementLine = replacementEntry
+            ? buildOrderItemsFromSearchEntry(replacementEntry)[0] || null
+            : null;
+
+        return {
+            ...groupLine,
+            replacementEntry,
+            replacementLine,
+            isSameProduct: Boolean(replacementLine && Number(replacementLine.product_id) === Number(sourceLine?.product_id)),
+            financialPreview: replacementEntry ? resolveActualReplacementFinancialPreview(replacementEntry, sourceLine) : null,
+        };
+    });
+};
+const filterOrderLineReplacementFamilyEntries = (entries = [], rawTerm = '', seedTerm = '') => {
+    const term = normalizeCanvasText(rawTerm);
+    if (!term || normalizeProductSearchText(term) === normalizeProductSearchText(seedTerm)) {
+        return entries;
+    }
+
+    return (Array.isArray(entries) ? entries : [])
+        .map((entry) => ({
+            ...entry,
+            __searchScore: scoreProductSearchResult(entry, term),
+        }))
+        .filter((entry) => entry.__searchScore > 0)
+        .sort((left, right) => (
+            right.__searchScore - left.__searchScore
+            || String(left?.name || left?.display_name || '').localeCompare(String(right?.name || right?.display_name || ''), 'vi')
+        ));
 };
 const formatQuoteMoney = (value) => `${quoteCurrencyFormatter.format(Number(value) || 0)} đ`;
 const quoteCanvasPageWidth = 1200;
@@ -2793,6 +3298,295 @@ const mergeActualProductReplacementEntries = (...entryGroups) => {
 
     return mergedEntries;
 };
+const normalizeWarehousePickingHistoryScopeSegment = (value, fallback = 'default') => {
+    const normalizedValue = String(value ?? '').trim();
+    if (!normalizedValue) return fallback;
+
+    return normalizedValue.replace(/[^a-zA-Z0-9_-]/g, '_');
+};
+const getOrderFormWarehousePickingHistoryStorageKey = () => {
+    if (typeof window === 'undefined') {
+        return `${WAREHOUSE_PICKING_HISTORY_STORAGE_KEY_PREFIX}::default::default`;
+    }
+
+    return [
+        WAREHOUSE_PICKING_HISTORY_STORAGE_KEY_PREFIX,
+        normalizeWarehousePickingHistoryScopeSegment(window.localStorage.getItem('activeAccountId') || 'default'),
+        normalizeWarehousePickingHistoryScopeSegment(window.localStorage.getItem('activeSiteCode') || 'default'),
+    ].join('::');
+};
+const readOrderFormWarehousePickingHistoryStore = () => {
+    if (typeof window === 'undefined') return {};
+
+    try {
+        const rawValue = window.localStorage.getItem(getOrderFormWarehousePickingHistoryStorageKey());
+        const parsedValue = rawValue ? JSON.parse(rawValue) : {};
+
+        return parsedValue && typeof parsedValue === 'object' && !Array.isArray(parsedValue)
+            ? parsedValue
+            : {};
+    } catch (error) {
+        console.error('Cannot read warehouse picking replacement history.', error);
+        return {};
+    }
+};
+const writeOrderFormWarehousePickingHistoryStore = (store = {}) => {
+    if (typeof window === 'undefined') return;
+
+    try {
+        const normalizedEntries = Object.entries(store)
+            .filter(([, entries]) => Array.isArray(entries) && entries.length > 0)
+            .slice(-WAREHOUSE_PICKING_HISTORY_MAX_SOURCES);
+        const nextStore = Object.fromEntries(normalizedEntries);
+        const storageKey = getOrderFormWarehousePickingHistoryStorageKey();
+
+        if (Object.keys(nextStore).length === 0) {
+            window.localStorage.removeItem(storageKey);
+        } else {
+            window.localStorage.setItem(storageKey, JSON.stringify(nextStore));
+        }
+    } catch (error) {
+        console.error('Cannot write warehouse picking replacement history.', error);
+    }
+};
+const getOrderFormWarehousePickingEntryProductId = (entry) => getActualReplacementTargetProductId(entry);
+const getOrderFormWarehousePickingEntryName = (entry, fallback = 'Sản phẩm') => (
+    normalizeCanvasText(entry?.current_name || entry?.display_name || entry?.name) || fallback
+);
+const getOrderFormWarehousePickingEntrySku = (entry, fallback = '') => (
+    normalizeCanvasText(entry?.current_sku || entry?.display_sku || entry?.sku) || fallback
+);
+const getOrderFormWarehousePickingHistoryCandidateKey = (entry) => {
+    const productId = getOrderFormWarehousePickingEntryProductId(entry);
+    if (productId > 0) return `product:${productId}`;
+
+    const sku = normalizeProductSearchText(getOrderFormWarehousePickingEntrySku(entry));
+    if (sku) return `sku:${sku}`;
+
+    const name = normalizeProductSearchText(getOrderFormWarehousePickingEntryName(entry, ''));
+    return name ? `name:${name}` : '';
+};
+const buildOrderFormWarehousePickingHistorySource = (line) => {
+    if (!line || typeof line !== 'object') return null;
+
+    const productId = Number(line?.product_id ?? line?.target_product_id ?? line?.id ?? 0) || 0;
+    const sku = normalizeCanvasText(
+        getOrderItemCurrentSku(line)
+        || getOrderItemDisplaySku(line)
+        || line?.display_sku
+        || line?.sku
+    );
+    const name = normalizeCanvasText(
+        getOrderItemCurrentName(line)
+        || getOrderItemDisplayName(line)
+        || line?.display_name
+        || line?.name
+    );
+
+    if (productId <= 0 && !sku && !name) return null;
+
+    return normalizeProductPickerEntry({
+        ...line,
+        entry_kind: SEARCH_ENTRY_PRODUCT,
+        id: productId || undefined,
+        product_id: productId || undefined,
+        target_product_id: productId || undefined,
+        name: name || line?.name,
+        display_name: name || line?.display_name || line?.name,
+        sku: sku || line?.sku,
+        display_sku: sku || line?.display_sku || line?.sku,
+    });
+};
+const getOrderFormWarehousePickingHistorySourceKey = (line) => (
+    getOrderFormWarehousePickingHistoryCandidateKey(buildOrderFormWarehousePickingHistorySource(line))
+);
+const normalizeOrderFormWarehousePickingHistoryCandidate = (entry, meta = {}) => {
+    if (!entry || typeof entry !== 'object') return null;
+
+    const normalizedEntry = normalizeProductPickerEntry(entry);
+    const productId = getOrderFormWarehousePickingEntryProductId(normalizedEntry);
+    const name = getOrderFormWarehousePickingEntryName(normalizedEntry);
+    const sku = getOrderFormWarehousePickingEntrySku(normalizedEntry);
+    const nextEntry = {
+        ...normalizedEntry,
+        ...meta,
+        name,
+        display_name: normalizeCanvasText(normalizedEntry?.display_name) || name,
+        sku,
+        display_sku: normalizeCanvasText(normalizedEntry?.display_sku) || sku,
+        is_history_candidate: Boolean(meta?.is_history_candidate ?? normalizedEntry?.is_history_candidate),
+    };
+
+    if (productId > 0) {
+        nextEntry.id = productId;
+        nextEntry.product_id = productId;
+        nextEntry.target_product_id = productId;
+    }
+
+    const key = getOrderFormWarehousePickingHistoryCandidateKey(nextEntry);
+    return key ? { ...nextEntry, key } : null;
+};
+const getOrderFormWarehousePickingHistoryCandidateLastUsedAt = (candidate = {}) => {
+    const timestamp = Date.parse(
+        candidate?.last_used_at
+        || candidate?.selected_at
+        || candidate?.updated_at
+        || candidate?.created_at
+        || ''
+    );
+
+    return Number.isFinite(timestamp) ? timestamp : 0;
+};
+const mergeOrderFormWarehousePickingHistoryCandidates = (...candidateGroups) => {
+    const mergedCandidates = [];
+
+    candidateGroups.flat().forEach((entry) => {
+        const candidate = normalizeOrderFormWarehousePickingHistoryCandidate(entry);
+        if (!candidate?.key) return;
+
+        const existingIndex = mergedCandidates.findIndex((item) => item.key === candidate.key);
+        if (existingIndex < 0) {
+            mergedCandidates.push(candidate);
+            return;
+        }
+
+        const current = mergedCandidates[existingIndex];
+        const currentLastUsedAt = getOrderFormWarehousePickingHistoryCandidateLastUsedAt(current);
+        const incomingLastUsedAt = getOrderFormWarehousePickingHistoryCandidateLastUsedAt(candidate);
+        const lastUsedAt = incomingLastUsedAt > currentLastUsedAt
+            ? candidate.last_used_at
+            : current.last_used_at;
+
+        mergedCandidates[existingIndex] = {
+            ...current,
+            ...candidate,
+            is_history_candidate: Boolean(current?.is_history_candidate || candidate?.is_history_candidate),
+            last_used_at: lastUsedAt || candidate.last_used_at || current.last_used_at || '',
+        };
+    });
+
+    return mergedCandidates
+        .sort((left, right) => (
+            getOrderFormWarehousePickingHistoryCandidateLastUsedAt(right)
+            - getOrderFormWarehousePickingHistoryCandidateLastUsedAt(left)
+        ))
+        .slice(0, WAREHOUSE_PICKING_HISTORY_LIMIT);
+};
+const refreshOrderFormWarehousePickingHistoryCandidates = (historyCandidates = [], refreshCandidates = []) => {
+    const refreshByKey = new Map(
+        mergeActualProductReplacementEntries(refreshCandidates)
+            .map((candidate) => normalizeOrderFormWarehousePickingHistoryCandidate(candidate))
+            .filter(Boolean)
+            .map((candidate) => [candidate.key, candidate])
+    );
+
+    return mergeOrderFormWarehousePickingHistoryCandidates(
+        (Array.isArray(historyCandidates) ? historyCandidates : []).map((historyCandidate) => {
+            const normalizedHistoryCandidate = normalizeOrderFormWarehousePickingHistoryCandidate(historyCandidate, {
+                is_history_candidate: true,
+            });
+            if (!normalizedHistoryCandidate?.key) return null;
+
+            const refreshCandidate = refreshByKey.get(normalizedHistoryCandidate.key);
+            return refreshCandidate
+                ? {
+                    ...normalizedHistoryCandidate,
+                    ...refreshCandidate,
+                    is_history_candidate: true,
+                    last_used_at: normalizedHistoryCandidate.last_used_at || refreshCandidate.last_used_at || '',
+                }
+                : normalizedHistoryCandidate;
+        }).filter(Boolean)
+    ).map((candidate) => ({
+        ...candidate,
+        is_history_candidate: true,
+    }));
+};
+const getOrderFormWarehousePickingHistoryCandidates = (sourceLine) => {
+    const sourceKey = getOrderFormWarehousePickingHistorySourceKey(sourceLine);
+    if (!sourceKey) return [];
+
+    const store = readOrderFormWarehousePickingHistoryStore();
+
+    return refreshOrderFormWarehousePickingHistoryCandidates(store[sourceKey] || []);
+};
+const removeOrderFormWarehousePickingHistoryCandidate = (sourceLine, candidateToRemove) => {
+    const sourceKey = getOrderFormWarehousePickingHistorySourceKey(sourceLine);
+    const candidateKey = getOrderFormWarehousePickingHistoryCandidateKey(candidateToRemove);
+    if (!sourceKey || !candidateKey) return getOrderFormWarehousePickingHistoryCandidates(sourceLine);
+
+    const store = readOrderFormWarehousePickingHistoryStore();
+    const nextEntries = refreshOrderFormWarehousePickingHistoryCandidates(store[sourceKey] || [])
+        .filter((candidate) => candidate.key !== candidateKey);
+
+    if (nextEntries.length > 0) {
+        store[sourceKey] = nextEntries;
+    } else {
+        delete store[sourceKey];
+    }
+
+    writeOrderFormWarehousePickingHistoryStore(store);
+    return getOrderFormWarehousePickingHistoryCandidates(sourceLine);
+};
+const persistOrderFormWarehousePickingHistoryCandidate = (sourceLine, candidateEntry) => {
+    const sourceKey = getOrderFormWarehousePickingHistorySourceKey(sourceLine);
+    const sourceCandidateKey = getOrderFormWarehousePickingHistoryCandidateKey(
+        buildOrderFormWarehousePickingHistorySource(sourceLine)
+    );
+    const candidateKey = getOrderFormWarehousePickingHistoryCandidateKey(candidateEntry);
+    if (!sourceKey || !candidateKey || candidateKey === sourceCandidateKey) {
+        return getOrderFormWarehousePickingHistoryCandidates(sourceLine);
+    }
+
+    const historyCandidate = normalizeOrderFormWarehousePickingHistoryCandidate(candidateEntry, {
+        is_history_candidate: true,
+        last_used_at: new Date().toISOString(),
+    });
+    if (!historyCandidate?.key) return getOrderFormWarehousePickingHistoryCandidates(sourceLine);
+
+    const store = readOrderFormWarehousePickingHistoryStore();
+    store[sourceKey] = mergeOrderFormWarehousePickingHistoryCandidates(
+        [historyCandidate],
+        store[sourceKey] || []
+    );
+    writeOrderFormWarehousePickingHistoryStore(store);
+
+    return getOrderFormWarehousePickingHistoryCandidates(sourceLine);
+};
+const getOrderFormWarehousePickingHistoryProductIds = (candidates = []) => (
+    Array.from(new Set(
+        (Array.isArray(candidates) ? candidates : [])
+            .map(getOrderFormWarehousePickingEntryProductId)
+            .filter((productId) => productId > 0)
+    ))
+);
+const buildOrderFormWarehousePickingHistoryEntriesForLine = (sourceLine, candidates = [], { lineNumber = null } = {}) => {
+    const sourceCandidateKey = getOrderFormWarehousePickingHistoryCandidateKey(
+        buildOrderFormWarehousePickingHistorySource(sourceLine)
+    );
+
+    return refreshOrderFormWarehousePickingHistoryCandidates(candidates)
+        .filter((candidate) => candidate.key && candidate.key !== sourceCandidateKey)
+        .map((candidate) => ({
+            ...withActualReplacementLineContext(candidate, sourceLine, {
+                declared: Boolean(candidate?.is_declared_replacement),
+                groupId: candidate?.replacement_group_id || null,
+                lineNumber,
+            }),
+            is_history_candidate: true,
+            last_used_at: candidate.last_used_at || '',
+        }));
+};
+const buildOrderFormWarehousePickingHistorySearchText = (candidate, sourceLine, index = 0) => normalizeProductSearchText([
+    index + 1,
+    candidate?.name,
+    candidate?.display_name,
+    candidate?.sku,
+    candidate?.display_sku,
+    getOrderLineDisplaySequence(sourceLine, 0),
+    getOrderItemCurrentName(sourceLine),
+    getOrderItemCurrentSku(sourceLine),
+].filter(Boolean).join(' '));
 const getProductReplacementDeclarationSku = (entry) => normalizeCanvasText(entry?.display_sku || entry?.sku);
 const getProductReplacementDeclarationName = (entry) => (
     normalizeCanvasText(entry?.display_name || entry?.name) || 'Sản phẩm'
@@ -2815,6 +3609,48 @@ const buildProductReplacementDeclarationEntryFromLine = (line) => {
         cost_price: resolveProductCostPrice(line),
     });
 };
+const buildImmediateWarehousePickingEntryFromLine = (line, lineNumber = '') => {
+    const sourceEntry = buildProductReplacementDeclarationEntryFromLine(line);
+    if (!sourceEntry) return null;
+
+    return withActualReplacementLineContext(sourceEntry, line, {
+        original: true,
+        lineNumber,
+    });
+};
+const buildWarehousePickingLookupMeta = (line, { scopeKey = '', includeSource = true } = {}) => {
+    const sku = getProductReplacementDeclarationSku(line);
+    const productId = Number(line?.product_id ?? line?.target_product_id ?? line?.id ?? 0) || 0;
+    const lockedPrice = parseMoneyNumber(line?.price, 0) || 0;
+    const quantity = parseQuantityNumber(line?.quantity, 1) || 1;
+
+    return {
+        canLookup: Boolean(sku || productId),
+        params: {
+            product_id: sku ? undefined : (productId || undefined),
+            sku: sku || undefined,
+            locked_price: lockedPrice,
+            quantity,
+        },
+        cacheKey: JSON.stringify({
+            scope: normalizeCanvasText(scopeKey),
+            sku,
+            product_id: sku ? 0 : productId,
+            locked_price: lockedPrice,
+            quantity,
+            include_source: Boolean(includeSource),
+        }),
+    };
+};
+const withWarehousePickingLineContext = (entries = [], line = null, lineNumber = '') => (
+    mergeActualProductReplacementEntries(entries)
+        .map((entry) => withActualReplacementLineContext(entry, line, {
+            declared: Boolean(entry?.is_declared_replacement),
+            groupId: entry?.replacement_group_id || null,
+            original: Boolean(entry?.is_original_order_product),
+            lineNumber,
+        }))
+);
 const isBundleOptionPickerEntry = (entry) => (
     String(entry?.entry_kind || '').trim() === SEARCH_ENTRY_BUNDLE_OPTION
 );
@@ -4040,6 +4876,35 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
 
     return entries;
 };
+const normalizeProductSearchResponseRows = (rows = [], term = '') => {
+    const hasServerSearchTerm = normalizeCanvasText(term) !== '';
+
+    return (Array.isArray(rows) ? rows : []).map((product) => {
+        const serverSearchScore = Number(product?.search_score ?? product?.server_search_score ?? 0) || 0;
+
+        return {
+            ...normalizeProductPickerEntry(product),
+            server_search_score: serverSearchScore,
+            server_search_match: hasServerSearchTerm && serverSearchScore > 0,
+        };
+    });
+};
+const storeProductSearchCacheEntry = (cache, cacheKey, products, limit = 60) => {
+    if (!cache || !cacheKey) return;
+
+    cache.set(cacheKey, Array.isArray(products) ? products : []);
+    while (cache.size > limit) {
+        const oldestCacheKey = cache.keys().next().value;
+        if (!oldestCacheKey) break;
+        cache.delete(oldestCacheKey);
+    }
+};
+const getOrderProductSearchPageSize = (term = '') => {
+    const trimmedTerm = normalizeCanvasText(term);
+    if (!trimmedTerm) return 100;
+
+    return isCompactCompositeProductSearch(trimmedTerm) ? 200 : 20;
+};
 const buildProductQuickSetupEntries = (products = []) => (
     buildProductSearchEntries(products, { includeNested: true })
         .filter((entry) => canAddSearchEntry([], entry))
@@ -4047,8 +4912,23 @@ const buildProductQuickSetupEntries = (products = []) => (
 const buildStoredQuickSetupSearchEntries = (items = []) => {
     const entries = [];
     const seenEntryIds = new Set();
+    const sourceItems = (Array.isArray(items) ? items : []).flatMap((item) => {
+        const entryKind = String(item?.entry_kind || SEARCH_ENTRY_PRODUCT).trim() || SEARCH_ENTRY_PRODUCT;
+        const hasStoredBundleOptions = entryKind !== SEARCH_ENTRY_BUNDLE_OPTION
+            && Array.isArray(item?.bundle_options)
+            && item.bundle_options.some((bundleOption) => (
+                Array.isArray(bundleOption?.items) && bundleOption.items.length > 0
+            ));
 
-    (Array.isArray(items) ? items : []).forEach((item) => {
+        if (!hasStoredBundleOptions) {
+            return [item];
+        }
+
+        const expandedEntries = buildProductSearchEntries([item], { includeNested: true });
+        return expandedEntries.length > 0 ? expandedEntries : [item];
+    });
+
+    sourceItems.forEach((item) => {
         const targetProductId = Number(item?.target_product_id ?? item?.product_id ?? item?.id) || 0;
         if (!targetProductId) {
             return;
@@ -4228,6 +5108,159 @@ const mergeProductQuickSetupEntries = (products = [], selectedItems = []) => {
 
     return mergedEntries;
 };
+const mergeQuickSetupEntrySnapshot = (storedEntry, latestEntry) => {
+    if (!latestEntry || typeof latestEntry !== 'object') return storedEntry;
+    if (!storedEntry || typeof storedEntry !== 'object') return latestEntry;
+
+    const entryKind = String(storedEntry?.entry_kind || latestEntry?.entry_kind || SEARCH_ENTRY_PRODUCT).trim() || SEARCH_ENTRY_PRODUCT;
+    const mergedKeywords = [
+        ...(Array.isArray(storedEntry?.search_keywords) ? storedEntry.search_keywords : []),
+        ...(Array.isArray(latestEntry?.search_keywords) ? latestEntry.search_keywords : []),
+        storedEntry?.display_name,
+        storedEntry?.name,
+        latestEntry?.display_name,
+        latestEntry?.name,
+    ];
+
+    if (entryKind !== SEARCH_ENTRY_BUNDLE_OPTION) {
+        return {
+            ...storedEntry,
+            ...latestEntry,
+            entry_kind: entryKind,
+            search_keywords: Array.from(new Set(mergedKeywords.map(normalizeCanvasText).filter(Boolean))),
+        };
+    }
+
+    const targetProductId = Number(
+        latestEntry?.target_product_id
+        ?? latestEntry?.product_id
+        ?? latestEntry?.bundle_parent_id
+        ?? storedEntry?.target_product_id
+        ?? storedEntry?.product_id
+        ?? storedEntry?.bundle_parent_id
+        ?? 0
+    ) || 0;
+    const bundleParentId = Number(latestEntry?.bundle_parent_id ?? storedEntry?.bundle_parent_id ?? targetProductId) || targetProductId;
+    const bundleOptionUid = normalizeCanvasText(
+        latestEntry?.bundle_option_uid
+        || latestEntry?.uid
+        || latestEntry?.option_uid
+        || storedEntry?.bundle_option_uid
+        || storedEntry?.uid
+        || storedEntry?.option_uid
+    );
+    const bundleOptionKey = normalizeCanvasText(
+        latestEntry?.bundle_option_key
+        || storedEntry?.bundle_option_key
+        || resolveBundleOptionKey(latestEntry)
+        || resolveBundleOptionKey(storedEntry)
+    );
+    const bundleOptionTitle = normalizeCanvasText(
+        latestEntry?.bundle_option_title
+        || latestEntry?.option_title
+        || latestEntry?.title
+        || storedEntry?.bundle_option_title
+        || storedEntry?.option_title
+        || storedEntry?.title
+        || resolveBundleOptionTitle(storedEntry)
+        || resolveBundleOptionTitle(latestEntry)
+    );
+    const rawBundleOptionTitle = normalizeCanvasText(
+        latestEntry?.raw_bundle_option_title
+        || latestEntry?.raw_option_title
+        || latestEntry?.option_title
+        || storedEntry?.raw_bundle_option_title
+        || storedEntry?.raw_option_title
+        || storedEntry?.option_title
+        || bundleOptionTitle
+    );
+    const bundleItems = Array.isArray(latestEntry?.bundle_items) && latestEntry.bundle_items.length > 0
+        ? latestEntry.bundle_items
+        : (Array.isArray(storedEntry?.bundle_items) ? storedEntry.bundle_items : []);
+    const entryKey = getProductQuickSetupEntryKey({
+        ...storedEntry,
+        ...latestEntry,
+        entry_kind: entryKind,
+        product_id: targetProductId,
+        target_product_id: targetProductId,
+        bundle_parent_id: bundleParentId,
+        bundle_option_uid: bundleOptionUid,
+        bundle_option_key: bundleOptionKey,
+        bundle_option_title: bundleOptionTitle,
+    });
+
+    return {
+        ...storedEntry,
+        ...latestEntry,
+        entry_kind: SEARCH_ENTRY_BUNDLE_OPTION,
+        entry_id: normalizeCanvasText(storedEntry?.entry_id || latestEntry?.entry_id || entryKey),
+        id: normalizeCanvasText(storedEntry?.id) && !/^\d+$/.test(normalizeCanvasText(storedEntry.id))
+            ? storedEntry.id
+            : (latestEntry?.id || storedEntry?.id || entryKey),
+        product_id: targetProductId,
+        target_product_id: targetProductId,
+        bundle_parent_id: bundleParentId,
+        bundle_parent_name: normalizeCanvasText(
+            latestEntry?.bundle_parent_name
+            || storedEntry?.bundle_parent_name
+            || latestEntry?.parent_product_name
+            || storedEntry?.parent_product_name
+            || latestEntry?.name
+            || storedEntry?.name
+        ),
+        bundle_option_uid: bundleOptionUid,
+        bundle_option_key: bundleOptionKey,
+        bundle_option_title: bundleOptionTitle,
+        raw_bundle_option_title: rawBundleOptionTitle,
+        bundle_option_status: normalizeCanvasText(latestEntry?.bundle_option_status || storedEntry?.bundle_option_status || 'visible'),
+        bundle_title: normalizeCanvasText(latestEntry?.bundle_title || latestEntry?.bundle_config_title || storedEntry?.bundle_title || storedEntry?.bundle_config_title),
+        bundle_config_title: normalizeCanvasText(latestEntry?.bundle_config_title || latestEntry?.bundle_title || storedEntry?.bundle_config_title || storedEntry?.bundle_title),
+        option_post_id: Number(latestEntry?.option_post_id ?? storedEntry?.option_post_id) || undefined,
+        option_post_title: normalizeCanvasText(latestEntry?.option_post_title || storedEntry?.option_post_title),
+        bundle_items: bundleItems,
+        bundle_item_count: Number(latestEntry?.bundle_item_count ?? storedEntry?.bundle_item_count) || bundleItems.length || undefined,
+        bundle_quantity_total: Number(latestEntry?.bundle_quantity_total ?? storedEntry?.bundle_quantity_total) || undefined,
+        search_keywords: Array.from(new Set([
+            ...mergedKeywords,
+            latestEntry?.bundle_parent_name,
+            storedEntry?.bundle_parent_name,
+            bundleOptionTitle,
+            rawBundleOptionTitle,
+            latestEntry?.option_post_title,
+            storedEntry?.option_post_title,
+        ].map(normalizeCanvasText).filter(Boolean))),
+    };
+};
+const buildStoredBundleOptionsFromQuickSetupEntries = (entries = []) => (
+    (Array.isArray(entries) ? entries : [])
+        .filter((entry) => String(entry?.entry_kind || SEARCH_ENTRY_PRODUCT) === SEARCH_ENTRY_BUNDLE_OPTION)
+        .map((entry) => {
+            const bundleItems = normalizeStoredProductQuickSetupBundleItems(entry?.bundle_items);
+            if (bundleItems.length === 0) return null;
+
+            const optionTitle = normalizeCanvasText(entry?.bundle_option_title || entry?.option_title || resolveBundleOptionTitle(entry));
+            const optionKey = normalizeCanvasText(entry?.bundle_option_key || resolveBundleOptionKey(entry));
+            const optionUid = normalizeCanvasText(entry?.bundle_option_uid || entry?.uid || entry?.option_uid);
+            const optionPrice = resolveBundleOptionEntryPrice(entry, bundleItems);
+
+            return {
+                key: optionKey,
+                uid: optionUid,
+                bundle_option_uid: optionUid,
+                bundle_option_key: optionKey,
+                bundle_option_status: normalizeCanvasText(entry?.bundle_option_status || 'visible'),
+                option_title: optionTitle,
+                raw_option_title: normalizeCanvasText(entry?.raw_bundle_option_title || entry?.raw_option_title || entry?.option_title || optionTitle),
+                option_post_id: Number(entry?.option_post_id) || undefined,
+                option_post_title: normalizeCanvasText(entry?.option_post_title),
+                subtotal: optionPrice,
+                bundle_option_total_price: resolveMoneyValue(entry?.bundle_option_total_price, optionPrice, 0),
+                bundle_option_discounted_price: resolveMoneyValue(entry?.bundle_option_discounted_price, optionPrice, 0),
+                items: bundleItems,
+            };
+        })
+        .filter(Boolean)
+);
 
 const waitForNodeImages = async (node) => {
     if (!node) return;
@@ -4997,13 +6030,38 @@ const OrderAiLineReplacePanel = ({
     activeTab = ACTUAL_PRODUCT_PICKER_TAB_MANUAL,
     onActiveTabChange,
     activeLineNumber = '',
+    replaceScope = ACTUAL_PRODUCT_REPLACE_SCOPE_SINGLE,
+    onReplaceScopeChange,
+    groupLines = [],
+    groupPreview = [],
+    groupTargetEntry = null,
+    onGroupTargetEntryChange,
+    onToggleGroupLine,
+    onConfirmGroupReplacement,
+    groupConfirmLabel = 'Đổi nhóm khi nhặt hàng',
 }) => {
     const isAiLine = isOrderAiItem(currentLine);
     const isWarehousePickingTab = showWarehousePickingTab && activeTab === ACTUAL_PRODUCT_PICKER_TAB_WAREHOUSE;
+    const isGroupReplaceMode = isWarehousePickingTab && replaceScope === ACTUAL_PRODUCT_REPLACE_SCOPE_GROUP;
+    const showCurrentLineSummary = !isWarehousePickingTab;
+    const showReplacementFinancialPreview = preserveCurrentLinePrice && !isWarehousePickingTab;
+    const showWarehousePickingResultTabs = isWarehousePickingTab && !isGroupReplaceMode;
+    const safeSearchTerm = String(searchTerm ?? '');
+    const historySourceKey = getOrderFormWarehousePickingHistorySourceKey(currentLine);
+    const selectedGroupLines = Array.isArray(groupLines) ? groupLines : [];
+    const groupPreviewRows = Array.isArray(groupPreview) ? groupPreview : [];
+    const groupMatchedCount = groupPreviewRows.filter((row) => row?.replacementLine).length;
+    const groupMissingCount = Math.max(0, selectedGroupLines.length - groupMatchedCount);
+    const hasGroupTarget = Boolean(groupTargetEntry);
+    const groupTargetKey = getActualReplacementEntryKey(groupTargetEntry);
+    const canConfirmGroupReplacement = isGroupReplaceMode
+        && hasGroupTarget
+        && selectedGroupLines.length > 0
+        && groupMissingCount === 0;
     const currentSourceLabel = currentLabel || currentLine?.ai_meta?.source_phrase || currentLine?.name || '';
     const currentVariantLabel = currentLine?.options?.variant_label || '';
     const currentSku = currentLine?.sku || '';
-    const currentLineFinancial = preserveCurrentLinePrice
+    const currentLineFinancial = showReplacementFinancialPreview
         ? resolveActualReplacementFinancialPreview(currentLine, currentLine)
         : null;
     const formatPanelMoney = (value) => {
@@ -5019,16 +6077,110 @@ const OrderAiLineReplacePanel = ({
         return `${quoteCurrencyFormatter.format(numericValue)}đ`;
     };
     const panelHeading = heading || (isAiLine ? 'Đổi sản phẩm AI' : 'Đổi sản phẩm');
-    const hasSearchTerm = searchTerm.trim().length >= (isWarehousePickingTab ? 1 : 2);
+    const hasSearchTerm = safeSearchTerm.trim().length >= (isWarehousePickingTab ? 1 : 2);
     const emptyStateMessage = emptyMessage || (hasSearchTerm
         ? 'Không thấy sản phẩm phù hợp, thử đổi từ khóa tìm kiếm.'
         : 'Gõ ít nhất 2 ký tự để tìm sản phẩm thay thế.');
+    const [resultTab, setResultTab] = useState(ACTUAL_PRODUCT_PICKER_RESULT_TAB_PRODUCTS);
+    const [historyCandidates, setHistoryCandidates] = useState([]);
     const [panelPosition, setPanelPosition] = useState({
         left: 16,
         top: ORDER_FORM_REPLACE_PICKER_TOP,
         width: 460,
         maxHeight: 560,
     });
+    const resultSignature = useMemo(() => (
+        (Array.isArray(results) ? results : [])
+            .map((entry) => [
+                getOrderFormWarehousePickingHistoryCandidateKey(entry),
+                entry?.display_name || entry?.name,
+                entry?.display_sku || entry?.sku,
+            ].filter(Boolean).join(':'))
+            .filter(Boolean)
+            .join('|')
+    ), [results]);
+    const historyProductIdsKey = useMemo(() => (
+        getOrderFormWarehousePickingHistoryProductIds(historyCandidates).join(',')
+    ), [historyCandidates]);
+    const historyResults = useMemo(() => (
+        buildOrderFormWarehousePickingHistoryEntriesForLine(currentLine, historyCandidates, {
+            lineNumber: activeLineNumber,
+        })
+    ), [activeLineNumber, currentLine, historyCandidates]);
+    const filteredHistoryResults = useMemo(() => {
+        const normalizedSearchTerm = normalizeProductSearchText(safeSearchTerm);
+        if (!normalizedSearchTerm) return historyResults;
+
+        return historyResults.filter((candidate, index) => (
+            buildOrderFormWarehousePickingHistorySearchText(candidate, currentLine, index)
+                .includes(normalizedSearchTerm)
+        ));
+    }, [currentLine, historyResults, safeSearchTerm]);
+    const displayResults = resultTab === ACTUAL_PRODUCT_PICKER_RESULT_TAB_HISTORY
+        ? filteredHistoryResults
+        : results;
+    const displayLoading = resultTab === ACTUAL_PRODUCT_PICKER_RESULT_TAB_HISTORY ? false : loading;
+    const activeEmptyStateMessage = resultTab === ACTUAL_PRODUCT_PICKER_RESULT_TAB_HISTORY
+        ? (safeSearchTerm.trim()
+            ? 'Không thấy lịch sử khớp từ khóa.'
+            : 'Chưa có lịch sử cho sản phẩm này.')
+        : emptyStateMessage;
+    const handleResultTabChange = useCallback((tab) => {
+        setResultTab(tab);
+        if (tab === ACTUAL_PRODUCT_PICKER_RESULT_TAB_HISTORY) {
+            onSearchTermChange?.('');
+        }
+    }, [onSearchTermChange]);
+
+    useEffect(() => {
+        if (!show || !showWarehousePickingResultTabs || !historySourceKey) {
+            setResultTab(ACTUAL_PRODUCT_PICKER_RESULT_TAB_PRODUCTS);
+            setHistoryCandidates([]);
+            return;
+        }
+
+        setResultTab(ACTUAL_PRODUCT_PICKER_RESULT_TAB_PRODUCTS);
+        setHistoryCandidates(getOrderFormWarehousePickingHistoryCandidates(currentLine));
+    }, [currentLine, historySourceKey, show, showWarehousePickingResultTabs]);
+
+    useEffect(() => {
+        if (!show || !showWarehousePickingResultTabs || !resultSignature) return;
+
+        setHistoryCandidates((current) => refreshOrderFormWarehousePickingHistoryCandidates(current, results));
+    }, [resultSignature, results, show, showWarehousePickingResultTabs]);
+
+    useEffect(() => {
+        if (!show || !showWarehousePickingResultTabs || !historyProductIdsKey) return undefined;
+
+        let cancelled = false;
+        const productIds = historyProductIdsKey
+            .split(',')
+            .map((productId) => Number(productId) || 0)
+            .filter((productId) => productId > 0);
+
+        productApi.getAll({
+            picker: 1,
+            replace_picker: 1,
+            allow_variants: 1,
+            selected_ids: productIds.join(','),
+            per_page: Math.max(productIds.length, 20),
+        })
+            .then((response) => {
+                if (cancelled) return;
+
+                const entries = Array.isArray(response.data?.data)
+                    ? response.data.data.map(normalizeProductPickerEntry)
+                    : [];
+                setHistoryCandidates((current) => refreshOrderFormWarehousePickingHistoryCandidates(current, entries));
+            })
+            .catch((error) => {
+                console.error('Cannot refresh order form warehouse picking history products.', error);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [historyProductIdsKey, show, showWarehousePickingResultTabs]);
 
     useLayoutEffect(() => {
         if (!show || typeof window === 'undefined') return undefined;
@@ -5036,7 +6188,7 @@ const OrderAiLineReplacePanel = ({
         const updatePosition = () => {
             const viewportWidth = window.innerWidth || 1280;
             const viewportHeight = window.innerHeight || 720;
-            const preferredPanelWidth = showWarehousePickingTab ? 560 : 460;
+            const preferredPanelWidth = isGroupReplaceMode ? 680 : (showWarehousePickingTab ? 560 : 460);
             const panelWidth = Math.min(preferredPanelWidth, Math.max(340, viewportWidth - 24));
             const anchorRect = anchorElement?.getBoundingClientRect?.() || null;
             const preferredLeft = anchorRect ? anchorRect.right + 12 : viewportWidth - panelWidth - 16;
@@ -5061,7 +6213,7 @@ const OrderAiLineReplacePanel = ({
             window.removeEventListener('resize', updatePosition);
             window.removeEventListener('scroll', updatePosition, true);
         };
-    }, [anchorElement, show, showWarehousePickingTab]);
+    }, [anchorElement, isGroupReplaceMode, show, showWarehousePickingTab]);
 
     if (!show) return null;
 
@@ -5114,37 +6266,99 @@ const OrderAiLineReplacePanel = ({
                             </button>
                         </div>
                     )}
-                    <div className="mt-2 flex min-h-10 flex-wrap items-center gap-2 rounded-sm border border-primary/10 bg-white px-3 py-2 text-[11px] font-semibold text-primary/65">
-                        <span className="material-symbols-outlined shrink-0 text-[16px] text-sky-700/75">quick_reference</span>
-                        {activeLineNumber && (
-                            <span className="shrink-0 rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] font-black text-sky-800">
-                                STT {activeLineNumber}
-                            </span>
-                        )}
-                        <span className="truncate text-[12px] font-bold text-primary">
-                            {currentSourceLabel || 'Chọn sản phẩm thay thế'}
-                        </span>
-                        {currentSku && (
-                            <span className="shrink-0 rounded-full border border-primary/10 bg-primary/[0.03] px-2 py-0.5 text-[10px] font-black text-primary/55">
-                                {currentSku}
-                            </span>
-                        )}
-                        {currentVariantLabel && (
-                            <span className="max-w-[150px] truncate rounded-full border border-primary/10 bg-primary/[0.03] px-2 py-0.5 text-[10px] font-black text-primary/55">
-                                {currentVariantLabel}
-                            </span>
-                        )}
-                        {currentLineFinancial && (
-                            <>
+                    {isWarehousePickingTab && (
+                        <div className="mt-2 grid grid-cols-2 gap-1 rounded-sm border border-primary/10 bg-white p-1">
+                            <button
+                                type="button"
+                                onClick={() => onReplaceScopeChange?.(ACTUAL_PRODUCT_REPLACE_SCOPE_SINGLE)}
+                                className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-sm px-2 text-[10px] font-black uppercase tracking-[0.1em] transition-all ${!isGroupReplaceMode ? 'bg-sky-700 text-white shadow-sm' : 'text-primary/45 hover:bg-sky-50 hover:text-sky-700'}`}
+                            >
+                                <span className="material-symbols-outlined text-[14px]">looks_one</span>
+                                Đổi 1 dòng
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => onReplaceScopeChange?.(ACTUAL_PRODUCT_REPLACE_SCOPE_GROUP)}
+                                className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-sm px-2 text-[10px] font-black uppercase tracking-[0.1em] transition-all ${isGroupReplaceMode ? 'bg-emerald-600 text-white shadow-sm' : 'text-primary/45 hover:bg-emerald-50 hover:text-emerald-700'}`}
+                            >
+                                <span className="material-symbols-outlined text-[14px]">select_all</span>
+                                Đổi nhóm
+                            </button>
+                        </div>
+                    )}
+                    {showCurrentLineSummary && (
+                        <div className="mt-2 flex min-h-10 flex-wrap items-center gap-2 rounded-sm border border-primary/10 bg-white px-3 py-2 text-[11px] font-semibold text-primary/65">
+                            <span className="material-symbols-outlined shrink-0 text-[16px] text-sky-700/75">quick_reference</span>
+                            {activeLineNumber && (
                                 <span className="shrink-0 rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] font-black text-sky-800">
-                                    Giá chốt {formatPanelMoney(currentLineFinancial.lockedPrice)}
+                                    STT {activeLineNumber}
                                 </span>
+                            )}
+                            <span className="truncate text-[12px] font-bold text-primary">
+                                {currentSourceLabel || 'Chọn sản phẩm thay thế'}
+                            </span>
+                            {currentSku && (
                                 <span className="shrink-0 rounded-full border border-primary/10 bg-primary/[0.03] px-2 py-0.5 text-[10px] font-black text-primary/55">
-                                    SL {formatOrderFormQuantity(currentLineFinancial.quantity)}
+                                    {currentSku}
                                 </span>
-                            </>
-                        )}
-                    </div>
+                            )}
+                            {currentVariantLabel && (
+                                <span className="max-w-[150px] truncate rounded-full border border-primary/10 bg-primary/[0.03] px-2 py-0.5 text-[10px] font-black text-primary/55">
+                                    {currentVariantLabel}
+                                </span>
+                            )}
+                            {currentLineFinancial && (
+                                <>
+                                    <span className="shrink-0 rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] font-black text-sky-800">
+                                        Giá chốt {formatPanelMoney(currentLineFinancial.lockedPrice)}
+                                    </span>
+                                    <span className="shrink-0 rounded-full border border-primary/10 bg-primary/[0.03] px-2 py-0.5 text-[10px] font-black text-primary/55">
+                                        SL {formatOrderFormQuantity(currentLineFinancial.quantity)}
+                                    </span>
+                                </>
+                            )}
+                        </div>
+                    )}
+                    {isGroupReplaceMode && (
+                        <div className="mt-2 rounded-sm border border-emerald-200 bg-emerald-50/45 p-2.5">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div className="text-[10px] font-black uppercase tracking-[0.12em] text-emerald-700">
+                                    Nhóm đang chọn
+                                </div>
+                                <span className="rounded-full border border-emerald-200 bg-white px-2 py-0.5 text-[10px] font-black text-emerald-700">
+                                    {selectedGroupLines.length} dòng
+                                </span>
+                            </div>
+                            <div className="mt-2 max-h-24 space-y-1 overflow-y-auto pr-1">
+                                {selectedGroupLines.map((groupLine) => {
+                                    const line = groupLine.item || {};
+                                    const lineId = normalizeCanvasText(groupLine.lineId || line.line_id);
+
+                                    return (
+                                        <button
+                                            key={lineId}
+                                            type="button"
+                                            onClick={() => onToggleGroupLine?.(lineId)}
+                                            className="flex w-full items-center gap-2 rounded-sm border border-emerald-200/70 bg-white px-2 py-1.5 text-left transition-all hover:border-emerald-300 hover:bg-emerald-50"
+                                        >
+                                            <span className="material-symbols-outlined shrink-0 text-[15px] text-emerald-600">check_box</span>
+                                            <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-black text-emerald-700">
+                                                STT {groupLine.lineNumber}
+                                            </span>
+                                            <span className="min-w-0 flex-1 truncate text-[11px] font-bold text-primary">
+                                                {line.name || 'Sản phẩm'}
+                                            </span>
+                                            {line.sku ? (
+                                                <span className="max-w-[130px] truncate text-[10px] font-black text-primary/35">
+                                                    {line.sku}
+                                                </span>
+                                            ) : null}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
                 </div>
 
                 <div className="border-b border-primary/10 px-4 py-3">
@@ -5152,23 +6366,56 @@ const OrderAiLineReplacePanel = ({
                         <span className="material-symbols-outlined text-[18px] text-primary/35">search</span>
                         <input
                             type="text"
-                            value={searchTerm}
+                            value={safeSearchTerm}
                             onChange={(event) => onSearchTermChange(event.target.value)}
-                            placeholder={isWarehousePickingTab ? 'Nhập STT dòng đơn, mã hoặc tên sản phẩm...' : (searchPlaceholder || 'Tìm sản phẩm để đổi nhanh...')}
+                            placeholder={isGroupReplaceMode ? 'Tìm mẫu / nhóm đích...' : (isWarehousePickingTab ? 'Nhập STT dòng đơn, mã hoặc tên sản phẩm...' : (searchPlaceholder || 'Tìm sản phẩm để đổi nhanh...'))}
                             className="h-full w-full bg-transparent text-[13px] font-semibold text-[#0F172A] placeholder:text-primary/25 focus:outline-none"
                             autoFocus
                         />
                     </div>
+                    {showWarehousePickingResultTabs && (
+                        <div className="mt-2 grid grid-cols-2 gap-1 rounded-sm border border-primary/10 bg-primary/[0.03] p-1">
+                            <button
+                                type="button"
+                                onClick={() => handleResultTabChange(ACTUAL_PRODUCT_PICKER_RESULT_TAB_PRODUCTS)}
+                                className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-sm px-2 text-[11px] font-black transition-all ${
+                                    resultTab === ACTUAL_PRODUCT_PICKER_RESULT_TAB_PRODUCTS
+                                        ? 'bg-white text-primary shadow-sm'
+                                        : 'text-primary/40 hover:bg-white/70 hover:text-primary/65'
+                                }`}
+                            >
+                                <span className="material-symbols-outlined text-[14px]">inventory_2</span>
+                                Sản phẩm
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => handleResultTabChange(ACTUAL_PRODUCT_PICKER_RESULT_TAB_HISTORY)}
+                                className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-sm px-2 text-[11px] font-black transition-all ${
+                                    resultTab === ACTUAL_PRODUCT_PICKER_RESULT_TAB_HISTORY
+                                        ? 'bg-white text-emerald-700 shadow-sm'
+                                        : 'text-primary/40 hover:bg-white/70 hover:text-primary/65'
+                                }`}
+                            >
+                                <span className="material-symbols-outlined text-[14px]">history</span>
+                                Lịch sử
+                                {historyResults.length > 0 ? (
+                                    <span className="rounded-full bg-emerald-50 px-1.5 text-[10px] text-emerald-700">
+                                        {historyResults.length}
+                                    </span>
+                                ) : null}
+                            </button>
+                        </div>
+                    )}
                 </div>
 
                 <div className="flex-1 overflow-y-auto bg-white">
-                    {loading ? (
+                    {displayLoading && (!isWarehousePickingTab || displayResults.length === 0) ? (
                         <div className="px-4 py-8 text-center text-[12px] font-semibold text-primary/45">
                             Đang tìm sản phẩm...
                         </div>
-                    ) : results.length > 0 ? (
-                        results.map((entry, index) => {
-                            const financialPreview = preserveCurrentLinePrice
+                    ) : displayResults.length > 0 ? (
+                        displayResults.map((entry, index) => {
+                            const financialPreview = showReplacementFinancialPreview
                                 ? resolveActualReplacementFinancialPreview(entry, currentLine)
                                 : null;
                             const profitClass = financialPreview?.profitTotal < 0
@@ -5179,93 +6426,265 @@ const OrderAiLineReplacePanel = ({
                             const stockValue = parseQuantityNumber(entry?.available_to_sell, parseQuantityNumber(entry?.stock_quantity));
                             const hasStockValue = stockValue !== null;
                             const rowLineNumber = entry?.source_line_number || activeLineNumber;
+                            const entryKey = getActualReplacementEntryKey(entry);
+                            const isSelectedGroupTarget = isGroupReplaceMode && entryKey && entryKey === groupTargetKey;
+
+                            const isHistoryResult = resultTab === ACTUAL_PRODUCT_PICKER_RESULT_TAB_HISTORY
+                                || Boolean(entry?.is_history_candidate);
 
                             return (
-                                <button
-                                    key={`${entry?.target_product_id || entry?.sku || 'order-ai-replace'}-${index}`}
-                                    type="button"
-                                    onClick={() => onSelect(entry)}
-                                    className="flex w-full items-start justify-between gap-3 border-b border-primary/5 px-4 py-3 text-left transition-all hover:bg-primary/[0.03] last:border-b-0"
+                                <div
+                                    key={`${entryKey || entry?.target_product_id || entry?.sku || 'order-ai-replace'}-${index}`}
+                                    className={`group flex w-full items-stretch border-b transition-all last:border-b-0 ${isSelectedGroupTarget ? 'border-emerald-200 bg-emerald-50/80 ring-1 ring-inset ring-emerald-200' : 'border-primary/5 hover:bg-primary/[0.03]'}`}
                                 >
-                                    <div className="min-w-0 flex-1">
-                                        <div className="text-[13px] font-bold leading-snug text-primary">
-                                            {entry?.display_name || entry?.name || 'Sản phẩm'}
+                                    <button
+                                        type="button"
+                                        onClick={() => (
+                                            isGroupReplaceMode
+                                                ? onGroupTargetEntryChange?.(entry)
+                                                : onSelect(entry)
+                                        )}
+                                        className="flex min-w-0 flex-1 items-start justify-between gap-3 px-4 py-3 text-left"
+                                    >
+                                        <div className="min-w-0 flex-1">
+                                            <div className="text-[13px] font-bold leading-snug text-primary">
+                                                {entry?.display_name || entry?.name || 'Sản phẩm'}
+                                            </div>
+                                            <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] font-semibold text-primary/45">
+                                                {isWarehousePickingTab && rowLineNumber && (
+                                                    <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 font-black text-sky-800">
+                                                        STT {rowLineNumber}
+                                                    </span>
+                                                )}
+                                                {entry?.display_sku && (
+                                                    <span className="rounded-full border border-primary/10 bg-primary/[0.03] px-2 py-0.5">
+                                                        {entry.display_sku}
+                                                    </span>
+                                                )}
+                                                {entry?.is_original_order_product && (
+                                                    <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 font-black text-sky-800">
+                                                        Mặc định trong bộ
+                                                    </span>
+                                                )}
+                                                {entry?.option_label && (
+                                                    <span className="rounded-full border border-primary/10 bg-white px-2 py-0.5">
+                                                        {entry.option_label}
+                                                    </span>
+                                                )}
+                                                {entry?.is_declared_replacement && !entry?.is_original_order_product && (
+                                                    <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 font-black text-emerald-700">
+                                                        Mã thay thế
+                                                    </span>
+                                                )}
+                                                {isHistoryResult && !entry?.is_declared_replacement && (
+                                                    <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 font-black text-emerald-700">
+                                                        Lịch sử
+                                                    </span>
+                                                )}
+                                                {isSelectedGroupTarget && (
+                                                    <span className="rounded-full border border-emerald-200 bg-white px-2 py-0.5 font-black text-emerald-700">
+                                                        Nhóm đích
+                                                    </span>
+                                                )}
+                                                {hasStockValue && (
+                                                    <span className={`rounded-full border border-primary/10 bg-white px-2 py-0.5 font-black ${getAvailableToSellTextClass(stockValue)}`}>
+                                                        Còn {formatOrderFormQuantity(stockValue)}
+                                                    </span>
+                                                )}
+                                            </div>
+                                            {financialPreview && (
+                                                <div className="mt-2 grid grid-cols-2 gap-1.5 text-[10px] font-bold text-primary/45">
+                                                    <span className="rounded-sm border border-primary/10 bg-white px-2 py-1">
+                                                        Niêm yết <b className="text-primary/70">{formatPanelMoney(financialPreview.listPrice)}</b>
+                                                    </span>
+                                                    <span className="rounded-sm border border-sky-200 bg-sky-50 px-2 py-1 text-sky-800">
+                                                        Giữ đơn <b>{formatPanelMoney(financialPreview.lockedPrice)}</b>
+                                                    </span>
+                                                    <span className="rounded-sm border border-primary/10 bg-white px-2 py-1">
+                                                        Giá vốn <b className="text-primary/70">{formatPanelMoney(financialPreview.costPrice)}</b>
+                                                    </span>
+                                                    <span className="rounded-sm border border-primary/10 bg-white px-2 py-1">
+                                                        Lãi <b className={profitClass}>{formatPanelMoney(financialPreview.profitTotal)}</b>
+                                                    </span>
+                                                </div>
+                                            )}
                                         </div>
-                                        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] font-semibold text-primary/45">
-                                            {isWarehousePickingTab && rowLineNumber && (
-                                                <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 font-black text-sky-800">
-                                                    STT {rowLineNumber}
-                                                </span>
-                                            )}
-                                            {entry?.display_sku && (
-                                                <span className="rounded-full border border-primary/10 bg-primary/[0.03] px-2 py-0.5">
-                                                    {entry.display_sku}
-                                                </span>
-                                            )}
-                                            {entry?.is_original_order_product && (
-                                                <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 font-black text-sky-800">
-                                                    Mặc định trong bộ
-                                                </span>
-                                            )}
-                                            {entry?.option_label && (
-                                                <span className="rounded-full border border-primary/10 bg-white px-2 py-0.5">
-                                                    {entry.option_label}
-                                                </span>
-                                            )}
-                                            {entry?.is_declared_replacement && !entry?.is_original_order_product && (
-                                                <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 font-black text-emerald-700">
-                                                    Mã thay thế
-                                                </span>
-                                            )}
-                                            {hasStockValue && (
-                                                <span className={`rounded-full border border-primary/10 bg-white px-2 py-0.5 font-black ${getAvailableToSellTextClass(stockValue)}`}>
-                                                    Còn {formatOrderFormQuantity(stockValue)}
-                                                </span>
-                                            )}
-                                        </div>
-                                        {financialPreview && (
-                                            <div className="mt-2 grid grid-cols-2 gap-1.5 text-[10px] font-bold text-primary/45">
-                                                <span className="rounded-sm border border-primary/10 bg-white px-2 py-1">
-                                                    Niêm yết <b className="text-primary/70">{formatPanelMoney(financialPreview.listPrice)}</b>
-                                                </span>
-                                                <span className="rounded-sm border border-sky-200 bg-sky-50 px-2 py-1 text-sky-800">
-                                                    Giữ đơn <b>{formatPanelMoney(financialPreview.lockedPrice)}</b>
-                                                </span>
-                                                <span className="rounded-sm border border-primary/10 bg-white px-2 py-1">
-                                                    Giá vốn <b className="text-primary/70">{formatPanelMoney(financialPreview.costPrice)}</b>
-                                                </span>
-                                                <span className="rounded-sm border border-primary/10 bg-white px-2 py-1">
-                                                    Lãi <b className={profitClass}>{formatPanelMoney(financialPreview.profitTotal)}</b>
-                                                </span>
+                                        {!isWarehousePickingTab && (
+                                            <div className="shrink-0 text-right text-[12px] font-black text-primary/65">
+                                                {financialPreview ? (
+                                                    <>
+                                                        <div className="text-[10px] font-black uppercase tracking-[0.12em] text-sky-700/60">Giữ</div>
+                                                        <div className="text-[13px] text-sky-800">{formatPanelMoney(financialPreview.lockedPrice)}</div>
+                                                        {financialPreview.listPrice !== financialPreview.lockedPrice && (
+                                                            <div className="mt-0.5 text-[10px] font-semibold text-primary/35">
+                                                                SP {formatPanelMoney(financialPreview.listPrice)}
+                                                            </div>
+                                                        )}
+                                                    </>
+                                                ) : (
+                                                    formatPanelMoney(entry?.price ?? 0)
+                                                )}
                                             </div>
                                         )}
-                                    </div>
-                                    <div className="shrink-0 text-right text-[12px] font-black text-primary/65">
-                                        {financialPreview ? (
-                                            <>
-                                                <div className="text-[10px] font-black uppercase tracking-[0.12em] text-sky-700/60">Giữ</div>
-                                                <div className="text-[13px] text-sky-800">{formatPanelMoney(financialPreview.lockedPrice)}</div>
-                                                {financialPreview.listPrice !== financialPreview.lockedPrice && (
-                                                    <div className="mt-0.5 text-[10px] font-semibold text-primary/35">
-                                                        SP {formatPanelMoney(financialPreview.listPrice)}
-                                                    </div>
-                                                )}
-                                            </>
-                                        ) : (
-                                            formatPanelMoney(entry?.price ?? 0)
-                                        )}
-                                    </div>
-                                </button>
+                                    </button>
+                                    {isHistoryResult && showWarehousePickingResultTabs ? (
+                                        <div className="flex shrink-0 items-center pr-3">
+                                            <button
+                                                type="button"
+                                                onClick={(event) => {
+                                                    event.stopPropagation();
+                                                    setHistoryCandidates(removeOrderFormWarehousePickingHistoryCandidate(currentLine, entry));
+                                                }}
+                                                className="flex h-8 w-8 items-center justify-center rounded-sm border border-primary/10 bg-white text-primary/30 opacity-80 transition-all hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600 group-hover:opacity-100"
+                                                title="Xóa khỏi lịch sử sản phẩm này"
+                                                aria-label="Xóa khỏi lịch sử sản phẩm này"
+                                            >
+                                                <span className="material-symbols-outlined text-[14px]">close</span>
+                                            </button>
+                                        </div>
+                                    ) : null}
+                                </div>
                             );
                         })
                     ) : (
                         <div className="px-4 py-4">
                             <div className="flex min-h-10 items-center rounded-sm border border-dashed border-primary/10 bg-primary/[0.02] px-3 text-[12px] font-semibold text-primary/40">
-                                <span className="truncate">{emptyStateMessage}</span>
+                                <span className="truncate">{activeEmptyStateMessage}</span>
                             </div>
                         </div>
                     )}
                 </div>
+                {isGroupReplaceMode && (
+                    <div className="border-t border-primary/10 bg-slate-50/90 px-4 py-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="min-w-0">
+                                <div className="text-[10px] font-black uppercase tracking-[0.12em] text-primary/45">
+                                    Preview đổi nhóm
+                                </div>
+                                <div className="mt-0.5 truncate text-[12px] font-bold text-primary">
+                                    {hasGroupTarget
+                                        ? (groupTargetEntry?.display_name || groupTargetEntry?.name || 'Nhóm đích')
+                                        : 'Chưa chọn nhóm đích'}
+                                </div>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                                <span className="rounded-full border border-emerald-200 bg-white px-2 py-0.5 text-[10px] font-black text-emerald-700">
+                                    {groupMatchedCount}/{selectedGroupLines.length} map
+                                </span>
+                                {groupMissingCount > 0 ? (
+                                    <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-black text-amber-700">
+                                        Thiếu {groupMissingCount}
+                                    </span>
+                                ) : null}
+                            </div>
+                        </div>
+
+                        <div className="mt-2 max-h-48 overflow-y-auto rounded-sm border border-primary/10 bg-white">
+                            {hasGroupTarget && groupPreviewRows.length > 0 ? (
+                                groupPreviewRows.map((row) => {
+                                    const sourceLine = row.item || {};
+                                    const replacementLine = row.replacementLine || null;
+                                    const replacementEntry = row.replacementEntry || {};
+                                    const stockValue = parseQuantityNumber(
+                                        replacementEntry?.available_to_sell,
+                                        parseQuantityNumber(replacementEntry?.stock_quantity)
+                                    );
+                                    const hasStockValue = stockValue !== null;
+
+                                    return (
+                                        <div
+                                            key={row.lineId}
+                                            className="grid grid-cols-[minmax(0,1fr)_22px_minmax(0,1fr)] items-center gap-2 border-b border-primary/5 px-3 py-2 last:border-b-0"
+                                        >
+                                            <div className="min-w-0">
+                                                <div className="flex items-center gap-1.5">
+                                                    <span className="shrink-0 rounded-full bg-primary/[0.04] px-1.5 py-0.5 text-[9px] font-black text-primary/45">
+                                                        STT {row.lineNumber}
+                                                    </span>
+                                                    <span className="truncate text-[11px] font-bold text-primary">
+                                                        {sourceLine.name || 'Sản phẩm'}
+                                                    </span>
+                                                </div>
+                                                {sourceLine.sku ? (
+                                                    <div className="mt-0.5 truncate text-[10px] font-semibold text-primary/30">
+                                                        {sourceLine.sku}
+                                                    </div>
+                                                ) : null}
+                                            </div>
+                                            <span className={`material-symbols-outlined text-[16px] ${replacementLine ? 'text-emerald-600' : 'text-amber-500'}`}>
+                                                {replacementLine ? 'arrow_forward' : 'error'}
+                                            </span>
+                                            <div className="min-w-0">
+                                                {replacementLine ? (
+                                                    <>
+                                                        <div className="truncate text-[11px] font-bold text-emerald-800">
+                                                            {replacementLine.name || 'Sản phẩm thực gửi'}
+                                                        </div>
+                                                        <div className="mt-1 flex flex-wrap items-center gap-1">
+                                                            {replacementLine.sku ? (
+                                                                <span className="max-w-[120px] truncate rounded-full border border-primary/10 bg-white px-1.5 py-0.5 text-[9px] font-black text-primary/35">
+                                                                    {replacementLine.sku}
+                                                                </span>
+                                                            ) : null}
+                                                            {row.isSameProduct ? (
+                                                                <span className="rounded-full border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[9px] font-black text-sky-700">
+                                                                    Về mã gốc
+                                                                </span>
+                                                            ) : null}
+                                                            {hasStockValue ? (
+                                                                <span className={`rounded-full border border-primary/10 bg-white px-1.5 py-0.5 text-[9px] font-black ${getAvailableToSellTextClass(stockValue)}`}>
+                                                                    Còn {formatOrderFormQuantity(stockValue)}
+                                                                </span>
+                                                            ) : null}
+                                                            {!isWarehousePickingTab && row.financialPreview ? (
+                                                                <span className="rounded-full border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[9px] font-black text-sky-700">
+                                                                    Giữ {formatPanelMoney(row.financialPreview.lockedPrice)}
+                                                                </span>
+                                                            ) : null}
+                                                        </div>
+                                                    </>
+                                                ) : (
+                                                    <div className="text-[11px] font-bold text-amber-700">
+                                                        Chưa map được sản phẩm tương ứng
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    );
+                                })
+                            ) : (
+                                <div className="px-3 py-3 text-[12px] font-semibold text-primary/40">
+                                    Chọn một sản phẩm hoặc nhóm đích trong danh sách kết quả.
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                            <div className="inline-flex min-w-0 items-center gap-1.5 rounded-sm border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[10px] font-bold text-amber-700">
+                                <span className="material-symbols-outlined shrink-0 text-[14px]">info</span>
+                                <span className="truncate">Chỉ đổi sản phẩm thực gửi, giữ sản phẩm khách đặt.</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={onClose}
+                                    className="inline-flex h-9 items-center justify-center rounded-sm border border-primary/10 bg-white px-3 text-[12px] font-bold text-primary/55 transition-all hover:border-primary/25 hover:text-primary"
+                                >
+                                    Hủy
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={onConfirmGroupReplacement}
+                                    disabled={!canConfirmGroupReplacement}
+                                    className="inline-flex h-9 items-center justify-center gap-1.5 rounded-sm bg-emerald-600 px-3 text-[12px] font-black text-white shadow-sm transition-all hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-40"
+                                >
+                                    <span className="material-symbols-outlined text-[15px]">done_all</span>
+                                    {groupConfirmLabel}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
             </div>
         </>
     );
@@ -5339,9 +6758,13 @@ const OrderForm = () => {
     const [orderAiManualSearchLoading, setOrderAiManualSearchLoading] = useState(false);
     const [orderAiReplaceLineId, setOrderAiReplaceLineId] = useState('');
     const [orderAiReplaceSearchTerm, setOrderAiReplaceSearchTerm] = useState('');
+    const [orderAiReplaceSeedTerm, setOrderAiReplaceSeedTerm] = useState('');
     const [orderAiReplaceResults, setOrderAiReplaceResults] = useState([]);
     const [orderAiReplaceLoading, setOrderAiReplaceLoading] = useState(false);
     const [orderAiReplaceActiveTab, setOrderAiReplaceActiveTab] = useState(ACTUAL_PRODUCT_PICKER_TAB_MANUAL);
+    const [orderAiReplaceScope, setOrderAiReplaceScope] = useState(ACTUAL_PRODUCT_REPLACE_SCOPE_SINGLE);
+    const [orderAiReplaceGroupLineIds, setOrderAiReplaceGroupLineIds] = useState(new Set());
+    const [orderAiReplaceGroupTargetEntry, setOrderAiReplaceGroupTargetEntry] = useState(null);
     const [orderAiReplaceWarehouseSearchTerm, setOrderAiReplaceWarehouseSearchTerm] = useState('');
     const [orderAiReplaceWarehouseResults, setOrderAiReplaceWarehouseResults] = useState([]);
     const [orderAiReplaceWarehouseLoading, setOrderAiReplaceWarehouseLoading] = useState(false);
@@ -5350,6 +6773,9 @@ const OrderForm = () => {
     const [actualProductPickerResults, setActualProductPickerResults] = useState([]);
     const [actualProductPickerLoading, setActualProductPickerLoading] = useState(false);
     const [actualProductPickerActiveTab, setActualProductPickerActiveTab] = useState(ACTUAL_PRODUCT_PICKER_TAB_WAREHOUSE);
+    const [actualProductPickerScope, setActualProductPickerScope] = useState(ACTUAL_PRODUCT_REPLACE_SCOPE_SINGLE);
+    const [actualProductPickerGroupLineIds, setActualProductPickerGroupLineIds] = useState(new Set());
+    const [actualProductPickerGroupTargetEntry, setActualProductPickerGroupTargetEntry] = useState(null);
     const [showReplacementDeclarationModal, setShowReplacementDeclarationModal] = useState(false);
     const [replacementDeclarationSource, setReplacementDeclarationSource] = useState(null);
     const [replacementDeclarationGroupId, setReplacementDeclarationGroupId] = useState(null);
@@ -5432,6 +6858,9 @@ const OrderForm = () => {
     const productSearchAbortRef = useRef(null);
     const productSearchRequestKeyRef = useRef('');
     const productSearchCacheRef = useRef(new Map());
+    const productSearchPrefetchAbortRef = useRef(null);
+    const productSearchPrefetchKeyRef = useRef('');
+    const productSearchPrefetchPromiseRef = useRef(null);
     const productQuickFilterStorageKeyRef = useRef(productQuickFilterStorageKey);
     const skipNextProductQuickFilterPersistRef = useRef(false);
     const lastProductQuickFilterDurableSignatureRef = useRef(
@@ -5451,7 +6880,9 @@ const OrderForm = () => {
     const orderAiManualSearchAbortRef = useRef(null);
     const orderAiReplaceSearchAbortRef = useRef(null);
     const orderAiReplaceWarehouseAbortRef = useRef(null);
+    const orderAiReplaceFamilyPrefetchAbortRef = useRef(null);
     const orderAiReplaceSearchCacheRef = useRef(new Map());
+    const warehousePickingLookupCacheRef = useRef(new Map());
     const actualProductPickerAnchorRef = useRef(null);
     const actualProductPickerAbortRef = useRef(null);
     const actualProductPickerSearchCacheRef = useRef(new Map());
@@ -5550,6 +6981,43 @@ const OrderForm = () => {
         buildProductSearchEntries(rows, { includeNested: true })
             .filter((entry) => canAddSearchEntry([], entry))
     ), []);
+    const buildOrderAiReplaceFamilySearchParams = useCallback((familyParentIds = []) => {
+        const normalizedFamilyParentIds = Array.from(new Set(
+            (Array.isArray(familyParentIds) ? familyParentIds : [familyParentIds])
+                .map((value) => Number(value) || 0)
+                .filter((value) => value > 0)
+        ));
+        const params = {
+            picker: 1,
+            fast_picker: 1,
+            replace_picker: 1,
+            allow_variants: 1,
+            per_page: normalizedFamilyParentIds.length > 1 ? 200 : 100,
+        };
+
+        if (normalizedFamilyParentIds.length === 1) {
+            params.parent_id = normalizedFamilyParentIds[0];
+        } else if (normalizedFamilyParentIds.length > 1) {
+            params.parent_ids = normalizedFamilyParentIds.join(',');
+        }
+
+        return appendCrossSellSourceParams(params);
+    }, [appendCrossSellSourceParams]);
+    const getOrderAiReplaceFamilyCacheKey = useCallback((familyParentId) => (
+        JSON.stringify(buildOrderAiReplaceFamilySearchParams([familyParentId]))
+    ), [buildOrderAiReplaceFamilySearchParams]);
+    const cacheOrderAiReplaceFamilyEntries = useCallback((entries = [], { minFamilySize = 1 } = {}) => {
+        const normalizedMinFamilySize = Math.max(1, Number(minFamilySize) || 1);
+
+        groupOrderLineReplacementFamilyEntries(entries).forEach((familyEntries, familyParentId) => {
+            if (familyEntries.length < normalizedMinFamilySize) return;
+
+            orderAiReplaceSearchCacheRef.current.set(
+                getOrderAiReplaceFamilyCacheKey(familyParentId),
+                familyEntries
+            );
+        });
+    }, [getOrderAiReplaceFamilyCacheKey]);
     const toggleCrossSellAccount = useCallback((accountId) => {
         const normalizedAccountId = normalizeAccountId(accountId);
         if (!normalizedAccountId) return;
@@ -5564,6 +7032,7 @@ const OrderForm = () => {
         productQuickFilterScopeCacheRef.current.clear();
         productQuickSetupCacheRef.current.clear();
         orderAiReplaceSearchCacheRef.current.clear();
+        warehousePickingLookupCacheRef.current.clear();
         actualProductPickerSearchCacheRef.current.clear();
         setProducts([]);
         setProductQuickFilterScopeKey('');
@@ -6420,6 +7889,15 @@ const OrderForm = () => {
         () => formData.items.find((item) => normalizeCanvasText(item?.line_id) === normalizeCanvasText(orderAiReplaceLineId)) || null,
         [formData.items, orderAiReplaceLineId]
     );
+    const orderAiReplaceFamilyParentIds = useMemo(
+        () => collectOrderLineReplacementFamilyParentIds(formData.items)
+            .slice(0, ORDER_FORM_REPLACE_PICKER_PREFETCH_FAMILY_LIMIT),
+        [formData.items]
+    );
+    const orderAiReplaceFamilyParentKey = useMemo(
+        () => orderAiReplaceFamilyParentIds.join(','),
+        [orderAiReplaceFamilyParentIds]
+    );
     const activeOrderAiReplaceLineNumber = useMemo(() => {
         const normalizedLineId = normalizeCanvasText(orderAiReplaceLineId);
         if (!normalizedLineId) return '';
@@ -6438,6 +7916,68 @@ const OrderForm = () => {
         const index = formData.items.findIndex((item) => normalizeCanvasText(item?.line_id) === normalizedLineId);
         return index >= 0 ? getOrderLineDisplaySequence(formData.items[index], index) : '';
     }, [actualProductPickerLineId, formData.items]);
+    const orderAiReplaceGroupLines = useMemo(
+        () => buildActualProductReplaceGroupLines(formData.items, orderAiReplaceGroupLineIds),
+        [formData.items, orderAiReplaceGroupLineIds]
+    );
+    const actualProductPickerGroupLines = useMemo(
+        () => buildActualProductReplaceGroupLines(formData.items, actualProductPickerGroupLineIds),
+        [actualProductPickerGroupLineIds, formData.items]
+    );
+    const getCachedReplacementFamilyEntriesForLines = useCallback((groupLines = []) => (
+        mergeActualProductReplacementEntries(
+            (Array.isArray(groupLines) ? groupLines : []).flatMap((groupLine) => {
+                const familyParentId = getOrderLineReplacementFamilyParentId(groupLine?.item);
+                if (familyParentId <= 0) return [];
+
+                return orderAiReplaceSearchCacheRef.current.get(getOrderAiReplaceFamilyCacheKey(familyParentId)) || [];
+            })
+        )
+    ), [getOrderAiReplaceFamilyCacheKey]);
+    const orderAiReplaceGroupAvailableEntries = useMemo(() => (
+        mergeActualProductReplacementEntries(
+            orderAiReplaceResults,
+            orderAiReplaceWarehouseResults,
+            getCachedReplacementFamilyEntriesForLines(orderAiReplaceGroupLines)
+        )
+    ), [
+        getCachedReplacementFamilyEntriesForLines,
+        orderAiReplaceGroupLines,
+        orderAiReplaceResults,
+        orderAiReplaceWarehouseResults,
+    ]);
+    const actualProductPickerGroupAvailableEntries = useMemo(() => (
+        mergeActualProductReplacementEntries(
+            actualProductPickerResults,
+            getCachedReplacementFamilyEntriesForLines(actualProductPickerGroupLines)
+        )
+    ), [
+        actualProductPickerGroupLines,
+        actualProductPickerResults,
+        getCachedReplacementFamilyEntriesForLines,
+    ]);
+    const orderAiReplaceGroupPreview = useMemo(() => buildActualProductGroupReplacementPreview({
+        groupLines: orderAiReplaceGroupLines,
+        activeLine: activeOrderAiReplaceLine,
+        targetEntry: orderAiReplaceGroupTargetEntry,
+        availableEntries: orderAiReplaceGroupAvailableEntries,
+    }), [
+        activeOrderAiReplaceLine,
+        orderAiReplaceGroupAvailableEntries,
+        orderAiReplaceGroupLines,
+        orderAiReplaceGroupTargetEntry,
+    ]);
+    const actualProductPickerGroupPreview = useMemo(() => buildActualProductGroupReplacementPreview({
+        groupLines: actualProductPickerGroupLines,
+        activeLine: activeActualProductPickerLine,
+        targetEntry: actualProductPickerGroupTargetEntry,
+        availableEntries: actualProductPickerGroupAvailableEntries,
+    }), [
+        activeActualProductPickerLine,
+        actualProductPickerGroupAvailableEntries,
+        actualProductPickerGroupLines,
+        actualProductPickerGroupTargetEntry,
+    ]);
     const selectedOrderLine = useMemo(
         () => formData.items.find((item) => normalizeCanvasText(item?.line_id) === normalizeCanvasText(selectedOrderLineId)) || null,
         [formData.items, selectedOrderLineId]
@@ -6524,6 +8064,10 @@ const OrderForm = () => {
     }, [discountInputMode, formData.discount]);
     const selectedQuickSetupEntryKeys = useMemo(
         () => new Set(currentProductQuickSetupItems.map(getProductQuickSetupEntryKey).filter(Boolean)),
+        [currentProductQuickSetupItems]
+    );
+    const selectedQuickSetupProductIds = useMemo(
+        () => new Set(currentProductQuickSetupItems.map(getProductQuickSetupEntryId).filter((productId) => productId > 0)),
         [currentProductQuickSetupItems]
     );
     const visibleProductQuickSetupProducts = useMemo(() => {
@@ -7217,6 +8761,9 @@ const OrderForm = () => {
                     setOrderAiReplaceResults([]);
                     setOrderAiReplaceLoading(false);
                     setOrderAiReplaceActiveTab(ACTUAL_PRODUCT_PICKER_TAB_MANUAL);
+                    setOrderAiReplaceScope(ACTUAL_PRODUCT_REPLACE_SCOPE_SINGLE);
+                    setOrderAiReplaceGroupLineIds(new Set());
+                    setOrderAiReplaceGroupTargetEntry(null);
                     setOrderAiReplaceWarehouseSearchTerm('');
                     setOrderAiReplaceWarehouseResults([]);
                     setOrderAiReplaceWarehouseLoading(false);
@@ -7228,6 +8775,9 @@ const OrderForm = () => {
                     setActualProductPickerResults([]);
                     setActualProductPickerLoading(false);
                     setActualProductPickerActiveTab(ACTUAL_PRODUCT_PICKER_TAB_WAREHOUSE);
+                    setActualProductPickerScope(ACTUAL_PRODUCT_REPLACE_SCOPE_SINGLE);
+                    setActualProductPickerGroupLineIds(new Set());
+                    setActualProductPickerGroupTargetEntry(null);
                     actualProductPickerAnchorRef.current = null;
                     return;
                 }
@@ -7271,6 +8821,8 @@ const OrderForm = () => {
             URL.revokeObjectURL(orderAiLastInputPreviewUrlRef.current);
             orderAiLastInputPreviewUrlRef.current = '';
         }
+        orderAiReplaceFamilyPrefetchAbortRef.current?.abort();
+        orderAiReplaceFamilyPrefetchAbortRef.current = null;
     }, []);
 
     const showTransientNotification = useCallback((type, message, duration = 2000) => {
@@ -7338,9 +8890,13 @@ const OrderForm = () => {
         orderAiReplaceWarehouseAbortRef.current = null;
         setOrderAiReplaceLineId('');
         setOrderAiReplaceSearchTerm('');
+        setOrderAiReplaceSeedTerm('');
         setOrderAiReplaceResults([]);
         setOrderAiReplaceLoading(false);
         setOrderAiReplaceActiveTab(ACTUAL_PRODUCT_PICKER_TAB_MANUAL);
+        setOrderAiReplaceScope(ACTUAL_PRODUCT_REPLACE_SCOPE_SINGLE);
+        setOrderAiReplaceGroupLineIds(new Set());
+        setOrderAiReplaceGroupTargetEntry(null);
         setOrderAiReplaceWarehouseSearchTerm('');
         setOrderAiReplaceWarehouseResults([]);
         setOrderAiReplaceWarehouseLoading(false);
@@ -7354,6 +8910,9 @@ const OrderForm = () => {
         setActualProductPickerResults([]);
         setActualProductPickerLoading(false);
         setActualProductPickerActiveTab(ACTUAL_PRODUCT_PICKER_TAB_WAREHOUSE);
+        setActualProductPickerScope(ACTUAL_PRODUCT_REPLACE_SCOPE_SINGLE);
+        setActualProductPickerGroupLineIds(new Set());
+        setActualProductPickerGroupTargetEntry(null);
     }, []);
     const handleActualProductPickerTabChange = useCallback((tab) => {
         const nextTab = tab === ACTUAL_PRODUCT_PICKER_TAB_MANUAL
@@ -7363,6 +8922,10 @@ const OrderForm = () => {
         setActualProductPickerActiveTab(nextTab);
         setActualProductPickerSearchTerm('');
         setActualProductPickerResults([]);
+        setActualProductPickerGroupTargetEntry(null);
+        if (nextTab !== ACTUAL_PRODUCT_PICKER_TAB_WAREHOUSE) {
+            setActualProductPickerScope(ACTUAL_PRODUCT_REPLACE_SCOPE_SINGLE);
+        }
     }, []);
     const handleOrderAiReplacePickerTabChange = useCallback((tab) => {
         const nextTab = tab === ACTUAL_PRODUCT_PICKER_TAB_WAREHOUSE
@@ -7376,7 +8939,77 @@ const OrderForm = () => {
         } else {
             setOrderAiReplaceSearchTerm('');
             setOrderAiReplaceResults([]);
+            setOrderAiReplaceScope(ACTUAL_PRODUCT_REPLACE_SCOPE_SINGLE);
         }
+        setOrderAiReplaceGroupTargetEntry(null);
+    }, []);
+    const handleOrderAiReplaceScopeChange = useCallback((scope) => {
+        const nextScope = scope === ACTUAL_PRODUCT_REPLACE_SCOPE_GROUP
+            ? ACTUAL_PRODUCT_REPLACE_SCOPE_GROUP
+            : ACTUAL_PRODUCT_REPLACE_SCOPE_SINGLE;
+
+        setOrderAiReplaceScope(nextScope);
+        setOrderAiReplaceGroupTargetEntry(null);
+
+        if (nextScope === ACTUAL_PRODUCT_REPLACE_SCOPE_GROUP) {
+            setOrderAiReplaceActiveTab(ACTUAL_PRODUCT_PICKER_TAB_WAREHOUSE);
+            setOrderAiReplaceGroupLineIds((prev) => (
+                prev.size > 0
+                    ? prev
+                    : buildDefaultActualProductReplaceGroupLineIds(formData.items, orderAiReplaceLineId, selectedLineItemIds)
+            ));
+        }
+    }, [formData.items, orderAiReplaceLineId, selectedLineItemIds]);
+    const handleActualProductPickerScopeChange = useCallback((scope) => {
+        const nextScope = scope === ACTUAL_PRODUCT_REPLACE_SCOPE_GROUP
+            ? ACTUAL_PRODUCT_REPLACE_SCOPE_GROUP
+            : ACTUAL_PRODUCT_REPLACE_SCOPE_SINGLE;
+
+        setActualProductPickerScope(nextScope);
+        setActualProductPickerGroupTargetEntry(null);
+
+        if (nextScope === ACTUAL_PRODUCT_REPLACE_SCOPE_GROUP) {
+            setActualProductPickerActiveTab(ACTUAL_PRODUCT_PICKER_TAB_WAREHOUSE);
+            setActualProductPickerGroupLineIds((prev) => (
+                prev.size > 0
+                    ? prev
+                    : buildDefaultActualProductReplaceGroupLineIds(formData.items, actualProductPickerLineId, selectedLineItemIds)
+            ));
+        }
+    }, [actualProductPickerLineId, formData.items, selectedLineItemIds]);
+    const handleToggleOrderAiReplaceGroupLine = useCallback((lineId) => {
+        const normalizedLineId = normalizeCanvasText(lineId);
+        if (!normalizedLineId) return;
+
+        setOrderAiReplaceGroupTargetEntry(null);
+        setOrderAiReplaceGroupLineIds((prev) => {
+            const next = new Set(prev);
+            if (next.has(normalizedLineId)) {
+                if (next.size <= 1) return next;
+                next.delete(normalizedLineId);
+                return next;
+            }
+
+            next.add(normalizedLineId);
+            return next;
+        });
+    }, []);
+    const handleToggleActualProductPickerGroupLine = useCallback((lineId) => {
+        const normalizedLineId = normalizeCanvasText(lineId);
+        if (!normalizedLineId) return;
+
+        setActualProductPickerGroupTargetEntry(null);
+        setActualProductPickerGroupLineIds((prev) => {
+            const next = new Set(prev);
+            if (next.has(normalizedLineId)) {
+                if (next.size <= 1) return next;
+                next.delete(normalizedLineId);
+                return next;
+            }
+
+            next.add(normalizedLineId);
+            return next;
+        });
     }, []);
     const closeReplacementDeclarationModal = useCallback(() => {
         replacementDeclarationSourceAbortRef.current?.abort();
@@ -7586,12 +9219,20 @@ const OrderForm = () => {
         setShowProductQuickFilterPanel(false);
         setOrderAiReplaceLineId(lineId);
         setOrderAiReplaceSearchTerm(seedTerm || '');
+        setOrderAiReplaceSeedTerm(seedTerm || '');
         setOrderAiReplaceResults([]);
         setOrderAiReplaceActiveTab(ACTUAL_PRODUCT_PICKER_TAB_MANUAL);
+        setOrderAiReplaceScope(ACTUAL_PRODUCT_REPLACE_SCOPE_SINGLE);
+        setOrderAiReplaceGroupLineIds(buildDefaultActualProductReplaceGroupLineIds(
+            formData.items,
+            lineId,
+            selectedLineItemIds
+        ));
+        setOrderAiReplaceGroupTargetEntry(null);
         setOrderAiReplaceWarehouseSearchTerm('');
         setOrderAiReplaceWarehouseResults([]);
         setOrderAiReplaceWarehouseLoading(false);
-    }, []);
+    }, [formData.items, selectedLineItemIds]);
     const handleOpenActualProductPicker = useCallback((lineId, seedTerm = '', triggerElement = null) => {
         actualProductPickerAnchorRef.current = triggerElement;
         setShowSearchDropdown(false);
@@ -7603,7 +9244,14 @@ const OrderForm = () => {
         setActualProductPickerSearchTerm(seedTerm || '');
         setActualProductPickerResults([]);
         setActualProductPickerActiveTab(ACTUAL_PRODUCT_PICKER_TAB_WAREHOUSE);
-    }, []);
+        setActualProductPickerScope(ACTUAL_PRODUCT_REPLACE_SCOPE_SINGLE);
+        setActualProductPickerGroupLineIds(buildDefaultActualProductReplaceGroupLineIds(
+            formData.items,
+            lineId,
+            selectedLineItemIds
+        ));
+        setActualProductPickerGroupTargetEntry(null);
+    }, [formData.items, selectedLineItemIds]);
     const handleToggleActualProductPicker = useCallback((line, triggerElement = null) => {
         const normalizedLineId = normalizeCanvasText(line?.line_id);
         if (!normalizedLineId) return;
@@ -7790,6 +9438,20 @@ const OrderForm = () => {
             return;
         }
 
+        const currentLineIndex = formData.items.findIndex((item) => (
+            normalizeCanvasText(item?.line_id) === normalizeCanvasText(lineId)
+        ));
+        const currentLineNumber = getOrderLineDisplaySequence(
+            currentLine,
+            currentLineIndex >= 0 ? currentLineIndex : 0
+        );
+        persistOrderFormWarehousePickingHistoryCandidate(
+            currentLine,
+            withActualReplacementLineContext(entry, currentLine, {
+                lineNumber: currentLineNumber,
+            })
+        );
+
         const nextLine = createOrderLineItem({
             ...currentLine,
             actual_product_id: replacement.product_id,
@@ -7829,6 +9491,107 @@ const OrderForm = () => {
         await handleSelectActualProductReplacement(lineId, entry);
         closeOrderAiReplacePicker();
     }, [closeOrderAiReplacePicker, handleSelectActualProductReplacement]);
+    const handleApplyActualProductGroupReplacement = useCallback(async (previewRows, { closePicker, successMessage } = {}) => {
+        const readyRows = (Array.isArray(previewRows) ? previewRows : [])
+            .filter((row) => row?.lineId && row?.replacementLine);
+        const missingCount = (Array.isArray(previewRows) ? previewRows : []).length - readyRows.length;
+
+        if (readyRows.length === 0) {
+            showTransientNotification('error', 'Chưa có dòng nào map được sản phẩm thực gửi.');
+            return;
+        }
+
+        if (missingCount > 0) {
+            showTransientNotification('error', 'Còn dòng chưa map được, bỏ chọn dòng đó hoặc chọn mẫu khác.');
+            return;
+        }
+
+        const replacementByLineId = new Map(
+            readyRows.map((row) => [normalizeCanvasText(row.lineId), row.replacementLine])
+        );
+        const nextSnapshotLines = [];
+
+        readyRows.forEach((row) => {
+            if (!row?.item || !row?.replacementLine) return;
+
+            persistOrderFormWarehousePickingHistoryCandidate(
+                row.item,
+                row.replacementEntry || row.replacementLine
+            );
+        });
+
+        setFormData((prev) => {
+            const nextItems = prev.items.map((item) => {
+                const lineId = normalizeCanvasText(item?.line_id);
+                const replacement = replacementByLineId.get(lineId);
+                if (!replacement) {
+                    return item;
+                }
+
+                const replacementProductId = Number(replacement.product_id) || 0;
+                const shouldClearOverride = replacementProductId > 0
+                    && replacementProductId === Number(item?.product_id || 0);
+                const nextLine = createOrderLineItem(shouldClearOverride
+                    ? {
+                        ...item,
+                        actual_product_id: null,
+                        actual_name: '',
+                        actual_sku: '',
+                        actual_snapshot_name: '',
+                        actual_snapshot_sku: '',
+                        cost_price: resolveRoundedImportCostValue(item.base_cost_price, item.cost_price),
+                        inventory_source_account_id: item.product_source_account_id
+                            || item.source_account_id
+                            || item.inventory_source_account_id,
+                    }
+                    : {
+                        ...item,
+                        actual_product_id: replacementProductId,
+                        actual_name: replacement.name,
+                        actual_sku: replacement.sku,
+                        actual_snapshot_name: replacement.snapshot_name || replacement.name,
+                        actual_snapshot_sku: replacement.snapshot_sku || replacement.sku,
+                        cost_price: resolveRoundedImportCostValue(replacement.cost_price, item.cost_price),
+                        computed_stock: replacement.computed_stock,
+                        pending_export_quantity: replacement.pending_export_quantity,
+                        available_to_sell: replacement.available_to_sell,
+                        inventory_source_account_id: replacement.inventory_source_account_id
+                            || replacement.product_source_account_id
+                            || replacement.source_account_id
+                            || item.inventory_source_account_id,
+                    });
+
+                nextSnapshotLines.push(nextLine);
+                return nextLine;
+            });
+
+            return {
+                ...prev,
+                items: nextItems,
+                cost_total: calculateItemsCostTotal(nextItems),
+            };
+        });
+
+        closePicker?.();
+
+        if (nextSnapshotLines.length > 0) {
+            await refreshOrderItemInventorySnapshot(nextSnapshotLines);
+        }
+
+        showTransientNotification('success', successMessage || `Đã đổi nhóm thực gửi cho ${readyRows.length} dòng.`);
+    }, [refreshOrderItemInventorySnapshot, showTransientNotification]);
+    const handleConfirmOrderAiGroupReplacement = useCallback(async () => {
+        await handleApplyActualProductGroupReplacement(orderAiReplaceGroupPreview, {
+            closePicker: closeOrderAiReplacePicker,
+            successMessage: `Đã đổi nhóm khi nhặt hàng cho ${orderAiReplaceGroupPreview.length} dòng.`,
+        });
+    }, [closeOrderAiReplacePicker, handleApplyActualProductGroupReplacement, orderAiReplaceGroupPreview]);
+    const handleConfirmActualProductGroupReplacement = useCallback(async () => {
+        await handleApplyActualProductGroupReplacement(actualProductPickerGroupPreview, {
+            closePicker: closeActualProductPicker,
+            successMessage: `Đã gán sản phẩm thực gửi theo nhóm cho ${actualProductPickerGroupPreview.length} dòng.`,
+        });
+    }, [actualProductPickerGroupPreview, closeActualProductPicker, handleApplyActualProductGroupReplacement]);
 
     const handleRunOrderAiPreview = useCallback(async () => {
         const preferredRuleKey = orderAiSelectedRuleKey.trim();
@@ -8555,8 +10318,9 @@ const OrderForm = () => {
         replacementDeclarationSelectedKeys,
         replacementDeclarationSourceKey,
     ]);
-    const getReplacementDeclarationQuickModeRows = useCallback((term = '') => {
+    const getReplacementDeclarationQuickModeRows = useCallback((term = '', { limit = 80 } = {}) => {
         const trimmedTerm = normalizeCanvasText(term);
+        const rowLimit = Math.max(1, Number(limit) || 80);
         const latestEntryMap = new Map();
         (Array.isArray(productQuickSetupLatestEntries) ? productQuickSetupLatestEntries : []).forEach((entry) => {
             const entryKey = getProductQuickSetupEntryKey(entry);
@@ -8566,10 +10330,13 @@ const OrderForm = () => {
         });
 
         const rows = buildStoredQuickSetupSearchEntries(activeProductQuickSetupItems)
-            .map((entry) => latestEntryMap.get(getProductQuickSetupEntryKey(entry)) || entry)
+            .map((entry) => {
+                const latestEntry = latestEntryMap.get(getProductQuickSetupEntryKey(entry));
+                return latestEntry ? mergeQuickSetupEntrySnapshot(entry, latestEntry) : entry;
+            })
             .filter(isProductSearchEntrySourceEnabled);
         if (!trimmedTerm) {
-            return rows.slice(0, 80);
+            return rows.slice(0, rowLimit);
         }
 
         return rows
@@ -8582,11 +10349,90 @@ const OrderForm = () => {
                 right.__searchScore - left.__searchScore
                 || String(left?.name || left?.display_name || '').localeCompare(String(right?.name || right?.display_name || ''), 'vi')
             ))
-            .slice(0, 80);
+            .slice(0, rowLimit);
     }, [
         activeProductQuickSetupItems,
         isProductSearchEntrySourceEnabled,
         productQuickSetupLatestEntries,
+    ]);
+
+    useEffect(() => {
+        orderAiReplaceFamilyPrefetchAbortRef.current?.abort();
+        orderAiReplaceFamilyPrefetchAbortRef.current = null;
+
+        if (!orderAiReplaceFamilyParentKey) {
+            return undefined;
+        }
+
+        const familyParentIds = orderAiReplaceFamilyParentKey
+            .split(',')
+            .map((value) => Number(value) || 0)
+            .filter((value) => value > 0);
+        let missingFamilyParentIds = familyParentIds.filter((familyParentId) => (
+            !orderAiReplaceSearchCacheRef.current.has(getOrderAiReplaceFamilyCacheKey(familyParentId))
+        ));
+
+        if (missingFamilyParentIds.length === 0) {
+            return undefined;
+        }
+
+        const localSetupEntries = mergeProductSearchEntryLists(
+            productQuickSetupProducts,
+            isProductQuickModeActive && !hasEnabledCrossSellSources
+                ? normalizeReplacementDeclarationResults(getReplacementDeclarationQuickModeRows('', { limit: 1000 }))
+                : []
+        );
+        if (localSetupEntries.length > 0) {
+            cacheOrderAiReplaceFamilyEntries(localSetupEntries, { minFamilySize: 2 });
+            missingFamilyParentIds = missingFamilyParentIds.filter((familyParentId) => (
+                !orderAiReplaceSearchCacheRef.current.has(getOrderAiReplaceFamilyCacheKey(familyParentId))
+            ));
+
+            if (missingFamilyParentIds.length === 0) {
+                return undefined;
+            }
+        }
+
+        const controller = new AbortController();
+        orderAiReplaceFamilyPrefetchAbortRef.current = controller;
+
+        const timerId = window.setTimeout(() => {
+            productApi.getAll(
+                buildOrderAiReplaceFamilySearchParams(missingFamilyParentIds),
+                controller.signal
+            )
+                .then((response) => {
+                    if (controller.signal.aborted) return;
+                    cacheOrderAiReplaceFamilyEntries(
+                        buildSourceAwareOrderAiPickerEntries(response.data?.data || [])
+                    );
+                })
+                .catch((error) => {
+                    if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
+                    console.error('Error prefetching replacement product families', error);
+                })
+                .finally(() => {
+                    if (orderAiReplaceFamilyPrefetchAbortRef.current === controller) {
+                        orderAiReplaceFamilyPrefetchAbortRef.current = null;
+                    }
+                });
+        }, ORDER_FORM_REPLACE_PICKER_PREFETCH_DELAY_MS);
+
+        return () => {
+            controller.abort();
+            window.clearTimeout(timerId);
+        };
+    }, [
+        buildOrderAiReplaceFamilySearchParams,
+        buildSourceAwareOrderAiPickerEntries,
+        cacheOrderAiReplaceFamilyEntries,
+        getOrderAiReplaceFamilyCacheKey,
+        getReplacementDeclarationQuickModeRows,
+        hasEnabledCrossSellSources,
+        isProductQuickModeActive,
+        normalizeReplacementDeclarationResults,
+        orderAiReplaceFamilyParentKey,
+        productQuickSetupProducts,
     ]);
 
     useEffect(() => {
@@ -8664,7 +10510,19 @@ const OrderForm = () => {
 
     useEffect(() => {
         const term = orderAiReplaceSearchTerm.trim();
-        if (!orderAiReplaceLineId || term.length < 2) {
+        const familyParentId = getOrderLineReplacementFamilyParentId(activeOrderAiReplaceLine);
+        const hasFamilyScope = familyParentId > 0;
+        const applyFamilyResults = (entries = []) => {
+            const familyEntries = (Array.isArray(entries) ? entries : [])
+                .filter((entry) => getOrderLineReplacementFamilyParentId(entry) === familyParentId);
+            setOrderAiReplaceResults(filterOrderLineReplacementFamilyEntries(
+                familyEntries,
+                term,
+                orderAiReplaceSeedTerm
+            ));
+        };
+
+        if (!orderAiReplaceLineId || (!hasFamilyScope && term.length < 2)) {
             orderAiReplaceSearchAbortRef.current?.abort();
             orderAiReplaceSearchAbortRef.current = null;
             setOrderAiReplaceResults([]);
@@ -8673,6 +10531,76 @@ const OrderForm = () => {
         }
 
         orderAiReplaceSearchAbortRef.current?.abort();
+        orderAiReplaceSearchAbortRef.current = null;
+
+        if (hasFamilyScope) {
+            const params = buildOrderAiReplaceFamilySearchParams([familyParentId]);
+            const cacheKey = getOrderAiReplaceFamilyCacheKey(familyParentId);
+            const cachedResults = orderAiReplaceSearchCacheRef.current.get(cacheKey);
+            if (cachedResults) {
+                applyFamilyResults(cachedResults);
+                setOrderAiReplaceLoading(false);
+                return undefined;
+            }
+
+            const localSetupEntries = mergeProductSearchEntryLists(
+                productQuickSetupProducts,
+                isProductQuickModeActive && !hasEnabledCrossSellSources
+                    ? normalizeReplacementDeclarationResults(getReplacementDeclarationQuickModeRows('', { limit: 1000 }))
+                    : []
+            ).filter((entry) => getOrderLineReplacementFamilyParentId(entry) === familyParentId);
+
+            if (localSetupEntries.length > 1) {
+                cacheOrderAiReplaceFamilyEntries(localSetupEntries, { minFamilySize: 2 });
+                setOrderAiReplaceResults(filterOrderLineReplacementFamilyEntries(
+                    localSetupEntries,
+                    term,
+                    orderAiReplaceSeedTerm
+                ));
+                setOrderAiReplaceLoading(false);
+                return undefined;
+            }
+
+            const controller = new AbortController();
+            orderAiReplaceSearchAbortRef.current = controller;
+            setOrderAiReplaceLoading(true);
+
+            const timerId = window.setTimeout(() => {
+                productApi.getAll(params, controller.signal)
+                    .then((response) => {
+                        if (controller.signal.aborted) return;
+                        const entries = buildSourceAwareOrderAiPickerEntries(response.data?.data || [])
+                            .filter((entry) => getOrderLineReplacementFamilyParentId(entry) === familyParentId);
+                        cacheOrderAiReplaceFamilyEntries(entries);
+                        applyFamilyResults(entries);
+                    })
+                    .catch((error) => {
+                        if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
+                        console.error('Error fetching scoped replacement products', error);
+                        setOrderAiReplaceResults([]);
+                    })
+                    .finally(() => {
+                        if (orderAiReplaceSearchAbortRef.current === controller) {
+                            orderAiReplaceSearchAbortRef.current = null;
+                            setOrderAiReplaceLoading(false);
+                        }
+                    });
+            }, 0);
+
+            return () => {
+                controller.abort();
+                window.clearTimeout(timerId);
+            };
+        }
+
+        if (isProductQuickModeActive && !hasEnabledCrossSellSources) {
+            setOrderAiReplaceResults(
+                normalizeReplacementDeclarationResults(getReplacementDeclarationQuickModeRows(term))
+            );
+            setOrderAiReplaceLoading(false);
+            return undefined;
+        }
+
         const params = appendCrossSellSourceParams({
             picker: 1,
             fast_picker: 1,
@@ -8720,10 +10648,20 @@ const OrderForm = () => {
             window.clearTimeout(timerId);
         };
     }, [
+        activeOrderAiReplaceLine,
         appendCrossSellSourceParams,
+        buildOrderAiReplaceFamilySearchParams,
         buildSourceAwareOrderAiPickerEntries,
+        cacheOrderAiReplaceFamilyEntries,
+        getOrderAiReplaceFamilyCacheKey,
+        getReplacementDeclarationQuickModeRows,
+        hasEnabledCrossSellSources,
+        isProductQuickModeActive,
+        normalizeReplacementDeclarationResults,
         orderAiReplaceLineId,
         orderAiReplaceSearchTerm,
+        orderAiReplaceSeedTerm,
+        productQuickSetupProducts,
     ]);
     useEffect(() => {
         if (!orderAiReplaceLineId || orderAiReplaceActiveTab !== ACTUAL_PRODUCT_PICKER_TAB_WAREHOUSE) {
@@ -8735,10 +10673,26 @@ const OrderForm = () => {
         }
 
         const currentLine = activeOrderAiReplaceLine;
-        const canLookupDeclaredReplacements = Boolean(currentLine?.product_id || currentLine?.sku);
+        const isGroupReplaceMode = orderAiReplaceScope === ACTUAL_PRODUCT_REPLACE_SCOPE_GROUP;
+        const groupSearchTerm = isGroupReplaceMode ? orderAiReplaceWarehouseSearchTerm.trim() : '';
+        const hasGroupSearchTerm = groupSearchTerm.length >= 2;
         const currentLineSku = getProductReplacementDeclarationSku(currentLine);
         const currentLineSkuKey = normalizeProductSearchText(currentLineSku);
-        const currentLineProductId = Number(currentLine?.product_id ?? currentLine?.target_product_id ?? currentLine?.id ?? 0) || 0;
+        const lookupMeta = buildWarehousePickingLookupMeta(currentLine, { scopeKey: activeAccountId });
+        const immediateLineEntry = !isGroupReplaceMode
+            ? buildImmediateWarehousePickingEntryFromLine(currentLine, activeOrderAiReplaceLineNumber)
+            : null;
+        const cachedDeclaredEntries = lookupMeta.canLookup && warehousePickingLookupCacheRef.current.has(lookupMeta.cacheKey)
+            ? withWarehousePickingLineContext(
+                warehousePickingLookupCacheRef.current.get(lookupMeta.cacheKey),
+                currentLine,
+                activeOrderAiReplaceLineNumber
+            )
+            : null;
+        const initialWarehouseEntries = mergeActualProductReplacementEntries(
+            immediateLineEntry ? [immediateLineEntry] : [],
+            Array.isArray(cachedDeclaredEntries) ? cachedDeclaredEntries : []
+        );
         const buildDeclaredReplacementFallbackEntries = (groups = []) => {
             if (!currentLineSkuKey) return [];
 
@@ -8758,10 +10712,10 @@ const OrderForm = () => {
                 }));
         };
 
-        if (!canLookupDeclaredReplacements) {
+        if (!lookupMeta.canLookup && !hasGroupSearchTerm) {
             orderAiReplaceWarehouseAbortRef.current?.abort();
             orderAiReplaceWarehouseAbortRef.current = null;
-            setOrderAiReplaceWarehouseResults([]);
+            setOrderAiReplaceWarehouseResults(initialWarehouseEntries);
             setOrderAiReplaceWarehouseLoading(false);
             return undefined;
         }
@@ -8769,61 +10723,85 @@ const OrderForm = () => {
         orderAiReplaceWarehouseAbortRef.current?.abort();
         const controller = new AbortController();
         orderAiReplaceWarehouseAbortRef.current = controller;
-        setOrderAiReplaceWarehouseLoading(true);
+        setOrderAiReplaceWarehouseResults(initialWarehouseEntries);
+        setOrderAiReplaceWarehouseLoading(initialWarehouseEntries.length === 0);
 
         const timerId = window.setTimeout(async () => {
             try {
-                let entries = [];
+                let declaredEntries = Array.isArray(cachedDeclaredEntries) ? cachedDeclaredEntries : [];
+                let manualSearchEntries = [];
 
-                try {
-                    const response = await productReplacementApi.lookup({
-                        product_id: currentLineSku ? undefined : (currentLineProductId || undefined),
-                        sku: currentLineSku || undefined,
-                        locked_price: parseMoneyNumber(currentLine?.price, 0) || 0,
-                        quantity: parseQuantityNumber(currentLine?.quantity, 1) || 1,
-                    }, controller.signal);
-                    if (controller.signal.aborted) return;
-                    const payload = response.data?.data || {};
-                    const suggestions = Array.isArray(payload.suggestions)
-                        ? payload.suggestions
-                        : (Array.isArray(payload.alternatives) ? payload.alternatives : []);
-                    const groupId = payload.group?.id || null;
-                    const sourceEntry = payload.product
-                        ? withActualReplacementLineContext(payload.product, currentLine, {
-                            declared: Boolean(groupId),
-                            groupId,
-                            original: true,
-                            lineNumber: activeOrderAiReplaceLineNumber,
-                        })
-                        : null;
-                    const replacementEntries = suggestions.map((entry) => withActualReplacementLineContext(entry, currentLine, {
-                        declared: true,
-                        groupId: groupId || entry?.replacement_group_id || null,
-                        lineNumber: activeOrderAiReplaceLineNumber,
-                    }));
-
-                    entries = mergeActualProductReplacementEntries(sourceEntry ? [sourceEntry] : [], replacementEntries);
-                } catch (error) {
-                    if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
-                    console.error('Error fetching warehouse replacement products', error);
-                }
-
-                if (entries.length === 0 && currentLineSku) {
+                if (lookupMeta.canLookup && !Array.isArray(cachedDeclaredEntries)) {
                     try {
-                        const response = await productReplacementApi.getAll({
-                            per_page: 10,
-                            search: currentLineSku,
-                        }, controller.signal);
+                        const response = await productReplacementApi.lookup(lookupMeta.params, controller.signal);
                         if (controller.signal.aborted) return;
-                        entries = buildDeclaredReplacementFallbackEntries(response.data?.data || []);
+                        const payload = response.data?.data || {};
+                        const suggestions = Array.isArray(payload.suggestions)
+                            ? payload.suggestions
+                            : (Array.isArray(payload.alternatives) ? payload.alternatives : []);
+                        const groupId = payload.group?.id || null;
+                        const sourceEntry = payload.product
+                            ? withActualReplacementLineContext(payload.product, currentLine, {
+                                declared: Boolean(groupId),
+                                groupId,
+                                original: true,
+                                lineNumber: activeOrderAiReplaceLineNumber,
+                            })
+                            : null;
+                        const replacementEntries = suggestions.map((entry) => withActualReplacementLineContext(entry, currentLine, {
+                            declared: true,
+                            groupId: groupId || entry?.replacement_group_id || null,
+                            lineNumber: activeOrderAiReplaceLineNumber,
+                        }));
+
+                        declaredEntries = mergeActualProductReplacementEntries(sourceEntry ? [sourceEntry] : [], replacementEntries);
+                        warehousePickingLookupCacheRef.current.set(lookupMeta.cacheKey, declaredEntries);
                     } catch (error) {
                         if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
-                        console.error('Error fetching warehouse replacement groups fallback', error);
+                        console.error('Error fetching warehouse replacement products', error);
+                    }
+
+                    if (declaredEntries.length === 0 && currentLineSku) {
+                        try {
+                            const response = await productReplacementApi.getAll({
+                                per_page: 10,
+                                search: currentLineSku,
+                            }, controller.signal);
+                            if (controller.signal.aborted) return;
+                            declaredEntries = buildDeclaredReplacementFallbackEntries(response.data?.data || []);
+                            warehousePickingLookupCacheRef.current.set(lookupMeta.cacheKey, declaredEntries);
+                        } catch (error) {
+                            if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
+                            console.error('Error fetching warehouse replacement groups fallback', error);
+                        }
+                    }
+                }
+
+                if (hasGroupSearchTerm) {
+                    try {
+                        const response = await productApi.getAll(appendCrossSellSourceParams({
+                            picker: 1,
+                            fast_picker: 1,
+                            replace_picker: 1,
+                            allow_variants: 1,
+                            per_page: isCompactCompositeProductSearch(groupSearchTerm) ? 160 : 60,
+                            search: groupSearchTerm,
+                            filter_bundle_options_by_search: 1,
+                        }), controller.signal);
+                        if (controller.signal.aborted) return;
+                        manualSearchEntries = buildSourceAwareOrderAiPickerEntries(response.data?.data || []);
+                    } catch (error) {
+                        if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
+                        console.error('Error searching group replacement targets', error);
                     }
                 }
 
                 if (!controller.signal.aborted) {
-                    setOrderAiReplaceWarehouseResults(entries);
+                    setOrderAiReplaceWarehouseResults(mergeActualProductReplacementEntries(
+                        immediateLineEntry ? [immediateLineEntry] : [],
+                        declaredEntries,
+                        manualSearchEntries
+                    ));
                 }
             } finally {
                 if (orderAiReplaceWarehouseAbortRef.current === controller) {
@@ -8838,10 +10816,15 @@ const OrderForm = () => {
             window.clearTimeout(timerId);
         };
     }, [
+        activeAccountId,
         activeOrderAiReplaceLine,
         activeOrderAiReplaceLineNumber,
+        appendCrossSellSourceParams,
+        buildSourceAwareOrderAiPickerEntries,
         orderAiReplaceActiveTab,
         orderAiReplaceLineId,
+        orderAiReplaceScope,
+        orderAiReplaceWarehouseSearchTerm,
     ]);
     useEffect(() => {
         if (!actualProductPickerLineId) {
@@ -8855,12 +10838,31 @@ const OrderForm = () => {
         const currentLine = activeActualProductPickerLine;
         const searchTerm = actualProductPickerSearchTerm.trim();
         const isWarehousePickingMode = actualProductPickerActiveTab === ACTUAL_PRODUCT_PICKER_TAB_WAREHOUSE;
-        const manualSearchTerm = isWarehousePickingMode ? '' : searchTerm;
+        const isGroupReplaceMode = isWarehousePickingMode && actualProductPickerScope === ACTUAL_PRODUCT_REPLACE_SCOPE_GROUP;
+        const manualSearchTerm = isWarehousePickingMode && !isGroupReplaceMode ? '' : searchTerm;
         const hasSearchTerm = manualSearchTerm.length >= 2;
-        const canLookupDeclaredReplacements = Boolean(currentLine?.product_id || currentLine?.sku);
         const currentLineSku = getProductReplacementDeclarationSku(currentLine);
         const currentLineSkuKey = normalizeProductSearchText(currentLineSku);
-        const currentLineProductId = Number(currentLine?.product_id ?? currentLine?.target_product_id ?? currentLine?.id ?? 0) || 0;
+        const lookupMeta = buildWarehousePickingLookupMeta(currentLine, {
+            scopeKey: activeAccountId,
+            includeSource: isWarehousePickingMode,
+        });
+        const immediateLineEntry = isWarehousePickingMode && !isGroupReplaceMode
+            ? buildImmediateWarehousePickingEntryFromLine(currentLine, activeActualProductPickerLineNumber)
+            : null;
+        const cachedDeclaredEntries = lookupMeta.canLookup && warehousePickingLookupCacheRef.current.has(lookupMeta.cacheKey)
+            ? withWarehousePickingLineContext(
+                warehousePickingLookupCacheRef.current.get(lookupMeta.cacheKey),
+                currentLine,
+                activeActualProductPickerLineNumber
+            )
+            : null;
+        const initialPickerEntries = isWarehousePickingMode
+            ? mergeActualProductReplacementEntries(
+                immediateLineEntry ? [immediateLineEntry] : [],
+                Array.isArray(cachedDeclaredEntries) ? cachedDeclaredEntries : []
+            )
+            : [];
         const buildDeclaredReplacementFallbackEntries = (groups = []) => {
             if (!currentLineSkuKey) return [];
 
@@ -8884,10 +10886,10 @@ const OrderForm = () => {
                 : entries.filter((entry) => !entry?.is_original_order_product);
         };
 
-        if (!canLookupDeclaredReplacements && !hasSearchTerm) {
+        if (!lookupMeta.canLookup && !hasSearchTerm) {
             actualProductPickerAbortRef.current?.abort();
             actualProductPickerAbortRef.current = null;
-            setActualProductPickerResults([]);
+            setActualProductPickerResults(initialPickerEntries);
             setActualProductPickerLoading(false);
             return undefined;
         }
@@ -8895,18 +10897,18 @@ const OrderForm = () => {
         actualProductPickerAbortRef.current?.abort();
         const controller = new AbortController();
         actualProductPickerAbortRef.current = controller;
-        setActualProductPickerLoading(true);
+        setActualProductPickerResults(initialPickerEntries);
+        setActualProductPickerLoading(initialPickerEntries.length === 0);
 
         const timerId = window.setTimeout(async () => {
-            const declaredReplacementRequest = canLookupDeclaredReplacements
+            const declaredReplacementRequest = lookupMeta.canLookup
                 ? (async () => {
+                    if (Array.isArray(cachedDeclaredEntries)) {
+                        return cachedDeclaredEntries;
+                    }
+
                     try {
-                        const response = await productReplacementApi.lookup({
-                            product_id: currentLineSku ? undefined : (currentLineProductId || undefined),
-                            sku: currentLineSku || undefined,
-                            locked_price: parseMoneyNumber(currentLine?.price, 0) || 0,
-                            quantity: parseQuantityNumber(currentLine?.quantity, 1) || 1,
-                        }, controller.signal);
+                        const response = await productReplacementApi.lookup(lookupMeta.params, controller.signal);
                         if (controller.signal.aborted) return [];
                         const payload = response.data?.data || {};
                         const suggestions = Array.isArray(payload.suggestions)
@@ -8928,7 +10930,9 @@ const OrderForm = () => {
                             }));
 
                         if (sourceEntry || replacementEntries.length > 0) {
-                            return mergeActualProductReplacementEntries(sourceEntry ? [sourceEntry] : [], replacementEntries);
+                            const entries = mergeActualProductReplacementEntries(sourceEntry ? [sourceEntry] : [], replacementEntries);
+                            warehousePickingLookupCacheRef.current.set(lookupMeta.cacheKey, entries);
+                            return entries;
                         }
                     } catch (error) {
                         if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return [];
@@ -8945,7 +10949,9 @@ const OrderForm = () => {
                             search: currentLineSku,
                         }, controller.signal);
                         if (controller.signal.aborted) return [];
-                        return buildDeclaredReplacementFallbackEntries(response.data?.data || []);
+                        const entries = buildDeclaredReplacementFallbackEntries(response.data?.data || []);
+                        warehousePickingLookupCacheRef.current.set(lookupMeta.cacheKey, entries);
+                        return entries;
                     } catch (error) {
                         if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return [];
                         console.error('Error fetching declared replacement groups fallback', error);
@@ -8960,7 +10966,7 @@ const OrderForm = () => {
                         fast_picker: 1,
                         replace_picker: 1,
                         allow_variants: 1,
-                        per_page: 20,
+                        per_page: isGroupReplaceMode && isCompactCompositeProductSearch(manualSearchTerm) ? 160 : (isGroupReplaceMode ? 60 : 20),
                         search: manualSearchTerm,
                         filter_bundle_options_by_search: 1,
                     });
@@ -8993,6 +10999,7 @@ const OrderForm = () => {
                 if (controller.signal.aborted) return;
 
                 setActualProductPickerResults(mergeActualProductReplacementEntries(
+                    immediateLineEntry ? [immediateLineEntry] : [],
                     declaredReplacementEntries,
                     manualSearchEntries
                 ));
@@ -9009,8 +11016,10 @@ const OrderForm = () => {
             window.clearTimeout(timerId);
         };
     }, [
+        activeAccountId,
         actualProductPickerActiveTab,
         actualProductPickerLineId,
+        actualProductPickerScope,
         actualProductPickerSearchTerm,
         activeActualProductPickerLine,
         activeActualProductPickerLineNumber,
@@ -9394,12 +11403,13 @@ const OrderForm = () => {
 
     // handleCancel now handles navigation directly without confirm for a faster experience
 
-    const fetchProducts = useCallback(async (term = '', filterOverrides = {}) => {
+    const buildProductSearchRequest = useCallback((term = '', filterOverrides = {}) => {
         const shouldApplyQuickFilter = Boolean(filterOverrides.applyQuickFilter);
         const params = {
-            per_page: isCompactCompositeProductSearch(term) ? 200 : 100,
+            per_page: getOrderProductSearchPageSize(term),
             picker: 1,
             fast_picker: 1,
+            light_picker: 1,
             quick_filter_enabled: shouldApplyQuickFilter ? 1 : 0,
         };
         if (term) {
@@ -9418,43 +11428,57 @@ const OrderForm = () => {
         }
         appendCrossSellSourceParams(params);
 
-        const activeAccountId = typeof window === 'undefined'
+        const cacheAccountId = typeof window === 'undefined'
             ? 'default'
             : (window.localStorage.getItem('activeAccountId') || 'default');
-        const cacheKey = JSON.stringify({ account_id: activeAccountId, ...params });
+        const cacheKey = JSON.stringify({ account_id: cacheAccountId, ...params });
+
+        return { params, cacheKey };
+    }, [
+        activeProductQuickFilterAttribute,
+        activeProductQuickFilterAttribute2,
+        appendCrossSellSourceParams,
+        normalizedProductQuickFilterValues,
+        normalizedProductQuickFilterValues2,
+    ]);
+
+    const fetchProducts = useCallback(async (term = '', filterOverrides = {}) => {
+        const { params, cacheKey } = buildProductSearchRequest(term, filterOverrides);
         productSearchRequestKeyRef.current = cacheKey;
         productSearchAbortRef.current?.abort();
-        const shouldUseProductSearchCache = normalizeCanvasText(term) === '';
+        productSearchAbortRef.current = null;
 
-        if (shouldUseProductSearchCache && productSearchCacheRef.current.has(cacheKey)) {
+        if (productSearchCacheRef.current.has(cacheKey)) {
             const cachedProducts = productSearchCacheRef.current.get(cacheKey);
             setProducts(cachedProducts);
             return;
         }
 
+        if (
+            productSearchPrefetchKeyRef.current === cacheKey
+            && productSearchPrefetchPromiseRef.current
+        ) {
+            try {
+                const prefetchedProducts = await productSearchPrefetchPromiseRef.current;
+                if (productSearchRequestKeyRef.current !== cacheKey) return;
+                if (Array.isArray(prefetchedProducts)) {
+                    setProducts(prefetchedProducts);
+                    return;
+                }
+            } catch (error) {
+                if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
+            }
+        }
+
         const controller = new AbortController();
         productSearchAbortRef.current = controller;
-        setProducts([]);
 
         try {
             const prodRes = await productApi.getAll(params, controller.signal);
             if (controller.signal.aborted || productSearchRequestKeyRef.current !== cacheKey) return;
 
-            const hasServerSearchTerm = normalizeCanvasText(term) !== '';
-            const nextProducts = Array.isArray(prodRes.data.data)
-                ? prodRes.data.data.map((product) => {
-                    const serverSearchScore = Number(product?.search_score ?? product?.server_search_score ?? 0) || 0;
-
-                    return {
-                        ...normalizeProductPickerEntry(product),
-                        server_search_score: serverSearchScore,
-                        server_search_match: hasServerSearchTerm && serverSearchScore > 0,
-                    };
-                })
-                : [];
-            if (shouldUseProductSearchCache) {
-                productSearchCacheRef.current.set(cacheKey, nextProducts);
-            }
+            const nextProducts = normalizeProductSearchResponseRows(prodRes.data.data, term);
+            storeProductSearchCacheEntry(productSearchCacheRef.current, cacheKey, nextProducts);
             setProducts(nextProducts);
         } catch (error) {
             if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
@@ -9464,13 +11488,7 @@ const OrderForm = () => {
                 productSearchAbortRef.current = null;
             }
         }
-    }, [
-        activeProductQuickFilterAttribute,
-        activeProductQuickFilterAttribute2,
-        appendCrossSellSourceParams,
-        normalizedProductQuickFilterValues,
-        normalizedProductQuickFilterValues2,
-    ]);
+    }, [buildProductSearchRequest]);
     const handleSelectReplacementDeclarationSource = useCallback((entry) => {
         const sourceEntry = normalizeProductPickerEntry(entry);
         if (!sourceEntry || !getProductReplacementDeclarationSku(sourceEntry)) {
@@ -9566,6 +11584,7 @@ const OrderForm = () => {
                 }
             }
 
+            warehousePickingLookupCacheRef.current.clear();
             showTransientNotification('success', 'Đã lưu khai báo sản phẩm thay thế.');
             setReplacementDeclarationGroupsReloadKey((prev) => prev + 1);
             if (closeAfterSave) {
@@ -9783,14 +11802,24 @@ const OrderForm = () => {
         if (!activeProductQuickSetupKey || !productQuickSetupNamespace) return;
 
         const latestEntryMap = new Map();
+        const latestBundleEntriesByParentProductId = new Map();
         (Array.isArray(latestEntries) ? latestEntries : []).forEach((entry) => {
             const entryKey = getProductQuickSetupEntryKey(entry);
             if (entryKey && !latestEntryMap.has(entryKey)) {
                 latestEntryMap.set(entryKey, entry);
             }
+
+            if (String(entry?.entry_kind || SEARCH_ENTRY_PRODUCT) === SEARCH_ENTRY_BUNDLE_OPTION) {
+                const parentProductId = Number(entry?.bundle_parent_id ?? entry?.target_product_id ?? entry?.product_id ?? 0) || 0;
+                if (parentProductId > 0) {
+                    const entries = latestBundleEntriesByParentProductId.get(parentProductId) || [];
+                    entries.push(entry);
+                    latestBundleEntriesByParentProductId.set(parentProductId, entries);
+                }
+            }
         });
 
-        if (latestEntryMap.size === 0) return;
+        if (latestEntryMap.size === 0 && latestBundleEntriesByParentProductId.size === 0) return;
 
         setProductQuickSetupStore((prev) => {
             const namespaceStore = prev?.[productQuickSetupNamespace] || {};
@@ -9803,7 +11832,26 @@ const OrderForm = () => {
             const nextItems = normalizeStoredProductQuickSetupItems(
                 normalizedCurrentItems.map((item) => {
                     const latestEntry = latestEntryMap.get(getProductQuickSetupEntryKey(item));
-                    return latestEntry || item;
+                    if (latestEntry) {
+                        return mergeQuickSetupEntrySnapshot(item, latestEntry);
+                    }
+
+                    const entryKind = String(item?.entry_kind || SEARCH_ENTRY_PRODUCT).trim() || SEARCH_ENTRY_PRODUCT;
+                    if (entryKind === SEARCH_ENTRY_BUNDLE_OPTION) {
+                        return item;
+                    }
+
+                    const productId = getProductQuickSetupEntryId(item);
+                    const latestBundleEntries = latestBundleEntriesByParentProductId.get(productId) || [];
+                    const bundleOptions = buildStoredBundleOptionsFromQuickSetupEntries(latestBundleEntries);
+
+                    return bundleOptions.length > 0
+                        ? {
+                            ...item,
+                            type: normalizeCanvasText(item?.type || 'bundle'),
+                            bundle_options: bundleOptions,
+                        }
+                        : item;
                 })
             );
 
@@ -9921,8 +11969,6 @@ const OrderForm = () => {
             setManualProductQuickModeEnabled(false);
         }
         setProductQuickModeEnabled((prev) => !prev);
-        productSearchCacheRef.current.clear();
-        setProducts([]);
         setShowSearchDropdown(true);
         setShowSearchHistory(false);
     }, [isProductQuickModeToggleDisabled, productQuickModeEnabled]);
@@ -9930,8 +11976,6 @@ const OrderForm = () => {
     const disableProductQuickMode = useCallback((event) => {
         event?.stopPropagation?.();
         setProductQuickModeEnabled(false);
-        productSearchCacheRef.current.clear();
-        setProducts([]);
         setShowProductQuickSetupPanel(false);
         setShowSearchDropdown(true);
         setShowSearchHistory(false);
@@ -10002,6 +12046,7 @@ const OrderForm = () => {
         const params = {
             per_page: 200,
             picker: 1,
+            light_picker: 1,
         };
         appendProductQuickFilterParams(params, activeFilterAttribute, [activeFilterValue]);
         appendCrossSellSourceParams(params);
@@ -10067,6 +12112,7 @@ const OrderForm = () => {
         const params = {
             per_page: 200,
             picker: 1,
+            light_picker: 1,
             quick_filter_enabled: isManualQuickSetup ? 0 : 1,
         };
         if (isManualQuickSetup) {
@@ -10191,6 +12237,7 @@ const OrderForm = () => {
                 .map((target) => normalizeCanvasText(target?.entryKey))
                 .filter(Boolean)
         );
+        const selectedProductIdSet = new Set(selectedProductIds);
 
         if (selectedProductIds.length === 0 || activeEntryKeys.size === 0) {
             setProductQuickSetupLatestEntries([]);
@@ -10210,6 +12257,7 @@ const OrderForm = () => {
                 const params = {
                     picker: 1,
                     fast_picker: 1,
+                    light_picker: 1,
                     quick_filter_enabled: hasActiveProductQuickFilter ? 1 : 0,
                     allow_variants: 1,
                     selected_ids: selectedProductIds.join(','),
@@ -10228,7 +12276,17 @@ const OrderForm = () => {
 
                 const latestEntries = Array.isArray(response.data.data)
                     ? buildProductQuickSetupEntries(response.data.data)
-                        .filter((entry) => activeEntryKeys.has(getProductQuickSetupEntryKey(entry)))
+                        .filter((entry) => {
+                            const entryKey = getProductQuickSetupEntryKey(entry);
+                            if (entryKey && activeEntryKeys.has(entryKey)) return true;
+
+                            if (String(entry?.entry_kind || SEARCH_ENTRY_PRODUCT) !== SEARCH_ENTRY_BUNDLE_OPTION) {
+                                return false;
+                            }
+
+                            const parentProductId = Number(entry?.bundle_parent_id ?? entry?.target_product_id ?? entry?.product_id ?? 0) || 0;
+                            return parentProductId > 0 && selectedProductIdSet.has(parentProductId);
+                        })
                     : [];
 
                 setProductQuickSetupLatestEntries(latestEntries);
@@ -10306,20 +12364,39 @@ const OrderForm = () => {
             return storedEntries;
         }
 
+        const latestEntries = (Array.isArray(productQuickSetupLatestEntries) ? productQuickSetupLatestEntries : [])
+            .filter((entry) => {
+                const entryKey = getProductQuickSetupEntryKey(entry);
+                if (entryKey && selectedQuickSetupEntryKeys.has(entryKey)) return true;
+
+                if (String(entry?.entry_kind || SEARCH_ENTRY_PRODUCT) !== SEARCH_ENTRY_BUNDLE_OPTION) {
+                    return false;
+                }
+
+                const parentProductId = Number(entry?.bundle_parent_id ?? entry?.target_product_id ?? entry?.product_id ?? 0) || 0;
+                return parentProductId > 0 && selectedQuickSetupProductIds.has(parentProductId);
+            })
+            .filter(isProductSearchEntrySourceEnabled)
+            .filter(isQuickSetupEntryAllowedByAvailableFilterPayload);
+
         const entries = storedEntries
             .map((entry) => {
                 const latestEntry = latestQuickModeEntryMap.get(getProductQuickSetupEntryKey(entry));
-                return latestEntry || entry;
+                return latestEntry ? mergeQuickSetupEntrySnapshot(entry, latestEntry) : entry;
             })
             .filter(Boolean);
 
-        return entries.filter(isProductSearchEntrySourceEnabled);
+        return mergeProductSearchEntryLists(entries, latestEntries)
+            .filter(isProductSearchEntrySourceEnabled);
     }, [
         hasActiveProductQuickFilter,
         isQuickSetupEntryAllowedByAvailableFilterPayload,
         isProductQuickSetupLatestScopeReady,
         isProductSearchEntrySourceEnabled,
         latestQuickModeEntryMap,
+        productQuickSetupLatestEntries,
+        selectedQuickSetupEntryKeys,
+        selectedQuickSetupProductIds,
         storedQuickModeSearchEntries,
     ]);
     const manualQuickModeSearchEntries = useMemo(() => (
@@ -10338,13 +12415,34 @@ const OrderForm = () => {
         const shouldUseQuickModeEntries = !shouldUseManualQuickModeEntries
             && isProductQuickModeActive
             && !hasEnabledCrossSellSources;
+        const shouldUseQuickModeFallbackEntries = !shouldUseManualQuickModeEntries
+            && !shouldUseQuickModeEntries
+            && !hasEnabledCrossSellSources
+            && hasActiveProductQuickFilter
+            && searchTerm.trim()
+            && quickModeSearchEntries.length > 0;
         const serverSearchEntries = buildProductSearchEntries(products, {
             includeNested: Boolean(searchTerm.trim()),
         });
+        const quickModeServerSearchEntries = shouldUseQuickModeEntries && searchTerm.trim()
+            ? serverSearchEntries.filter((entry) => {
+                const entryKey = getProductQuickSetupEntryKey(entry);
+                if (entryKey && selectedQuickSetupEntryKeys.has(entryKey)) return true;
+
+                if (String(entry?.entry_kind || SEARCH_ENTRY_PRODUCT) !== SEARCH_ENTRY_BUNDLE_OPTION) {
+                    return false;
+                }
+
+                const parentProductId = Number(entry?.bundle_parent_id ?? entry?.target_product_id ?? entry?.product_id ?? 0) || 0;
+                return parentProductId > 0 && selectedQuickSetupProductIds.has(parentProductId);
+            })
+            : [];
         const searchableEntries = shouldUseManualQuickModeEntries
             ? manualQuickModeSearchEntries
             : shouldUseQuickModeEntries
-            ? quickModeSearchEntries
+            ? mergeProductSearchEntryLists(quickModeServerSearchEntries, quickModeSearchEntries)
+            : shouldUseQuickModeFallbackEntries
+            ? mergeProductSearchEntryLists(serverSearchEntries, quickModeSearchEntries)
             : serverSearchEntries;
         const preparedProducts = searchableEntries
             .map((product) => ({
@@ -10399,6 +12497,7 @@ const OrderForm = () => {
     }, [
         activeProductQuickFilterRankCriteria,
         formData.items,
+        hasActiveProductQuickFilter,
         hasEnabledCrossSellSources,
         isManualProductQuickModeActive,
         isProductQuickModeActive,
@@ -10406,6 +12505,8 @@ const OrderForm = () => {
         products,
         quickModeSearchEntries,
         searchTerm,
+        selectedQuickSetupEntryKeys,
+        selectedQuickSetupProductIds,
         shouldRankInactiveProductQuickFilters,
     ]);
 
@@ -10439,20 +12540,8 @@ const OrderForm = () => {
         && (searchTerm.trim() !== '' || isProductQuickModeActive || isManualProductQuickModeActive);
 
     useEffect(() => {
-        const timerId = setTimeout(() => {
-            setDebouncedSearchTerm(searchTerm);
-        }, 250);
-
-        return () => {
-            clearTimeout(timerId);
-        };
+        setDebouncedSearchTerm(searchTerm);
     }, [searchTerm]);
-
-    useEffect(() => {
-        if (searchTerm !== debouncedSearchTerm) {
-            setProducts([]);
-        }
-    }, [debouncedSearchTerm, searchTerm]);
 
     useEffect(() => {
         const timerId = setTimeout(() => {
@@ -10483,6 +12572,68 @@ const OrderForm = () => {
         isManualProductQuickModeActive,
         isProductQuickModeActive,
         showSearchDropdown
+    ]);
+
+    useEffect(() => {
+        const term = debouncedSearchTerm.trim();
+        if (
+            !showSearchDropdown
+            || isManualProductQuickModeActive
+            || !isProductQuickModeActive
+            || !hasActiveProductQuickFilter
+            || term.length < 2
+        ) {
+            return undefined;
+        }
+
+        const { params, cacheKey } = buildProductSearchRequest(term, { applyQuickFilter: false });
+        if (productSearchCacheRef.current.has(cacheKey)) {
+            return undefined;
+        }
+
+        productSearchPrefetchAbortRef.current?.abort();
+        const controller = new AbortController();
+        const prefetchPromise = productApi.getAll(params, controller.signal)
+            .then((response) => {
+                if (controller.signal.aborted || productSearchPrefetchKeyRef.current !== cacheKey) {
+                    return null;
+                }
+
+                const nextProducts = normalizeProductSearchResponseRows(response.data?.data, term);
+                storeProductSearchCacheEntry(productSearchCacheRef.current, cacheKey, nextProducts);
+                if (productSearchRequestKeyRef.current === cacheKey) {
+                    setProducts(nextProducts);
+                }
+
+                return nextProducts;
+            })
+            .catch((error) => {
+                if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') {
+                    return null;
+                }
+                console.error('Error prefetching unfiltered product search', error);
+                return null;
+            })
+            .finally(() => {
+                if (productSearchPrefetchAbortRef.current === controller) {
+                    productSearchPrefetchAbortRef.current = null;
+                    productSearchPrefetchKeyRef.current = '';
+                    productSearchPrefetchPromiseRef.current = null;
+                }
+            });
+
+        productSearchPrefetchAbortRef.current = controller;
+        productSearchPrefetchKeyRef.current = cacheKey;
+        productSearchPrefetchPromiseRef.current = prefetchPromise;
+
+        return undefined;
+    }, [
+        buildProductSearchRequest,
+        debouncedSearchTerm,
+        hasActiveProductQuickFilter,
+        isManualProductQuickModeActive,
+        isProductQuickModeActive,
+        showSearchDropdown,
     ]);
 
     useEffect(() => {
@@ -10532,9 +12683,17 @@ const OrderForm = () => {
     ]);
 
     useEffect(() => {
-        if (!showSearchDropdown || debouncedSearchTerm.trim().length < 2) return;
-        pushSearchHistory(debouncedSearchTerm);
-    }, [debouncedSearchTerm, pushSearchHistory, showSearchDropdown]);
+        const trimmedTerm = searchTerm.trim();
+        if (!showSearchDropdown || trimmedTerm.length < 2) return undefined;
+
+        const timerId = window.setTimeout(() => {
+            pushSearchHistory(trimmedTerm);
+        }, 450);
+
+        return () => {
+            window.clearTimeout(timerId);
+        };
+    }, [pushSearchHistory, searchTerm, showSearchDropdown]);
 
     useEffect(() => {
         if (persistProductQuickSetupStore(productQuickSetupStore)) {
@@ -10618,6 +12777,7 @@ const OrderForm = () => {
 
     useEffect(() => () => {
         productSearchAbortRef.current?.abort();
+        productSearchPrefetchAbortRef.current?.abort();
         productQuickFilterScopeAbortRef.current?.abort();
         productQuickSetupAbortRef.current?.abort();
         productQuickSetupRefreshAbortRef.current?.abort();
@@ -12847,6 +15007,7 @@ const OrderForm = () => {
                                             productQuickFilterScopeCacheRef.current.clear();
                                             productQuickSetupCacheRef.current.clear();
                                             orderAiReplaceSearchCacheRef.current.clear();
+                                            warehousePickingLookupCacheRef.current.clear();
                                             actualProductPickerSearchCacheRef.current.clear();
                                         }}
                                         className="shrink-0 text-[10px] font-bold uppercase tracking-[0.12em] text-primary/35 transition-colors hover:text-brick"
@@ -16754,6 +18915,15 @@ const OrderForm = () => {
                 activeTab={orderAiReplaceActiveTab}
                 onActiveTabChange={handleOrderAiReplacePickerTabChange}
                 activeLineNumber={activeOrderAiReplaceLineNumber}
+                replaceScope={orderAiReplaceScope}
+                onReplaceScopeChange={handleOrderAiReplaceScopeChange}
+                groupLines={orderAiReplaceGroupLines}
+                groupPreview={orderAiReplaceGroupPreview}
+                groupTargetEntry={orderAiReplaceGroupTargetEntry}
+                onGroupTargetEntryChange={setOrderAiReplaceGroupTargetEntry}
+                onToggleGroupLine={handleToggleOrderAiReplaceGroupLine}
+                onConfirmGroupReplacement={handleConfirmOrderAiGroupReplacement}
+                groupConfirmLabel="Đổi nhóm khi nhặt hàng"
                 preserveCurrentLinePrice={orderAiReplaceActiveTab === ACTUAL_PRODUCT_PICKER_TAB_WAREHOUSE}
                 emptyMessage={orderAiReplaceActiveTab === ACTUAL_PRODUCT_PICKER_TAB_WAREHOUSE
                     ? 'Dòng này chưa có nhóm mã thay thế. Có thể gõ STT dòng khác để tra tiếp.'
@@ -16782,6 +18952,15 @@ const OrderForm = () => {
                 activeTab={actualProductPickerActiveTab}
                 onActiveTabChange={handleActualProductPickerTabChange}
                 activeLineNumber={activeActualProductPickerLineNumber}
+                replaceScope={actualProductPickerScope}
+                onReplaceScopeChange={handleActualProductPickerScopeChange}
+                groupLines={actualProductPickerGroupLines}
+                groupPreview={actualProductPickerGroupPreview}
+                groupTargetEntry={actualProductPickerGroupTargetEntry}
+                onGroupTargetEntryChange={setActualProductPickerGroupTargetEntry}
+                onToggleGroupLine={handleToggleActualProductPickerGroupLine}
+                onConfirmGroupReplacement={handleConfirmActualProductGroupReplacement}
+                groupConfirmLabel="Gán thực gửi theo nhóm"
                 emptyMessage={actualProductPickerActiveTab === ACTUAL_PRODUCT_PICKER_TAB_WAREHOUSE
                     ? 'Dòng này chưa có nhóm mã thay thế. Kho có thể gõ STT dòng khác để tra tiếp.'
                     : (actualProductPickerSearchTerm.trim().length >= 2

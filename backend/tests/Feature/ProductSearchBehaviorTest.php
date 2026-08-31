@@ -462,6 +462,80 @@ class ProductSearchBehaviorTest extends TestCase
             ->assertJsonPath('data.0.bundle_options.0.option_title', 'Ban tho 1m75-1m97 3 bat huong');
     }
 
+    public function test_fast_picker_search_scores_compact_bundle_option_titles(): void
+    {
+        $account = $this->authenticate();
+
+        $bundleItem = $this->createProduct($account, [
+            'name' => 'Chan nen men lam bundle search',
+            'sku' => 'CHAN-NEN-LAM-BUNDLE-SEARCH',
+        ]);
+
+        $bundle = $this->createProduct($account, [
+            'name' => 'Tron bo do tho men lam search bundle',
+            'sku' => 'BUNDLE-MEN-LAM-COMPACT-OPTION',
+            'type' => 'bundle',
+        ]);
+        $falsePositiveProduct = $this->createProduct($account, [
+            'name' => 'Mam bong men ran M3',
+            'sku' => 'MR72-MAMBONGRAN-M3',
+        ]);
+
+        $this->attachBundleItem($bundle, $bundleItem, [
+            'option_title' => 'Ban tho 1m - 1m1, 3 bat huong',
+            'position' => 0,
+        ]);
+        $this->attachBundleItem($bundle, $bundleItem, [
+            'option_title' => 'Ban than tai - Men lam ve tay',
+            'position' => 1,
+        ]);
+        $this->attachBundleItem($bundle, $bundleItem, [
+            'option_title' => 'Ban tho 1m75-1m97, 3 bat huong',
+            'position' => 2,
+        ]);
+        $this->attachBundleItem($bundle, $bundleItem, [
+            'option_title' => 'Ban tho 2m tro len, 1 bat huong',
+            'position' => 3,
+        ]);
+
+        foreach ([0, 1] as $lightPicker) {
+            foreach ([
+                '1m1' => 'Ban tho 1m - 1m1, 3 bat huong',
+                '2m' => 'Ban tho 2m tro len, 1 bat huong',
+                'banthantai' => 'Ban than tai - Men lam ve tay',
+                'ban thần tài' => 'Ban than tai - Men lam ve tay',
+            ] as $search => $expectedOptionTitle) {
+                $response = $this
+                    ->withHeaders($this->headers($account))
+                    ->getJson('/api/products?' . http_build_query([
+                        'picker' => 1,
+                        'fast_picker' => 1,
+                        'light_picker' => $lightPicker,
+                        'filter_bundle_options_by_search' => 1,
+                        'search' => $search,
+                        'per_page' => 20,
+                    ]));
+
+                $response
+                    ->assertOk()
+                    ->assertJsonPath('data.0.id', $bundle->id)
+                    ->assertJsonCount(1, 'data.0.bundle_options')
+                    ->assertJsonPath('data.0.bundle_options.0.option_title', $expectedOptionTitle);
+
+                $this->assertGreaterThan(
+                    0,
+                    (float) $response->json('data.0.search_score'),
+                    "Expected bundle option search score for [{$search}] with light_picker={$lightPicker} to be positive."
+                );
+                $this->assertNotContains(
+                    $falsePositiveProduct->id,
+                    collect($response->json('data'))->pluck('id')->all(),
+                    "Search [{$search}] with light_picker={$lightPicker} should not match compact SKU boundaries."
+                );
+            }
+        }
+    }
+
     public function test_fast_picker_keeps_all_bundle_options_when_search_matches_parent_only(): void
     {
         $account = $this->authenticate();

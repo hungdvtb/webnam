@@ -55,6 +55,10 @@ import { updateOrderStatusWithExportSlipPrompt } from '../../utils/orderStatusUp
 import {
     getOrderItemActualDisplayName,
     getOrderItemActualDisplaySku,
+    getOrderItemCurrentActualName,
+    getOrderItemCurrentActualSku,
+    getOrderItemCurrentName,
+    getOrderItemCurrentSku,
     getOrderItemDisplayName,
     getOrderItemDisplaySku,
     getOrderItemOriginalName,
@@ -590,6 +594,30 @@ const getWarehousePickingLineNumber = (item, index = 0) => {
     return String((Number(index) || 0) + 1);
 };
 
+const getWarehousePickingSourceName = (item) => (
+    getOrderItemDisplayName(item, '')
+    || getOrderItemCurrentName(item)
+    || 'Sản phẩm'
+);
+
+const getWarehousePickingSourceSku = (item) => (
+    getOrderItemDisplaySku(item, '')
+    || getOrderItemCurrentSku(item)
+    || ''
+);
+
+const getWarehousePickingSourceIdentityKey = (item) => {
+    const productId = Number(item?.product_id) || 0;
+    const sourceSku = normalizeWarehouseReplacementText(getWarehousePickingSourceSku(item));
+    const currentSku = normalizeWarehouseReplacementText(getOrderItemCurrentSku(item));
+
+    if (!sourceSku || !productId || !currentSku || sourceSku === currentSku) {
+        return '';
+    }
+
+    return `sku:${sourceSku}`;
+};
+
 const getWarehousePickingCandidateProductId = (entry) => Number(
     entry?.target_product_id
     ?? entry?.product_id
@@ -599,7 +627,9 @@ const getWarehousePickingCandidateProductId = (entry) => Number(
 ) || 0;
 
 const getWarehousePickingCandidateName = (entry, fallback = 'Sản phẩm') => String(
-    entry?.display_name
+    entry?.current_product_name
+    ?? entry?.current_actual_product_name
+    ?? entry?.display_name
     ?? entry?.name
     ?? entry?.product?.name
     ?? fallback
@@ -607,7 +637,9 @@ const getWarehousePickingCandidateName = (entry, fallback = 'Sản phẩm') => S
 ).trim();
 
 const getWarehousePickingCandidateSku = (entry, fallback = '') => String(
-    entry?.display_sku
+    entry?.current_product_sku
+    ?? entry?.current_actual_product_sku
+    ?? entry?.display_sku
     ?? entry?.sku
     ?? entry?.product?.sku
     ?? fallback
@@ -615,6 +647,9 @@ const getWarehousePickingCandidateSku = (entry, fallback = '') => String(
 ).trim();
 
 const getWarehousePickingCandidateKey = (entry) => {
+    const identityKey = String(entry?.identity_key || '').trim();
+    if (identityKey) return identityKey;
+
     const productId = getWarehousePickingCandidateProductId(entry);
     if (productId > 0) return `product:${productId}`;
 
@@ -685,15 +720,89 @@ const normalizeWarehousePickingCandidate = (entry, meta = {}) => {
     };
 };
 
+const getWarehousePickingCandidateIdentityRank = (candidate = {}) => {
+    if (!candidate || typeof candidate !== 'object') return 0;
+    if (candidate?.is_history_candidate) return 1;
+    if (candidate?.is_original_order_product && !candidate?.product?.name && !candidate?.current_product_name) return 2;
+    if (
+        candidate?.is_manual_search_result
+        || candidate?.is_declared_replacement
+        || candidate?.is_current_actual_product
+        || candidate?.replacement_group_id
+        || candidate?.entry_kind === 'product'
+        || candidate?.target_product_id
+        || candidate?.account_id
+        || candidate?.product?.name
+    ) {
+        return 4;
+    }
+
+    return 3;
+};
+
+const getWarehousePickingCandidateLastUsedAt = (candidate = {}) => {
+    const rawValue = candidate?.last_used_at;
+    if (typeof rawValue === 'number' && Number.isFinite(rawValue)) return rawValue;
+
+    const parsedValue = rawValue ? Date.parse(rawValue) : Number.NaN;
+    return Number.isFinite(parsedValue) ? parsedValue : 0;
+};
+
+const shouldUseIncomingWarehousePickingCandidateIdentity = (current, incoming) => {
+    const currentRank = getWarehousePickingCandidateIdentityRank(current);
+    const incomingRank = getWarehousePickingCandidateIdentityRank(incoming);
+    if (incomingRank !== currentRank) return incomingRank > currentRank;
+
+    return getWarehousePickingCandidateLastUsedAt(incoming) > getWarehousePickingCandidateLastUsedAt(current);
+};
+
+const mergeWarehousePickingCandidatePair = (current, incoming) => {
+    const useIncomingIdentity = shouldUseIncomingWarehousePickingCandidateIdentity(current, incoming);
+    const preferredIdentity = useIncomingIdentity ? incoming : current;
+    const secondaryIdentity = useIncomingIdentity ? current : incoming;
+    const currentLastUsedAt = getWarehousePickingCandidateLastUsedAt(current);
+    const incomingLastUsedAt = getWarehousePickingCandidateLastUsedAt(incoming);
+    const lastUsedAt = Math.max(currentLastUsedAt, incomingLastUsedAt) || preferredIdentity?.last_used_at || secondaryIdentity?.last_used_at;
+
+    return {
+        ...secondaryIdentity,
+        ...preferredIdentity,
+        key: current.key,
+        id: preferredIdentity?.id ?? secondaryIdentity?.id ?? null,
+        product_id: preferredIdentity?.product_id || secondaryIdentity?.product_id || null,
+        name: preferredIdentity?.name || secondaryIdentity?.name || 'Sản phẩm',
+        display_name: preferredIdentity?.display_name || preferredIdentity?.name || secondaryIdentity?.display_name || secondaryIdentity?.name || 'Sản phẩm',
+        sku: preferredIdentity?.sku || secondaryIdentity?.sku || '',
+        display_sku: preferredIdentity?.display_sku || preferredIdentity?.sku || secondaryIdentity?.display_sku || secondaryIdentity?.sku || '',
+        available_to_sell: preferredIdentity?.available_to_sell ?? secondaryIdentity?.available_to_sell ?? null,
+        cost_price: preferredIdentity?.cost_price ?? secondaryIdentity?.cost_price ?? null,
+        price: preferredIdentity?.price ?? secondaryIdentity?.price ?? null,
+        location_text: preferredIdentity?.location_text || secondaryIdentity?.location_text || '',
+        replacement_group_id: preferredIdentity?.replacement_group_id ?? secondaryIdentity?.replacement_group_id,
+        is_history_candidate: Boolean(current?.is_history_candidate && incoming?.is_history_candidate),
+        is_original_order_product: Boolean(current?.is_original_order_product || incoming?.is_original_order_product),
+        is_current_actual_product: Boolean(current?.is_current_actual_product || incoming?.is_current_actual_product),
+        is_manual_search_result: Boolean(current?.is_manual_search_result || incoming?.is_manual_search_result),
+        is_declared_replacement: Boolean(current?.is_declared_replacement || incoming?.is_declared_replacement),
+        ...(lastUsedAt ? { last_used_at: lastUsedAt } : {}),
+    };
+};
+
 const mergeWarehousePickingCandidates = (...candidateGroups) => {
-    const seenKeys = new Set();
+    const indexByKey = new Map();
     const candidates = [];
 
     candidateGroups.flat().forEach((entry) => {
         const candidate = normalizeWarehousePickingCandidate(entry);
-        if (!candidate?.key || seenKeys.has(candidate.key)) return;
+        if (!candidate?.key) return;
 
-        seenKeys.add(candidate.key);
+        if (indexByKey.has(candidate.key)) {
+            const existingIndex = indexByKey.get(candidate.key);
+            candidates[existingIndex] = mergeWarehousePickingCandidatePair(candidates[existingIndex], candidate);
+            return;
+        }
+
+        indexByKey.set(candidate.key, candidates.length);
         candidates.push(candidate);
     });
 
@@ -705,6 +814,64 @@ const getWarehousePickingHistorySourceKey = (source) => getWarehousePickingCandi
 const normalizeWarehousePickingHistoryCandidate = (entry) => normalizeWarehousePickingCandidate(entry, {
     is_history_candidate: true,
 });
+
+const refreshWarehousePickingHistoryCandidates = (historyCandidates = [], refreshCandidates = []) => {
+    const refreshByKey = new Map(
+        mergeWarehousePickingCandidates(refreshCandidates)
+            .filter((candidate) => candidate?.key && !candidate?.is_history_candidate)
+            .map((candidate) => [candidate.key, candidate])
+    );
+
+    return mergeWarehousePickingCandidates(
+        (Array.isArray(historyCandidates) ? historyCandidates : []).map((historyCandidate) => {
+            const normalizedHistoryCandidate = normalizeWarehousePickingHistoryCandidate(historyCandidate);
+            if (!normalizedHistoryCandidate?.key) return null;
+
+            const refreshCandidate = refreshByKey.get(normalizedHistoryCandidate.key);
+            if (!refreshCandidate) return normalizedHistoryCandidate;
+
+            return {
+                ...normalizedHistoryCandidate,
+                ...refreshCandidate,
+                is_history_candidate: true,
+                last_used_at: normalizedHistoryCandidate.last_used_at,
+            };
+        }).filter(Boolean)
+    ).map((candidate) => ({
+        ...candidate,
+        is_history_candidate: true,
+    }));
+};
+
+const getWarehousePickingCandidateProductIds = (candidates = []) => (
+    mergeWarehousePickingCandidates(candidates)
+        .map((candidate) => Number(candidate?.product_id) || 0)
+        .filter((productId, index, productIds) => productId > 0 && productIds.indexOf(productId) === index)
+);
+
+const refreshWarehousePickingHistoryCandidatesFromCatalog = async (historyCandidates = []) => {
+    const productIds = getWarehousePickingCandidateProductIds(historyCandidates);
+    if (productIds.length === 0) return historyCandidates;
+
+    try {
+        const response = await productApi.getAll({
+            picker: 1,
+            replace_picker: 1,
+            allow_variants: 1,
+            selected_ids: productIds.join(','),
+            per_page: Math.max(productIds.length, 5),
+        });
+        const products = Array.isArray(response.data?.data) ? response.data.data : [];
+        const refreshCandidates = products
+            .map((product) => normalizeWarehousePickingCandidate(product, { is_catalog_refresh: true }))
+            .filter(Boolean);
+
+        return refreshWarehousePickingHistoryCandidates(historyCandidates, refreshCandidates);
+    } catch (error) {
+        console.error('Cannot refresh warehouse picking history products.', error);
+        return historyCandidates;
+    }
+};
 
 const getWarehousePickingHistoryCandidates = (source) => {
     const sourceKey = getWarehousePickingHistorySourceKey(source);
@@ -788,10 +955,11 @@ const persistWarehousePickingHistoryFromRows = (rows = []) => {
 };
 
 const buildWarehousePickingOriginalCandidate = (item) => normalizeWarehousePickingCandidate({
+    identity_key: getWarehousePickingSourceIdentityKey(item) || undefined,
     product_id: Number(item?.product_id) || 0,
     id: Number(item?.product_id) || 0,
-    name: getOrderItemDisplayName(item, 'Sản phẩm'),
-    sku: getOrderItemDisplaySku(item, ''),
+    name: getWarehousePickingSourceName(item),
+    sku: getWarehousePickingSourceSku(item),
     cost_price: item?.cost_price ?? item?.product?.cost_price ?? item?.product?.expected_cost,
     price: item?.price,
     available_to_sell: item?.product?.available_to_sell ?? item?.product?.stock_quantity ?? item?.product?.computed_stock,
@@ -809,8 +977,8 @@ const buildWarehousePickingActualCandidate = (item) => {
         ...actualProduct,
         product_id: Number(item?.actual_product_id) || Number(actualProduct?.id) || 0,
         id: Number(item?.actual_product_id) || Number(actualProduct?.id) || 0,
-        name: getOrderItemActualDisplayName(item, actualProduct?.name || ''),
-        sku: getOrderItemActualDisplaySku(item, actualProduct?.sku || ''),
+        name: getOrderItemCurrentActualName(item) || getOrderItemActualDisplayName(item, actualProduct?.name || ''),
+        sku: getOrderItemCurrentActualSku(item) || getOrderItemActualDisplaySku(item, actualProduct?.sku || ''),
         cost_price: actualProduct?.cost_price ?? actualProduct?.expected_cost ?? item?.cost_price,
         price: item?.price,
         available_to_sell: actualProduct?.available_to_sell ?? actualProduct?.stock_quantity ?? actualProduct?.computed_stock,
@@ -825,8 +993,32 @@ const getWarehousePickingSelectedCandidate = (row) => (
     || null
 );
 
+const areWarehousePickingCandidatesSameProduct = (left, right) => {
+    if (!left || !right) return false;
+
+    const leftProductId = getWarehousePickingCandidateProductId(left);
+    const rightProductId = getWarehousePickingCandidateProductId(right);
+    if (leftProductId > 0 && rightProductId > 0 && leftProductId === rightProductId) {
+        return true;
+    }
+
+    const leftSku = normalizeWarehouseReplacementText(getWarehousePickingCandidateSku(left));
+    const rightSku = normalizeWarehouseReplacementText(getWarehousePickingCandidateSku(right));
+
+    return Boolean(leftSku && rightSku && leftSku === rightSku);
+};
+
+const isWarehousePickingCandidateOriginalForRow = (row, candidate) => {
+    if (!row || !candidate) return false;
+    if (candidate?.key && row?.original_key && candidate.key === row.original_key) return true;
+
+    return areWarehousePickingCandidatesSameProduct(candidate, row.original);
+};
+
 const isWarehousePickingRowUsingOriginal = (row) => (
-    !row?.selected_key || row.selected_key === row.original_key
+    !row?.selected_key
+    || row.selected_key === row.original_key
+    || isWarehousePickingCandidateOriginalForRow(row, getWarehousePickingSelectedCandidate(row))
 );
 
 const EMPTY_WAREHOUSE_PICKING_DECLARATION_PROMPT = {
@@ -909,13 +1101,13 @@ const buildWarehousePickingRowsForOrders = async (ordersForPicking = []) => {
 
             const currentActual = buildWarehousePickingActualCandidate(item);
             const productId = Number(item?.product_id) || 0;
-            const sku = getOrderItemDisplaySku(item, '');
-            const historyCandidates = getWarehousePickingHistoryCandidates(original);
+            const sku = getWarehousePickingSourceSku(item);
+            let historyCandidates = getWarehousePickingHistoryCandidates(original);
             let lookupCandidates = [];
 
             try {
                 const response = await productReplacementApi.lookup({
-                    product_id: productId || undefined,
+                    product_id: sku ? undefined : (productId || undefined),
                     sku: sku || undefined,
                     locked_price: resolveWarehouseReplacementNumber(item?.price) ?? 0,
                     quantity: resolveWarehouseReplacementNumber(item?.quantity) ?? 1,
@@ -948,11 +1140,16 @@ const buildWarehousePickingRowsForOrders = async (ordersForPicking = []) => {
                 }
             }
 
+            historyCandidates = refreshWarehousePickingHistoryCandidates(
+                await refreshWarehousePickingHistoryCandidatesFromCatalog(historyCandidates),
+                [original, currentActual, lookupCandidates]
+            );
+
             const candidates = mergeWarehousePickingCandidates(
                 [original],
                 currentActual ? [currentActual] : [],
-                historyCandidates,
-                lookupCandidates
+                lookupCandidates,
+                historyCandidates
             );
             const preferredKey = currentActual?.key || original.key;
             const selectedKey = candidates.some((candidate) => candidate.key === preferredKey)
@@ -970,6 +1167,7 @@ const buildWarehousePickingRowsForOrders = async (ordersForPicking = []) => {
                 original,
                 original_key: original.key,
                 candidates,
+                history_candidates: historyCandidates,
                 selected_key: selectedKey,
             };
         }));
@@ -993,11 +1191,15 @@ const buildWarehousePickingOrderItemPayload = (item, row, index) => {
     const selectedCandidate = getWarehousePickingSelectedCandidate(row);
     const productId = Number(item?.product_id) || 0;
     const selectedProductId = Number(selectedCandidate?.product_id) || 0;
-    const useOriginalProduct = !selectedProductId || selectedProductId === productId;
+    const useOriginalProduct = !selectedProductId
+        || selectedProductId === productId
+        || isWarehousePickingCandidateOriginalForRow(row, selectedCandidate);
     const costPrice = resolveWarehousePickingPayloadCostPrice(item, useOriginalProduct);
     const options = item?.options && typeof item.options === 'object' && Object.keys(item.options).length > 0
         ? item.options
         : undefined;
+    const orderedName = getWarehousePickingSourceName(item) || selectedCandidate?.name || '';
+    const orderedSku = getWarehousePickingSourceSku(item);
 
     return {
         product_id: productId,
@@ -1006,8 +1208,8 @@ const buildWarehousePickingOrderItemPayload = (item, row, index) => {
         quantity: Math.max(0, resolveWarehouseReplacementNumber(item?.quantity) ?? 0),
         price: Math.max(0, resolveWarehouseReplacementNumber(item?.price) ?? 0),
         cost_price: costPrice,
-        name: getOrderItemDisplayName(item, selectedCandidate?.name || ''),
-        sku: getOrderItemDisplaySku(item, ''),
+        name: orderedName,
+        sku: orderedSku,
         actual_name: useOriginalProduct ? undefined : selectedCandidate?.name,
         actual_sku: useOriginalProduct ? undefined : selectedCandidate?.sku,
         product_source_account_id: item?.product_source_account_id || undefined,
@@ -1039,8 +1241,10 @@ const WarehousePickingCandidateCombobox = ({
     row,
     saving,
     onSelectCandidate,
+    autoOpenToken = 0,
 }) => {
     const rootRef = useRef(null);
+    const inputRef = useRef(null);
     const selectedCandidate = getWarehousePickingSelectedCandidate(row);
     const selectedLabel = getWarehousePickingCandidateLabel(selectedCandidate);
     const [query, setQuery] = useState(selectedLabel);
@@ -1052,12 +1256,22 @@ const WarehousePickingCandidateCombobox = ({
     const [activeTab, setActiveTab] = useState(WAREHOUSE_PICKING_CANDIDATE_TAB_PRODUCTS);
     const normalizedQuery = normalizeWarehouseReplacementText(query);
     const usingOriginal = isWarehousePickingRowUsingOriginal(row);
-    const rowCandidates = Array.isArray(row?.candidates) ? row.candidates : [];
-    const rowHistoryCandidateSignature = rowCandidates
-        .filter((candidate) => candidate?.is_history_candidate)
-        .map((candidate) => candidate.key || getWarehousePickingCandidateKey(candidate))
+    const rowCandidates = useMemo(() => (
+        Array.isArray(row?.candidates) ? row.candidates : []
+    ), [row?.candidates]);
+    const rowHistoryCandidates = useMemo(() => (
+        Array.isArray(row?.history_candidates)
+            ? row.history_candidates
+            : rowCandidates.filter((candidate) => candidate?.is_history_candidate)
+    ), [row?.history_candidates, rowCandidates]);
+    const rowHistoryCandidateSignature = useMemo(() => rowHistoryCandidates
+        .map((candidate) => [
+            candidate?.key || getWarehousePickingCandidateKey(candidate),
+            candidate?.name,
+            candidate?.sku,
+        ].filter(Boolean).join(':'))
         .filter(Boolean)
-        .join('|');
+        .join('|'), [rowHistoryCandidates]);
     const productCandidates = useMemo(() => rowCandidates.filter((candidate) => !candidate?.is_history_candidate), [rowCandidates]);
     const filteredCandidates = useMemo(() => (
         normalizedQuery
@@ -1090,16 +1304,31 @@ const WarehousePickingCandidateCombobox = ({
     }, [open, selectedLabel]);
 
     useEffect(() => {
+        if (!autoOpenToken || saving || typeof window === 'undefined') return undefined;
+
+        setQuery('');
+        setOpen(true);
+        const frameId = window.requestAnimationFrame(() => {
+            inputRef.current?.focus?.();
+        });
+
+        return () => window.cancelAnimationFrame(frameId);
+    }, [autoOpenToken, saving]);
+
+    useEffect(() => {
         setHighlightIndex(0);
     }, [activeTab, normalizedQuery, row?.row_id]);
 
     useEffect(() => {
         setActiveTab(WAREHOUSE_PICKING_CANDIDATE_TAB_PRODUCTS);
-        setHistoryCandidates(mergeWarehousePickingCandidates(
-            getWarehousePickingHistoryCandidates(row?.original),
-            rowCandidates.filter((candidate) => candidate?.is_history_candidate)
+        setHistoryCandidates(refreshWarehousePickingHistoryCandidates(
+            mergeWarehousePickingCandidates(
+                getWarehousePickingHistoryCandidates(row?.original),
+                rowHistoryCandidates
+            ),
+            productCandidates
         ));
-    }, [row?.original_key, row?.row_id, rowHistoryCandidateSignature]);
+    }, [productCandidates, row?.original, row?.original_key, row?.row_id, rowHistoryCandidateSignature, rowHistoryCandidates]);
 
     useEffect(() => {
         if (!open) return undefined;
@@ -1129,6 +1358,8 @@ const WarehousePickingCandidateCombobox = ({
             try {
                 const response = await productApi.getAll({
                     picker: 1,
+                    replace_picker: 1,
+                    allow_variants: 1,
                     per_page: 20,
                     search: query.trim(),
                 });
@@ -1139,6 +1370,7 @@ const WarehousePickingCandidateCombobox = ({
 
                 if (!cancelled) {
                     setManualCandidates(entries);
+                    setHistoryCandidates((current) => refreshWarehousePickingHistoryCandidates(current, entries));
                 }
             } catch (error) {
                 console.error('Cannot search products for warehouse picking.', error);
@@ -1214,6 +1446,7 @@ const WarehousePickingCandidateCombobox = ({
             <div className="flex items-center gap-2">
                 <div className="relative min-w-0 flex-1">
                     <input
+                        ref={inputRef}
                         type="text"
                         value={query}
                         onFocus={() => {
@@ -1371,6 +1604,8 @@ const WarehousePickingReplacementModal = ({
         () => rows.filter((row) => !isWarehousePickingRowUsingOriginal(row)).length,
         [rows]
     );
+    const [editingRowIds, setEditingRowIds] = useState(new Set());
+    const [rowPickerOpenTokens, setRowPickerOpenTokens] = useState({});
     const orderCount = useMemo(
         () => new Set(rows.map((row) => row.order_id).filter(Boolean)).size,
         [rows]
@@ -1388,6 +1623,56 @@ const WarehousePickingReplacementModal = ({
             })
             .filter(Boolean)
     ), [orders]);
+    const openRowPicker = useCallback((rowId) => {
+        if (saving) return;
+
+        setEditingRowIds((current) => {
+            const next = new Set(current);
+            next.add(rowId);
+            return next;
+        });
+        setRowPickerOpenTokens((current) => ({
+            ...current,
+            [rowId]: (Number(current[rowId]) || 0) + 1,
+        }));
+    }, [saving]);
+    const handleSelectCandidate = useCallback((rowId, candidate) => {
+        const row = rows.find((item) => item.row_id === rowId);
+        const selectedIsOriginal = row
+            ? isWarehousePickingCandidateOriginalForRow(row, candidate)
+            : false;
+
+        setEditingRowIds((current) => {
+            const next = new Set(current);
+            if (selectedIsOriginal) {
+                next.delete(rowId);
+            } else {
+                next.add(rowId);
+            }
+            return next;
+        });
+
+        onSelectCandidate(rowId, candidate);
+    }, [onSelectCandidate, rows]);
+
+    useEffect(() => {
+        if (!open) {
+            setEditingRowIds(new Set());
+            setRowPickerOpenTokens({});
+        }
+    }, [open]);
+
+    useEffect(() => {
+        const validRowIds = new Set(rows.map((row) => row.row_id));
+
+        setEditingRowIds((current) => {
+            const next = new Set(Array.from(current).filter((rowId) => validRowIds.has(rowId)));
+            return next.size === current.size ? current : next;
+        });
+        setRowPickerOpenTokens((current) => Object.fromEntries(
+            Object.entries(current).filter(([rowId]) => validRowIds.has(rowId))
+        ));
+    }, [rows]);
 
     if (!open || typeof document === 'undefined') return null;
 
@@ -1450,30 +1735,54 @@ const WarehousePickingReplacementModal = ({
                     ) : visibleRows.length > 0 ? (
                         <>
                         <div className="space-y-3 p-3 sm:hidden">
-                            {visibleRows.map((row) => (
+                            {visibleRows.map((row) => {
+                                const rowChanged = !isWarehousePickingRowUsingOriginal(row);
+                                const showActualPicker = rowChanged || editingRowIds.has(row.row_id);
+
+                                return (
                                 <div key={row.row_id} className="rounded-[16px] border border-primary/10 bg-white p-3 shadow-sm">
                                     <div className="flex items-start justify-between gap-3">
-                                        <div className="min-w-0">
+                                        <div className="min-w-0 flex-1">
                                             <div className="flex flex-wrap items-center gap-1.5">
                                                 <span className="rounded-sm border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-black text-sky-700">STT {row.line_number}</span>
                                                 <span className="rounded-sm border border-orange-200 bg-orange-50 px-2 py-0.5 text-[11px] font-black text-orange-700">{formatOrderItemQuantity(row.quantity)}x</span>
                                             </div>
-                                            <div className="mt-2 text-[14px] font-black leading-snug text-primary" title={row.original?.name}>{row.original?.name}</div>
+                                            <div className="mt-2 flex items-start gap-2">
+                                                <div className="min-w-0 flex-1 text-[14px] font-black leading-snug text-primary" title={row.original?.name}>
+                                                    {row.original?.name}
+                                                </div>
+                                                {!showActualPicker ? (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => openRowPicker(row.row_id)}
+                                                        disabled={saving}
+                                                        className="inline-flex h-8 shrink-0 items-center justify-center gap-1 rounded-sm border border-emerald-200 bg-emerald-50 px-2.5 text-[11px] font-black text-emerald-700 transition-all hover:border-emerald-300 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                                        title="Đổi hàng thực nhặt"
+                                                    >
+                                                        <span className="material-symbols-outlined text-[14px]">swap_horiz</span>
+                                                        Đổi
+                                                    </button>
+                                                ) : null}
+                                            </div>
                                             {row.original?.sku ? (
                                                 <div className="mt-1 truncate text-[12px] font-black text-primary/35" title={row.original.sku}>{row.original.sku}</div>
                                             ) : null}
                                         </div>
                                     </div>
+                                    {showActualPicker ? (
                                     <div className="mt-3 border-t border-primary/10 pt-3">
                                         <div className="mb-2 text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">Hàng thực nhặt</div>
                                         <WarehousePickingCandidateCombobox
                                             row={row}
                                             saving={saving}
-                                            onSelectCandidate={onSelectCandidate}
+                                            onSelectCandidate={handleSelectCandidate}
+                                            autoOpenToken={rowPickerOpenTokens[row.row_id] || 0}
                                         />
                                     </div>
+                                    ) : null}
                                 </div>
-                            ))}
+                                );
+                            })}
                         </div>
                         <div className="hidden min-w-[900px] sm:block">
                             <div className="sticky top-0 z-10 grid grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] border-b border-primary/10 bg-[#eef3f8] text-[11px] font-black uppercase tracking-[0.14em] text-primary/55">
@@ -1482,24 +1791,46 @@ const WarehousePickingReplacementModal = ({
                             </div>
                             <div className="divide-y divide-primary/10">
                                 {visibleRows.map((row) => {
+                                    const rowChanged = !isWarehousePickingRowUsingOriginal(row);
+                                    const showActualPicker = rowChanged || editingRowIds.has(row.row_id);
+
                                     return (
-                                        <div key={row.row_id} className="grid min-h-[92px] grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] items-center bg-white">
+                                        <div key={row.row_id} className={`grid grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] items-center bg-white ${showActualPicker ? 'min-h-[92px]' : 'min-h-[72px]'}`}>
                                             <div className="flex min-w-0 flex-col justify-center border-r border-primary/10 px-5 py-4">
                                                 <div className="flex flex-wrap items-center gap-1.5">
                                                     <span className="rounded-sm border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-black text-sky-700">STT {row.line_number}</span>
                                                     <span className="rounded-sm border border-orange-200 bg-orange-50 px-2 py-0.5 text-[11px] font-black text-orange-700">{formatOrderItemQuantity(row.quantity)}x</span>
                                                 </div>
-                                                <div className="mt-2 truncate text-[14px] font-black text-primary" title={row.original?.name}>{row.original?.name}</div>
+                                                <div className="mt-2 flex items-center gap-2">
+                                                    <div className="min-w-0 flex-1 truncate text-[14px] font-black text-primary" title={row.original?.name}>
+                                                        {row.original?.name}
+                                                    </div>
+                                                    {!showActualPicker ? (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => openRowPicker(row.row_id)}
+                                                            disabled={saving}
+                                                            className="inline-flex h-8 shrink-0 items-center justify-center gap-1 rounded-sm border border-emerald-200 bg-emerald-50 px-2.5 text-[11px] font-black text-emerald-700 transition-all hover:border-emerald-300 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                                            title="Đổi hàng thực nhặt"
+                                                        >
+                                                            <span className="material-symbols-outlined text-[14px]">swap_horiz</span>
+                                                            Đổi
+                                                        </button>
+                                                    ) : null}
+                                                </div>
                                                 {row.original?.sku ? (
                                                     <div className="mt-1 truncate text-[12px] font-black text-primary/35" title={row.original.sku}>{row.original.sku}</div>
                                                 ) : null}
                                             </div>
                                             <div className="flex min-w-0 items-center px-5 py-4">
-                                                <WarehousePickingCandidateCombobox
-                                                    row={row}
-                                                    saving={saving}
-                                                    onSelectCandidate={onSelectCandidate}
-                                                />
+                                                {showActualPicker ? (
+                                                    <WarehousePickingCandidateCombobox
+                                                        row={row}
+                                                        saving={saving}
+                                                        onSelectCandidate={handleSelectCandidate}
+                                                        autoOpenToken={rowPickerOpenTokens[row.row_id] || 0}
+                                                    />
+                                                ) : null}
                                             </div>
                                         </div>
                                     );

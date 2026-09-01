@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import api, { accountApi, orderAiTrainingApi, orderApi, productApi, productReplacementApi, leadApi, cmsApi } from '../../services/api';
+import api, { accountApi, orderAiTrainingApi, orderApi, productApi, productReplacementApi, leadApi, cmsApi, categoryApi } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { useUI } from '../../context/UIContext';
 import { motion, Reorder, AnimatePresence } from 'framer-motion';
@@ -149,6 +149,46 @@ const ORDER_FORM_REPLACE_PICKER_TOP = 104;
 const ORDER_FORM_REPLACE_PICKER_MIN_HEIGHT = 320;
 const ORDER_FORM_REPLACE_PICKER_PREFETCH_DELAY_MS = 0;
 const ORDER_FORM_REPLACE_PICKER_PREFETCH_FAMILY_LIMIT = 24;
+const ACTUAL_PRODUCT_CATEGORY_GROUP_MAX_PRODUCT_PAGES = 8;
+const ACTUAL_PRODUCT_CATEGORY_GROUP_STYLE_WORDS = new Set([
+    'men', 'mau', 'loai', 'dong', 'bo', 'set', 'combo',
+    'ran', 'lam', 'vang', 'anh', 'kim', 'xanh', 'ngoc', 'trang', 'do',
+    'nau', 'den', 'hoa', 'van', 've', 'son', 'dat', 'bat', 'trang',
+]);
+const ACTUAL_PRODUCT_CATEGORY_GROUP_GENERIC_WORDS = new Set([
+    'san', 'pham', 'hang', 'mau', 'so', 'loai', 'cai', 'chiec',
+]);
+const ACTUAL_PRODUCT_CATEGORY_GROUP_TYPE_PHRASES = [
+    ['chan de bat huong', 'Đế bát hương', 'de_bat_huong'],
+    ['de bat huong', 'Đế bát hương', 'de_bat_huong'],
+    ['bat huong', 'Bát hương', 'bat_huong'],
+    ['bat tra sam', 'Bát trà sâm', 'bat_tra_sam'],
+    ['bat sam', 'Bát sâm', 'bat_sam'],
+    ['bat com', 'Bát cơm', 'bat_com'],
+    ['am tra', 'Ấm trà', 'am_tra'],
+    ['am chen', 'Ấm chén', 'am_chen'],
+    ['lo huong', 'Lọ hương', 'lo_huong'],
+    ['ong huong', 'Ống hương', 'ong_huong'],
+    ['mam bong', 'Mâm bồng', 'mam_bong'],
+    ['mam ngu qua', 'Mâm ngũ quả', 'mam_ngu_qua'],
+    ['ky ngai chen', 'Kỷ ngai chén', 'ky_ngai_chen'],
+    ['ky ngai', 'Kỷ ngai', 'ky_ngai'],
+    ['ngai chen', 'Ngai chén', 'ngai_chen'],
+    ['choe', 'Chóe', 'choe'],
+    ['den dau', 'Đèn', 'den'],
+    ['den', 'Đèn', 'den', true],
+    ['nam ruou', 'Nậm', 'nam'],
+    ['nam', 'Nậm', 'nam', true],
+    ['lo luong', 'Lọ lượn', 'lo_luong'],
+    ['lo hoa', 'Lọ hoa', 'lo_hoa'],
+    ['loc binh', 'Lộc bình', 'loc_binh'],
+    ['luc binh', 'Lục bình', 'luc_binh'],
+    ['dia cau', 'Đĩa', 'dia'],
+    ['dia', 'Đĩa', 'dia', true],
+    ['bo dua', 'Bộ đũa', 'bo_dua'],
+    ['chen', 'Chén', 'chen', true],
+    ['bat', 'Bát', 'bat', true],
+];
 const orderFormColumnOrderStorageKey = 'order_form_column_order';
 const orderFormVisibleColumnsStorageKey = 'order_form_visible_columns';
 const orderFormColumnWidthsStorageKey = 'order_column_widths';
@@ -2427,6 +2467,376 @@ const buildActualProductGroupReplacementPreview = ({
             financialPreview: replacementEntry ? resolveActualReplacementFinancialPreview(replacementEntry, sourceLine) : null,
         };
     });
+};
+const resolveActualProductCategoryGroupCategoryRows = (payload) => {
+    if (Array.isArray(payload)) return payload;
+    if (Array.isArray(payload?.data)) return payload.data;
+    if (Array.isArray(payload?.categories)) return payload.categories;
+    return [];
+};
+const flattenActualProductCategoryGroupOptions = (categories = [], depth = 0, ancestors = []) => {
+    const rows = [];
+
+    (Array.isArray(categories) ? categories : []).forEach((category) => {
+        if (!category || typeof category !== 'object') return;
+
+        const name = normalizeCanvasText(category?.name);
+        const pathParts = [...ancestors, name].filter(Boolean);
+        rows.push({
+            ...category,
+            id: Number(category?.id) || category?.id,
+            depth,
+            name,
+            path: pathParts.join(' / '),
+        });
+        rows.push(...flattenActualProductCategoryGroupOptions(category?.children || [], depth + 1, pathParts));
+    });
+
+    return rows;
+};
+const buildActualProductCategoryGroupWordSet = (...categories) => {
+    const words = new Set();
+
+    categories.forEach((category) => {
+        [
+            category?.name,
+            category?.path,
+            category?.slug,
+        ].filter(Boolean).forEach((value) => {
+            normalizeProductSearchText(value)
+                .split(/\s+/)
+                .filter(Boolean)
+                .forEach((word) => {
+                    if (/^\d+$/.test(word) && Number(word) > 9) return;
+                    words.add(word);
+                });
+        });
+    });
+
+    return words;
+};
+const getActualProductCategoryGroupDisplayName = (product) => (
+    normalizeCanvasText(product?.display_name)
+    || normalizeCanvasText(product?.name)
+    || normalizeCanvasText(product?.snapshot_name)
+    || normalizeCanvasText(product?.actual_name)
+    || 'Sản phẩm'
+);
+const getActualProductCategoryGroupDisplaySku = (product) => (
+    normalizeCanvasText(product?.display_sku)
+    || normalizeCanvasText(product?.sku)
+    || normalizeCanvasText(product?.snapshot_sku)
+    || normalizeCanvasText(product?.actual_sku)
+    || ''
+);
+const isActualProductCategoryGroupSelectableProduct = (product) => (
+    product
+    && normalizeProductSearchText(product?.type) !== 'configurable'
+    && normalizeProductSearchText(product?.type) !== 'variable'
+    && !product?.has_variations
+);
+const extractActualProductCategoryGroupType = (text = '') => {
+    const normalized = normalizeProductSearchText(text);
+    const matched = ACTUAL_PRODUCT_CATEGORY_GROUP_TYPE_PHRASES.find(([phrase, , , prefixOnly = false]) => {
+        const normalizedPhrase = normalizeProductSearchText(phrase);
+        if (!normalizedPhrase) return false;
+
+        const startsAsProductType = normalized === normalizedPhrase
+            || normalized.startsWith(normalizedPhrase + ' ')
+            || normalized.startsWith('bo ' + normalizedPhrase + ' ');
+
+        return prefixOnly
+            ? startsAsProductType
+            : startsAsProductType || normalized.includes(' ' + normalizedPhrase + ' ');
+    });
+
+    return matched
+        ? { key: matched[2] || normalizeProductSearchText(matched[0]).replace(/\s+/g, '_'), label: matched[1] }
+        : { key: '', label: '' };
+};
+const extractActualProductCategoryGroupDimensions = (...values) => {
+    const dimensions = new Set();
+
+    values.forEach((value) => {
+        const normalized = normalizeProductSearchText(value);
+        if (!normalized) return;
+
+        let matched = null;
+        const phiPattern = /\b(?:phi|ph|p)\s*0*([0-9]{1,3})\b/g;
+        while ((matched = phiPattern.exec(normalized)) !== null) {
+            dimensions.add(`phi${Number(matched[1])}`);
+        }
+
+        const cmPattern = /\b0*([0-9]{1,3})\s*(?:cm|centimet)\b/g;
+        while ((matched = cmPattern.exec(normalized)) !== null) {
+            dimensions.add(`cm${Number(matched[1])}`);
+        }
+
+        const sizePattern = /\bs\s*0*([0-9]{1,2})\b/g;
+        while ((matched = sizePattern.exec(normalized)) !== null) {
+            dimensions.add(`s${Number(matched[1])}`);
+        }
+
+        const pairPattern = /\b0*([0-9]{1,3})\s*x\s*0*([0-9]{1,3})\b/g;
+        while ((matched = pairPattern.exec(normalized)) !== null) {
+            dimensions.add(`${Number(matched[1])}x${Number(matched[2])}`);
+        }
+    });
+
+    return Array.from(dimensions).sort();
+};
+const stripActualProductCategoryGroupWords = (value, categoryWords = new Set()) => (
+    normalizeProductSearchText(value)
+        .split(/\s+/)
+        .filter((word) => (
+            word
+            && !categoryWords.has(word)
+            && !ACTUAL_PRODUCT_CATEGORY_GROUP_STYLE_WORDS.has(word)
+            && !ACTUAL_PRODUCT_CATEGORY_GROUP_GENERIC_WORDS.has(word)
+        ))
+        .join(' ')
+);
+const buildActualProductCategoryGroupAttributeText = (attributeMap = {}) => (
+    Object.values(attributeMap)
+        .flat()
+        .filter(Boolean)
+        .join(' ')
+);
+const valuesActualProductCategoryGroupIntersect = (left = [], right = []) => {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length === 0 || right.length === 0) {
+        return false;
+    }
+
+    const rightSet = new Set(right);
+    return left.some((value) => value && rightSet.has(value));
+};
+const buildActualProductCategoryGroupIdentity = (product, { categoryWords = new Set() } = {}) => {
+    const attributeMap = getActualReplacementAttributeMap(product);
+    const name = getActualProductCategoryGroupDisplayName(product);
+    const sku = getActualProductCategoryGroupDisplaySku(product);
+    const attributeText = buildActualProductCategoryGroupAttributeText(attributeMap);
+    const combinedText = [name, sku, attributeText].filter(Boolean).join(' ');
+    const strippedName = stripActualProductCategoryGroupWords(name, categoryWords);
+    const strippedSku = stripActualProductCategoryGroupWords(sku, categoryWords);
+    const type = extractActualProductCategoryGroupType(combinedText);
+    const dimensions = extractActualProductCategoryGroupDimensions(name, sku, attributeText);
+    const coreTokens = Array.from(new Set(
+        strippedName
+            .split(/\s+/)
+            .filter((token) => token && !/^[0-9]+$/.test(token))
+    ));
+    const fallbackCore = coreTokens.slice(0, 5).join('_');
+    const dimensionKey = dimensions.join('_');
+    const primaryKey = [
+        type.key || fallbackCore,
+        dimensionKey || compactProductSearchText(strippedSku) || fallbackCore,
+    ].filter(Boolean).join('|');
+
+    return {
+        type,
+        dimensions,
+        dimensionKey,
+        strippedName,
+        strippedSku,
+        strippedCompactName: compactProductSearchText(strippedName),
+        strippedCompactSku: compactProductSearchText(strippedSku),
+        primaryKey,
+        attributeMap,
+        tokens: coreTokens,
+    };
+};
+const isActualProductCategoryGroupStyleAttribute = (attribute) => {
+    const normalized = normalizeProductSearchText([
+        attribute?.name,
+        attribute?.code,
+    ].filter(Boolean).join(' '));
+
+    return [
+        'men',
+        'mau',
+        'color',
+        'glaze',
+        'hoa van',
+        'bo suu tap',
+        'dong mau',
+        'loai men',
+    ].some((keyword) => normalized.includes(keyword));
+};
+const scoreActualProductCategoryGroupCandidate = (source, candidate, context = {}) => {
+    const sourceIdentity = buildActualProductCategoryGroupIdentity(source, context);
+    const candidateIdentity = buildActualProductCategoryGroupIdentity(candidate, context);
+    const attributeById = context.attributeById || {};
+    let score = 0;
+    const reasons = [];
+
+    if (
+        sourceIdentity.type.key
+        && candidateIdentity.type.key
+        && sourceIdentity.type.key !== candidateIdentity.type.key
+    ) {
+        return {
+            sourceIdentity,
+            candidateIdentity,
+            score: Number.NEGATIVE_INFINITY,
+            reasons: ['khác loại sản phẩm'],
+        };
+    }
+
+    if (sourceIdentity.primaryKey && sourceIdentity.primaryKey === candidateIdentity.primaryKey) {
+        score += 7000;
+        reasons.push('trùng loại + kích thước');
+    }
+
+    if (sourceIdentity.type.key && sourceIdentity.type.key === candidateIdentity.type.key) {
+        score += 2400;
+        reasons.push(sourceIdentity.type.label || 'trùng loại sản phẩm');
+    } else if (sourceIdentity.type.key || candidateIdentity.type.key) {
+        score -= 1800;
+    }
+
+    if (sourceIdentity.dimensions.length > 0) {
+        const candidateDimensionSet = new Set(candidateIdentity.dimensions);
+        const matchedDimensions = sourceIdentity.dimensions.filter((dimension) => candidateDimensionSet.has(dimension));
+        if (matchedDimensions.length === sourceIdentity.dimensions.length) {
+            score += 2600;
+            reasons.push(`trùng ${matchedDimensions.join(', ')}`);
+        } else if (matchedDimensions.length > 0) {
+            score += 900;
+            reasons.push(`gần đúng ${matchedDimensions.join(', ')}`);
+        } else {
+            score -= 2400;
+        }
+    }
+
+    if (
+        sourceIdentity.strippedCompactSku
+        && candidateIdentity.strippedCompactSku
+        && sourceIdentity.strippedCompactSku === candidateIdentity.strippedCompactSku
+    ) {
+        score += 1800;
+        reasons.push('trùng mã lõi SKU');
+    }
+
+    if (
+        sourceIdentity.strippedCompactName
+        && candidateIdentity.strippedCompactName
+        && sourceIdentity.strippedCompactName === candidateIdentity.strippedCompactName
+    ) {
+        score += 1400;
+        reasons.push('trùng tên lõi');
+    }
+
+    Object.entries(sourceIdentity.attributeMap).forEach(([attributeId, sourceValues]) => {
+        const attribute = attributeById[String(attributeId)];
+        if (isActualProductCategoryGroupStyleAttribute(attribute)) return;
+
+        const candidateValues = candidateIdentity.attributeMap[String(attributeId)];
+        if (!candidateValues || candidateValues.length === 0) return;
+
+        if (valuesActualProductCategoryGroupIntersect(sourceValues, candidateValues)) {
+            score += 600;
+        } else {
+            score -= 500;
+        }
+    });
+
+    if (sourceIdentity.tokens.length > 0 && candidateIdentity.tokens.length > 0) {
+        const candidateTokenSet = new Set(candidateIdentity.tokens);
+        const overlap = sourceIdentity.tokens.filter((token) => candidateTokenSet.has(token));
+        const ratio = overlap.length / sourceIdentity.tokens.length;
+        score += Math.round(ratio * 900);
+        if (ratio >= 0.8) {
+            reasons.push('tên lõi gần giống');
+        }
+    }
+
+    const sourceProductId = getActualReplacementTargetProductId(source);
+    const candidateProductId = getActualReplacementTargetProductId(candidate);
+    if (sourceProductId > 0 && sourceProductId === candidateProductId) {
+        score -= 5000;
+    }
+
+    return {
+        sourceIdentity,
+        candidateIdentity,
+        score,
+        reasons: Array.from(new Set(reasons)).slice(0, 3),
+    };
+};
+const findActualProductCategoryGroupReplacement = (item, candidates = [], context = {}) => {
+    const scored = (Array.isArray(candidates) ? candidates : [])
+        .filter(isActualProductCategoryGroupSelectableProduct)
+        .map((candidate) => ({
+            product: candidate,
+            ...scoreActualProductCategoryGroupCandidate(item, candidate, context),
+        }))
+        .sort((left, right) => right.score - left.score);
+
+    const best = scored[0] || null;
+    const second = scored[1] || null;
+    if (!best || best.score < 2200) {
+        return {
+            product: null,
+            status: 'missing',
+            statusLabel: 'Không tìm thấy',
+            confidence: 0,
+            reasons: [],
+            score: best?.score || 0,
+        };
+    }
+
+    const margin = best.score - (second?.score || 0);
+    const exactPrimaryKey = best.sourceIdentity.primaryKey
+        && best.sourceIdentity.primaryKey === best.candidateIdentity.primaryKey;
+    const highConfidence = best.score >= 7200 && exactPrimaryKey && margin >= 500;
+
+    return {
+        product: best.product,
+        status: highConfidence ? 'matched' : 'review',
+        statusLabel: highConfidence ? 'Tìm thấy chuẩn' : 'Cần kiểm tra',
+        confidence: highConfidence ? 95 : Math.max(55, Math.min(82, Math.round(best.score / 100))),
+        reasons: best.reasons,
+        score: best.score,
+        competingProduct: second?.product || null,
+    };
+};
+const resolveActualProductCategoryGroupItemCategoryId = (item) => normalizeCanvasText(item?.category_id || item?.product?.category_id);
+const getActualProductCategoryGroupMostCommonCategoryId = (items = []) => {
+    const counts = new Map();
+
+    (Array.isArray(items) ? items : []).forEach((item) => {
+        const categoryId = resolveActualProductCategoryGroupItemCategoryId(item);
+        if (!categoryId) return;
+        counts.set(categoryId, (counts.get(categoryId) || 0) + 1);
+    });
+
+    return Array.from(counts.entries())
+        .sort((left, right) => right[1] - left[1])
+        .map(([categoryId]) => categoryId)[0] || '';
+};
+const fetchActualProductCategoryGroupProducts = async (categoryId, signal) => {
+    const rows = [];
+    let page = 1;
+    let lastPage = 1;
+
+    do {
+        const response = await productApi.getAll({
+            picker: 1,
+            replace_picker: 1,
+            allow_variants: 1,
+            category_id: categoryId,
+            per_page: 200,
+            page,
+            _category_group_replace: `${Date.now()}-${page}`,
+        }, signal);
+        const payload = response.data || {};
+        const pageRows = Array.isArray(payload.data) ? payload.data : [];
+        rows.push(...pageRows.map(normalizeProductPickerEntry));
+        lastPage = Math.max(1, Number(payload.last_page || 1));
+        page += 1;
+    } while (page <= lastPage && page <= ACTUAL_PRODUCT_CATEGORY_GROUP_MAX_PRODUCT_PAGES);
+
+    return rows;
 };
 const filterOrderLineReplacementFamilyEntries = (entries = [], rawTerm = '', seedTerm = '') => {
     const term = normalizeCanvasText(rawTerm);
@@ -5605,29 +6015,73 @@ const QuoteCaptureSheet = ({ captureRef, quoteSettings, template, formData, orde
 
 const failedProductImageUrls = new Set();
 
-const ProductThumb = ({ src, fallback = null, imageClassName = 'size-full object-cover' }) => {
+const PRODUCT_THUMB_MANAGED_ROUTE_PATTERN = /((?:\/api)?\/media\/assets\/[0-9a-z]{26}\/)(?:large|medium|original)(?=([/?#]|$))/i;
+const PRODUCT_THUMB_MANAGED_OBJECT_PATTERN = /(\/media-assets\/[0-9a-z]{26}\/)(?:large|medium|original)(\.[a-z0-9]+)(?=([?#]|$))/i;
+
+const resolveProductThumbSrc = (src) => {
     const normalizedSrc = String(src || '').trim();
-    const [failed, setFailed] = useState(() => (
-        normalizedSrc !== '' && failedProductImageUrls.has(normalizedSrc)
-    ));
+    if (!normalizedSrc) return '';
+
+    return normalizedSrc
+        .replace(PRODUCT_THUMB_MANAGED_ROUTE_PATTERN, '$1thumbnail')
+        .replace(PRODUCT_THUMB_MANAGED_OBJECT_PATTERN, '$1thumbnail$2');
+};
+
+const getInitialProductThumbSrc = (src) => {
+    const normalizedSrc = String(src || '').trim();
+    const thumbnailSrc = resolveProductThumbSrc(normalizedSrc);
+    const preferredSrc = thumbnailSrc || normalizedSrc;
+
+    if (
+        preferredSrc
+        && preferredSrc !== normalizedSrc
+        && failedProductImageUrls.has(preferredSrc)
+        && normalizedSrc
+        && !failedProductImageUrls.has(normalizedSrc)
+    ) {
+        return normalizedSrc;
+    }
+
+    return preferredSrc;
+};
+
+const ProductThumb = ({ src, fallback = null, imageClassName = 'size-full object-cover', loading = 'eager', fetchPriority = 'auto' }) => {
+    const normalizedSrc = String(src || '').trim();
+    const [currentSrc, setCurrentSrc] = useState(() => getInitialProductThumbSrc(normalizedSrc));
+    const [failed, setFailed] = useState(() => {
+        const initialSrc = getInitialProductThumbSrc(normalizedSrc);
+        return initialSrc !== '' && failedProductImageUrls.has(initialSrc);
+    });
 
     useEffect(() => {
-        setFailed(normalizedSrc !== '' && failedProductImageUrls.has(normalizedSrc));
+        const nextSrc = getInitialProductThumbSrc(normalizedSrc);
+        setCurrentSrc(nextSrc);
+        setFailed(nextSrc !== '' && failedProductImageUrls.has(nextSrc));
     }, [normalizedSrc]);
 
-    if (!normalizedSrc || failed) {
+    if (!currentSrc || failed) {
         return fallback || <span className="material-symbols-outlined text-sm">image</span>;
     }
 
     return (
         <img
-            src={normalizedSrc}
+            src={currentSrc}
             alt=""
             className={imageClassName}
-            loading="lazy"
+            loading={loading}
             decoding="async"
+            fetchPriority={fetchPriority}
             onError={() => {
-                failedProductImageUrls.add(normalizedSrc);
+                failedProductImageUrls.add(currentSrc);
+                if (
+                    currentSrc !== normalizedSrc
+                    && normalizedSrc
+                    && !failedProductImageUrls.has(normalizedSrc)
+                ) {
+                    setCurrentSrc(normalizedSrc);
+                    setFailed(false);
+                    return;
+                }
                 setFailed(true);
             }}
         />
@@ -5709,7 +6163,7 @@ const ProductSearchOption = ({ product, onSelect, quickFilterAttribute = null, i
             className={`w-full px-3 py-2.5 text-left border-b border-primary/5 flex items-center gap-3 transition-colors group relative overflow-visible ${isAlreadyInOrder ? 'cursor-not-allowed bg-primary/[0.03] opacity-75' : 'hover:bg-primary/5'}`}
         >
             <div className="size-8 bg-primary/5 rounded-sm flex items-center justify-center text-primary/10 overflow-hidden shrink-0">
-                <ProductThumb src={product.main_image} />
+                <ProductThumb src={product.main_image} fetchPriority="high" />
             </div>
             <div className="flex min-w-0 flex-1 items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
@@ -6010,6 +6464,463 @@ const createOrderAiLineMeta = (item, sessionId) => normalizeOrderAiItemMeta({
     inserted_at: new Date().toISOString(),
 });
 
+const ActualProductCategoryGroupReplaceModal = ({
+    show,
+    onClose,
+    selectedItems = [],
+    attributes = [],
+    onApply,
+    currencyFormatter = formatQuoteMoney,
+}) => {
+    const [categories, setCategories] = useState([]);
+    const [categoriesLoading, setCategoriesLoading] = useState(false);
+    const [sourceCategoryId, setSourceCategoryId] = useState('');
+    const [targetCategoryId, setTargetCategoryId] = useState('');
+    const [previewRows, setPreviewRows] = useState([]);
+    const [previewing, setPreviewing] = useState(false);
+    const [loading, setLoading] = useState(false);
+    const [errorMessage, setErrorMessage] = useState('');
+    const previewAbortRef = useRef(null);
+    const selectionSignature = useMemo(() => (
+        (Array.isArray(selectedItems) ? selectedItems : [])
+            .map((item) => [
+                item?.line_id,
+                item?.product_id,
+                item?.category_id,
+                item?.name,
+                item?.sku,
+            ].filter(Boolean).join(':'))
+            .join('|')
+    ), [selectedItems]);
+    const categoryOptions = useMemo(
+        () => flattenActualProductCategoryGroupOptions(categories),
+        [categories]
+    );
+    const categoryById = useMemo(() => {
+        const map = new Map();
+        categoryOptions.forEach((category) => {
+            map.set(String(category.id), category);
+        });
+        return map;
+    }, [categoryOptions]);
+    const sourceCategory = categoryById.get(String(sourceCategoryId)) || null;
+    const targetCategory = categoryById.get(String(targetCategoryId)) || null;
+    const attributeById = useMemo(() => {
+        const map = {};
+        (Array.isArray(attributes) ? attributes : []).forEach((attribute) => {
+            if (attribute?.id != null) {
+                map[String(attribute.id)] = attribute;
+            }
+        });
+        return map;
+    }, [attributes]);
+    const sourceMismatchCount = useMemo(() => {
+        if (!sourceCategoryId) return 0;
+
+        return (Array.isArray(selectedItems) ? selectedItems : [])
+            .filter((item) => {
+                const itemCategoryId = resolveActualProductCategoryGroupItemCategoryId(item);
+                return itemCategoryId && itemCategoryId !== String(sourceCategoryId);
+            })
+            .length;
+    }, [selectedItems, sourceCategoryId]);
+    const matchedCount = previewRows.filter((row) => row.replacementEntry).length;
+    const reviewCount = previewRows.filter((row) => row.status === 'review').length;
+    const missingCount = previewRows.filter((row) => row.status === 'missing').length;
+    const canRunPreview = selectedItems.length > 0
+        && sourceCategoryId
+        && targetCategoryId
+        && sourceCategoryId !== targetCategoryId
+        && !loading;
+    const canConfirm = matchedCount > 0 && !loading;
+
+    useEffect(() => {
+        if (!show) return undefined;
+
+        let disposed = false;
+        setCategoriesLoading(true);
+
+        categoryApi.getAll()
+            .then((response) => {
+                if (disposed) return;
+                setCategories(resolveActualProductCategoryGroupCategoryRows(response.data));
+            })
+            .catch((error) => {
+                if (disposed) return;
+                console.error('Cannot load categories for category group replacement.', error);
+                setCategories([]);
+            })
+            .finally(() => {
+                if (!disposed) setCategoriesLoading(false);
+            });
+
+        return () => {
+            disposed = true;
+        };
+    }, [show]);
+
+    useEffect(() => {
+        if (!show) return;
+
+        previewAbortRef.current?.abort();
+        previewAbortRef.current = null;
+        setPreviewRows([]);
+        setPreviewing(false);
+        setLoading(false);
+        setErrorMessage('');
+        setSourceCategoryId(getActualProductCategoryGroupMostCommonCategoryId(selectedItems));
+        setTargetCategoryId('');
+    }, [selectionSignature, selectedItems, show]);
+
+    useEffect(() => () => {
+        previewAbortRef.current?.abort();
+    }, []);
+
+    const resetPreview = useCallback(() => {
+        previewAbortRef.current?.abort();
+        previewAbortRef.current = null;
+        setPreviewRows([]);
+        setPreviewing(false);
+        setLoading(false);
+        setErrorMessage('');
+    }, []);
+
+    const handleRunPreview = useCallback(async () => {
+        if (!canRunPreview) return;
+
+        previewAbortRef.current?.abort();
+        const controller = new AbortController();
+        previewAbortRef.current = controller;
+
+        setLoading(true);
+        setPreviewing(true);
+        setErrorMessage('');
+
+        try {
+            const targetProducts = await fetchActualProductCategoryGroupProducts(targetCategoryId, controller.signal);
+            const categoryWords = buildActualProductCategoryGroupWordSet(sourceCategory, targetCategory);
+            const context = { categoryWords, attributeById };
+            const nextRows = selectedItems.map((item, index) => {
+                const result = findActualProductCategoryGroupReplacement(item, targetProducts, context);
+
+                return {
+                    lineId: normalizeCanvasText(item?.line_id),
+                    lineNumber: getOrderLineDisplaySequence(item, index),
+                    item,
+                    replacementEntry: result.product,
+                    status: result.status,
+                    statusLabel: result.statusLabel,
+                    confidence: result.confidence,
+                    reasons: result.reasons,
+                    score: result.score,
+                    competingProduct: result.competingProduct,
+                };
+            });
+
+            setPreviewRows(nextRows);
+        } catch (error) {
+            if (error?.name !== 'CanceledError' && error?.name !== 'AbortError') {
+                console.error('Cannot preview category group replacement.', error);
+                setErrorMessage('Không tải được sản phẩm trong danh mục đích.');
+            }
+        } finally {
+            if (previewAbortRef.current === controller) {
+                previewAbortRef.current = null;
+            }
+            setLoading(false);
+        }
+    }, [
+        attributeById,
+        canRunPreview,
+        selectedItems,
+        sourceCategory,
+        targetCategory,
+        targetCategoryId,
+    ]);
+
+    const handleConfirm = useCallback(() => {
+        const rowsToApply = previewRows.filter((row) => row.replacementEntry);
+        if (rowsToApply.length === 0) return;
+
+        onApply?.(rowsToApply);
+        onClose?.();
+    }, [onApply, onClose, previewRows]);
+
+    if (!show) return null;
+
+    const statusClassMap = {
+        matched: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+        review: 'border-amber-200 bg-amber-50 text-amber-700',
+        missing: 'border-rose-200 bg-rose-50 text-rose-700',
+    };
+
+    const renderCategoryOptionLabel = (category) => (
+        `${'--'.repeat(Number(category?.depth) || 0)} ${category?.name || 'Danh mục'}`.trim()
+    );
+
+    return (
+        <div className="fixed inset-0 z-[2700] flex items-center justify-center p-4">
+            <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={onClose}
+                className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+            />
+            <motion.div
+                initial={{ opacity: 0, scale: 0.96, y: 18 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.96, y: 18 }}
+                className="relative flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
+                onClick={(event) => event.stopPropagation()}
+            >
+                <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-6 py-4">
+                    <div className="flex min-w-0 items-center gap-3">
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+                            <span className="material-symbols-outlined text-[20px]">sync_alt</span>
+                        </div>
+                        <div className="min-w-0">
+                            <h3 className="truncate text-lg font-black text-slate-800">Đổi nhóm sản phẩm khi nhặt hàng</h3>
+                            <p className="text-xs font-semibold text-slate-500">
+                                Đang chọn {selectedItems.length} sản phẩm - chỉ đổi mã sản phẩm, giữ nguyên giá chốt
+                            </p>
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        className="rounded-full p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+                    >
+                        <span className="material-symbols-outlined">close</span>
+                    </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-6">
+                    <div className="rounded-xl border border-primary/10 bg-primary/[0.02] p-4">
+                        <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_36px_minmax(0,1fr)] md:items-end">
+                            <div className="space-y-1.5">
+                                <label className="text-[13px] font-bold text-primary/70">Danh mục nguồn</label>
+                                <select
+                                    value={sourceCategoryId}
+                                    onChange={(event) => {
+                                        setSourceCategoryId(event.target.value);
+                                        resetPreview();
+                                    }}
+                                    disabled={categoriesLoading}
+                                    className="h-11 w-full rounded-lg border border-primary/10 bg-white px-3 text-sm font-semibold text-primary shadow-sm transition-all focus:border-primary/30 focus:outline-none disabled:opacity-50"
+                                >
+                                    <option value="">{categoriesLoading ? 'Đang tải danh mục...' : '-- Chọn danh mục nguồn --'}</option>
+                                    {categoryOptions.map((category) => (
+                                        <option key={`source-${category.id}`} value={category.id}>
+                                            {renderCategoryOptionLabel(category)}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div className="hidden h-11 items-center justify-center text-primary/35 md:flex">
+                                <span className="material-symbols-outlined">arrow_forward</span>
+                            </div>
+                            <div className="space-y-1.5">
+                                <label className="text-[13px] font-bold text-primary/70">Danh mục đích</label>
+                                <select
+                                    value={targetCategoryId}
+                                    onChange={(event) => {
+                                        setTargetCategoryId(event.target.value);
+                                        resetPreview();
+                                    }}
+                                    disabled={categoriesLoading}
+                                    className="h-11 w-full rounded-lg border border-primary/10 bg-white px-3 text-sm font-semibold text-primary shadow-sm transition-all focus:border-primary/30 focus:outline-none disabled:opacity-50"
+                                >
+                                    <option value="">{categoriesLoading ? 'Đang tải danh mục...' : '-- Chọn danh mục đích --'}</option>
+                                    {categoryOptions.map((category) => (
+                                        <option key={`target-${category.id}`} value={category.id}>
+                                            {renderCategoryOptionLabel(category)}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                        </div>
+
+                        {sourceMismatchCount > 0 ? (
+                            <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] font-semibold text-amber-700">
+                                Có {sourceMismatchCount} dòng không trùng danh mục nguồn đã chọn, hệ thống vẫn thử ghép theo tên lõi và thuộc tính.
+                            </div>
+                        ) : null}
+
+                        <button
+                            type="button"
+                            onClick={handleRunPreview}
+                            disabled={!canRunPreview}
+                            className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-primary py-2.5 text-sm font-bold text-white shadow-lg shadow-primary/20 transition-all hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            {loading ? (
+                                <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                            ) : (
+                                <span className="material-symbols-outlined text-[18px]">find_replace</span>
+                            )}
+                            {loading ? 'Đang tìm sản phẩm tương ứng...' : previewing ? 'Tìm lại sản phẩm tương ứng' : 'Tìm sản phẩm tương ứng'}
+                        </button>
+                    </div>
+
+                    {errorMessage ? (
+                        <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-[13px] font-bold text-rose-700">
+                            {errorMessage}
+                        </div>
+                    ) : null}
+
+                    {previewing ? (
+                        <div className="mt-5 overflow-hidden rounded-xl border border-slate-100 bg-white">
+                            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 bg-slate-50 px-4 py-3">
+                                <div className="text-sm font-black text-slate-800">Kết quả ghép tự động</div>
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                    <span className="rounded-full border border-emerald-200 bg-white px-2 py-0.5 text-[11px] font-black text-emerald-700">
+                                        {matchedCount}/{selectedItems.length} có thể đổi
+                                    </span>
+                                    {reviewCount > 0 ? (
+                                        <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-black text-amber-700">
+                                            {reviewCount} cần kiểm tra
+                                        </span>
+                                    ) : null}
+                                    {missingCount > 0 ? (
+                                        <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[11px] font-black text-rose-700">
+                                            {missingCount} chưa thấy
+                                        </span>
+                                    ) : null}
+                                </div>
+                            </div>
+
+                            <div className="hidden grid-cols-[minmax(0,1fr)_32px_minmax(0,1fr)_150px_140px] gap-3 border-b border-slate-100 bg-white px-4 py-3 text-[11px] font-black uppercase tracking-[0.08em] text-slate-400 md:grid">
+                                <div>Sản phẩm nguồn</div>
+                                <div />
+                                <div>Sản phẩm đích</div>
+                                <div>Trạng thái</div>
+                                <div>Giá chốt</div>
+                            </div>
+
+                            <div className="max-h-[46vh] overflow-y-auto">
+                                {loading && previewRows.length === 0 ? (
+                                    <div className="px-4 py-10 text-center text-[13px] font-semibold text-primary/45">
+                                        Đang đối chiếu sản phẩm trong danh mục đích...
+                                    </div>
+                                ) : previewRows.map((row) => {
+                                    const replacement = row.replacementEntry;
+                                    const statusClass = statusClassMap[row.status] || statusClassMap.missing;
+
+                                    return (
+                                        <div
+                                            key={row.lineId || `${row.lineNumber}-${getActualProductCategoryGroupDisplayName(row.item)}`}
+                                            className="grid gap-3 border-b border-slate-100 px-4 py-3 last:border-b-0 md:grid-cols-[minmax(0,1fr)_32px_minmax(0,1fr)_150px_140px] md:items-center"
+                                        >
+                                            <div className="min-w-0">
+                                                <div className="flex items-center gap-1.5">
+                                                    <span className="shrink-0 rounded-full bg-primary/[0.04] px-2 py-0.5 text-[10px] font-black text-primary/45">
+                                                        STT {row.lineNumber}
+                                                    </span>
+                                                    <span className="truncate text-[13px] font-bold text-primary">
+                                                        {getActualProductCategoryGroupDisplayName(row.item)}
+                                                    </span>
+                                                </div>
+                                                {getActualProductCategoryGroupDisplaySku(row.item) ? (
+                                                    <div className="mt-1 truncate text-[11px] font-semibold text-primary/35">
+                                                        {getActualProductCategoryGroupDisplaySku(row.item)}
+                                                    </div>
+                                                ) : null}
+                                            </div>
+
+                                            <div className="hidden justify-center md:flex">
+                                                <span className={`material-symbols-outlined text-[18px] ${replacement ? 'text-emerald-600' : 'text-rose-500'}`}>
+                                                    {replacement ? 'arrow_forward' : 'error'}
+                                                </span>
+                                            </div>
+
+                                            <div className="min-w-0 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 md:border-0 md:bg-transparent md:p-0">
+                                                {replacement ? (
+                                                    <>
+                                                        <div className="truncate text-[13px] font-bold text-slate-900">
+                                                            {getActualProductCategoryGroupDisplayName(replacement)}
+                                                        </div>
+                                                        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] font-bold text-slate-400">
+                                                            {getActualProductCategoryGroupDisplaySku(replacement) ? (
+                                                                <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5">
+                                                                    {getActualProductCategoryGroupDisplaySku(replacement)}
+                                                                </span>
+                                                            ) : null}
+                                                            {(row.reasons || []).map((reason) => (
+                                                                <span key={reason} className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-sky-700">
+                                                                    {reason}
+                                                                </span>
+                                                            ))}
+                                                        </div>
+                                                    </>
+                                                ) : (
+                                                    <div className="text-[12px] font-bold text-rose-600">
+                                                        Không có sản phẩm đủ giống trong danh mục đích
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            <div>
+                                                <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-black ${statusClass}`}>
+                                                    <span className="material-symbols-outlined text-[14px]">
+                                                        {row.status === 'matched' ? 'check_circle' : row.status === 'review' ? 'warning' : 'cancel'}
+                                                    </span>
+                                                    {row.statusLabel}
+                                                </span>
+                                            </div>
+
+                                            <div className="text-[12px] font-black text-sky-800">
+                                                Giữ {currencyFormatter(row.item?.price)}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="mt-5 rounded-xl border border-dashed border-primary/10 bg-primary/[0.02] px-5 py-8 text-center">
+                            <div className="text-[13px] font-bold text-primary/55">
+                                Chọn danh mục nguồn và danh mục đích rồi bấm tìm để xem preview.
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="mt-4 flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-[13px] font-semibold text-sky-800">
+                        <span className="material-symbols-outlined shrink-0 text-[18px]">info</span>
+                        <span>Không đổi số lượng, không đổi giá bán, không đổi ghi chú đơn hàng. Chỉ cập nhật sản phẩm thực gửi khi nhặt hàng.</span>
+                    </div>
+                </div>
+
+                <div className="flex items-center justify-between gap-3 border-t border-slate-100 bg-slate-50/70 px-6 py-4">
+                    <div className="text-[12px] font-semibold text-slate-500">
+                        {previewing && !loading ? (
+                            matchedCount > 0
+                                ? `Sẵn sàng đổi ${matchedCount}/${selectedItems.length} dòng.`
+                                : 'Chưa có dòng nào đủ điều kiện đổi.'
+                        ) : null}
+                    </div>
+                    <div className="flex items-center gap-3">
+                        <button
+                            type="button"
+                            onClick={onClose}
+                            className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-600 transition-all hover:bg-slate-50"
+                        >
+                            Hủy bỏ
+                        </button>
+                        <button
+                            type="button"
+                            onClick={handleConfirm}
+                            disabled={!canConfirm}
+                            className="rounded-lg bg-slate-900 px-5 py-2 text-sm font-bold text-white shadow-lg transition-all hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                            Xác nhận đổi nhóm {matchedCount > 0 ? `(${matchedCount})` : ''}
+                        </button>
+                    </div>
+                </div>
+            </motion.div>
+        </div>
+    );
+};
+
 const OrderAiLineReplacePanel = ({
     show,
     currentLine = null,
@@ -6263,26 +7174,6 @@ const OrderAiLineReplacePanel = ({
                             >
                                 <span className="material-symbols-outlined text-[15px]">inventory_2</span>
                                 Đổi khi nhặt hàng
-                            </button>
-                        </div>
-                    )}
-                    {isWarehousePickingTab && (
-                        <div className="mt-2 grid grid-cols-2 gap-1 rounded-sm border border-primary/10 bg-white p-1">
-                            <button
-                                type="button"
-                                onClick={() => onReplaceScopeChange?.(ACTUAL_PRODUCT_REPLACE_SCOPE_SINGLE)}
-                                className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-sm px-2 text-[10px] font-black uppercase tracking-[0.1em] transition-all ${!isGroupReplaceMode ? 'bg-sky-700 text-white shadow-sm' : 'text-primary/45 hover:bg-sky-50 hover:text-sky-700'}`}
-                            >
-                                <span className="material-symbols-outlined text-[14px]">looks_one</span>
-                                Đổi 1 dòng
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => onReplaceScopeChange?.(ACTUAL_PRODUCT_REPLACE_SCOPE_GROUP)}
-                                className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-sm px-2 text-[10px] font-black uppercase tracking-[0.1em] transition-all ${isGroupReplaceMode ? 'bg-emerald-600 text-white shadow-sm' : 'text-primary/45 hover:bg-emerald-50 hover:text-emerald-700'}`}
-                            >
-                                <span className="material-symbols-outlined text-[14px]">select_all</span>
-                                Đổi nhóm
                             </button>
                         </div>
                     )}
@@ -6702,6 +7593,7 @@ const OrderForm = () => {
     const leadId = queryParams.get('lead_id');
     const returnTo = queryParams.get('return_to');
     const requestedOrderKind = getNormalizedOrderKind(queryParams.get('kind'));
+    const shouldAutoOpenCategoryGroupBulkReplace = queryParams.get('bulk_replace') === 'category_group';
     const isEdit = !!id;
     const navigate = useNavigate();
     const { user } = useAuth();
@@ -6817,6 +7709,10 @@ const OrderForm = () => {
     const [selectedLineItemIds, setSelectedLineItemIds] = useState(new Set());
     const [deletedLineItemBatches, setDeletedLineItemBatches] = useState([]);
     const [showBulkReplaceModal, setShowBulkReplaceModal] = useState(false);
+    const [actualProductCategoryGroupReplaceModal, setActualProductCategoryGroupReplaceModal] = useState({
+        show: false,
+        lineIds: [],
+    });
     const [showPriceMultiplierModal, setShowPriceMultiplierModal] = useState(false);
     const [showColumnConfig, setShowColumnConfig] = useState(false);
     const [orderFormTableViewportWidth, setOrderFormTableViewportWidth] = useState(0);
@@ -6895,6 +7791,8 @@ const OrderForm = () => {
     const profitCenterManualOverrideRef = useRef(false);
     const lineItemSelectionAnchorRef = useRef('');
     const lineItemSelectionDragRef = useRef(null);
+    const autoOpenedCategoryGroupBulkReplaceRef = useRef('');
+
     useEffect(() => {
         setDeletedLineItemBatches([]);
     }, [duplicateFromId, id, leadId]);
@@ -7867,6 +8765,41 @@ const OrderForm = () => {
         status: 'new',
         province: ''
     });
+    useEffect(() => {
+        if (!shouldAutoOpenCategoryGroupBulkReplace || !isEdit || loading || showBulkReplaceModal) {
+            return undefined;
+        }
+
+        const lineIds = formData.items
+            .map((item) => normalizeCanvasText(item?.line_id))
+            .filter(Boolean);
+
+        if (lineIds.length === 0) {
+            return undefined;
+        }
+
+        const autoOpenKey = `${id || 'new'}:${location.search}`;
+        if (autoOpenedCategoryGroupBulkReplaceRef.current === autoOpenKey) {
+            return undefined;
+        }
+
+        autoOpenedCategoryGroupBulkReplaceRef.current = autoOpenKey;
+        const timeoutId = window.setTimeout(() => {
+            lineItemSelectionAnchorRef.current = lineIds[0] || '';
+            setSelectedLineItemIds(new Set(lineIds));
+            setShowBulkReplaceModal(true);
+        }, 0);
+
+        return () => window.clearTimeout(timeoutId);
+    }, [
+        formData.items,
+        id,
+        isEdit,
+        loading,
+        location.search,
+        shouldAutoOpenCategoryGroupBulkReplace,
+        showBulkReplaceModal,
+    ]);
     const [discountInputMode, setDiscountInputMode] = useState(DISCOUNT_INPUT_MODE_AMOUNT);
     const [discountInputValue, setDiscountInputValue] = useState(() => formatSignedMoneyInputValue(0));
     const discountInputRef = useRef(null);
@@ -8943,40 +9876,82 @@ const OrderForm = () => {
         }
         setOrderAiReplaceGroupTargetEntry(null);
     }, []);
+    const closeActualProductCategoryGroupReplaceModal = useCallback(() => {
+        setActualProductCategoryGroupReplaceModal({
+            show: false,
+            lineIds: [],
+        });
+    }, []);
+    const openActualProductCategoryGroupReplaceModal = useCallback((lineIds = []) => {
+        const normalizedLineIds = Array.from(new Set(
+            (Array.isArray(lineIds) ? lineIds : Array.from(lineIds || []))
+                .map(normalizeCanvasText)
+                .filter(Boolean)
+        ));
+
+        if (normalizedLineIds.length === 0) {
+            showTransientNotification('error', 'Chọn ít nhất 1 dòng sản phẩm để đổi nhóm khi nhặt hàng.');
+            return false;
+        }
+
+        setActualProductCategoryGroupReplaceModal({
+            show: true,
+            lineIds: normalizedLineIds,
+        });
+        return true;
+    }, [showTransientNotification]);
     const handleOrderAiReplaceScopeChange = useCallback((scope) => {
         const nextScope = scope === ACTUAL_PRODUCT_REPLACE_SCOPE_GROUP
             ? ACTUAL_PRODUCT_REPLACE_SCOPE_GROUP
             : ACTUAL_PRODUCT_REPLACE_SCOPE_SINGLE;
 
-        setOrderAiReplaceScope(nextScope);
         setOrderAiReplaceGroupTargetEntry(null);
 
         if (nextScope === ACTUAL_PRODUCT_REPLACE_SCOPE_GROUP) {
-            setOrderAiReplaceActiveTab(ACTUAL_PRODUCT_PICKER_TAB_WAREHOUSE);
-            setOrderAiReplaceGroupLineIds((prev) => (
-                prev.size > 0
-                    ? prev
-                    : buildDefaultActualProductReplaceGroupLineIds(formData.items, orderAiReplaceLineId, selectedLineItemIds)
-            ));
+            const lineIds = orderAiReplaceGroupLineIds.size > 0
+                ? orderAiReplaceGroupLineIds
+                : buildDefaultActualProductReplaceGroupLineIds(formData.items, orderAiReplaceLineId, selectedLineItemIds);
+            if (openActualProductCategoryGroupReplaceModal(lineIds)) {
+                closeOrderAiReplacePicker();
+            }
+            return;
         }
-    }, [formData.items, orderAiReplaceLineId, selectedLineItemIds]);
+
+        setOrderAiReplaceScope(ACTUAL_PRODUCT_REPLACE_SCOPE_SINGLE);
+    }, [
+        closeOrderAiReplacePicker,
+        formData.items,
+        openActualProductCategoryGroupReplaceModal,
+        orderAiReplaceGroupLineIds,
+        orderAiReplaceLineId,
+        selectedLineItemIds,
+    ]);
     const handleActualProductPickerScopeChange = useCallback((scope) => {
         const nextScope = scope === ACTUAL_PRODUCT_REPLACE_SCOPE_GROUP
             ? ACTUAL_PRODUCT_REPLACE_SCOPE_GROUP
             : ACTUAL_PRODUCT_REPLACE_SCOPE_SINGLE;
 
-        setActualProductPickerScope(nextScope);
         setActualProductPickerGroupTargetEntry(null);
 
         if (nextScope === ACTUAL_PRODUCT_REPLACE_SCOPE_GROUP) {
-            setActualProductPickerActiveTab(ACTUAL_PRODUCT_PICKER_TAB_WAREHOUSE);
-            setActualProductPickerGroupLineIds((prev) => (
-                prev.size > 0
-                    ? prev
-                    : buildDefaultActualProductReplaceGroupLineIds(formData.items, actualProductPickerLineId, selectedLineItemIds)
-            ));
+            const lineIds = actualProductPickerGroupLineIds.size > 0
+                ? actualProductPickerGroupLineIds
+                : buildDefaultActualProductReplaceGroupLineIds(formData.items, actualProductPickerLineId, selectedLineItemIds);
+            if (openActualProductCategoryGroupReplaceModal(lineIds)) {
+                closeActualProductPicker();
+            }
+            return;
         }
-    }, [actualProductPickerLineId, formData.items, selectedLineItemIds]);
+
+        setActualProductPickerScope(ACTUAL_PRODUCT_REPLACE_SCOPE_SINGLE);
+    }, [
+        actualProductPickerGroupLineIds,
+        actualProductPickerLineId,
+        closeActualProductPicker,
+        formData.items,
+        openActualProductCategoryGroupReplaceModal,
+        selectedLineItemIds,
+    ]);
     const handleToggleOrderAiReplaceGroupLine = useCallback((lineId) => {
         const normalizedLineId = normalizeCanvasText(lineId);
         if (!normalizedLineId) return;
@@ -9592,6 +10567,30 @@ const OrderForm = () => {
             successMessage: `Đã gán sản phẩm thực gửi theo nhóm cho ${actualProductPickerGroupPreview.length} dòng.`,
         });
     }, [actualProductPickerGroupPreview, closeActualProductPicker, handleApplyActualProductGroupReplacement]);
+    const handleApplyActualProductCategoryGroupReplacement = useCallback(async (previewRows = []) => {
+        const mappedRows = (Array.isArray(previewRows) ? previewRows : [])
+            .map((row) => {
+                const replacementEntry = normalizeProductPickerEntry(row?.replacementEntry);
+                const replacementLine = replacementEntry
+                    ? buildOrderItemsFromSearchEntry(replacementEntry)[0] || null
+                    : null;
+
+                return {
+                    ...row,
+                    replacementEntry,
+                    replacementLine,
+                };
+            })
+            .filter((row) => row?.lineId && row?.replacementLine);
+
+        await handleApplyActualProductGroupReplacement(mappedRows, {
+            closePicker: closeActualProductCategoryGroupReplaceModal,
+            successMessage: `Đã đổi nhóm khi nhặt hàng cho ${mappedRows.length} dòng.`,
+        });
+    }, [
+        closeActualProductCategoryGroupReplaceModal,
+        handleApplyActualProductGroupReplacement,
+    ]);
 
     const handleRunOrderAiPreview = useCallback(async () => {
         const preferredRuleKey = orderAiSelectedRuleKey.trim();
@@ -9990,9 +10989,84 @@ const OrderForm = () => {
         showTransientNotification('success', `Đã đổi thành công ${replacements.length} sản phẩm.`);
     }, [buildOrderItemsFromSearchEntry, showTransientNotification]);
 
+    const applyBulkCategoryGroupReplacements = useCallback((previewRows) => {
+        const replacements = (Array.isArray(previewRows) ? previewRows : [])
+            .map((row) => ({
+                lineId: normalizeCanvasText(row?.lineId),
+                product: normalizeProductPickerEntry(row?.replacementEntry),
+            }))
+            .filter((row) => row.lineId && row.product);
+
+        if (replacements.length === 0) {
+            showTransientNotification('error', 'Chưa có sản phẩm nào đủ điều kiện đổi nhóm.');
+            return;
+        }
+
+        setFormData((prev) => {
+            const nextItems = [...prev.items];
+
+            replacements.forEach(({ lineId, product }) => {
+                const index = nextItems.findIndex((item) => normalizeCanvasText(item?.line_id) === lineId);
+                if (index === -1) return;
+
+                const originalItem = nextItems[index];
+                const enrichedProduct = { ...product };
+                if (!enrichedProduct.attributes_map && Array.isArray(enrichedProduct.attribute_values)) {
+                    const attrMap = {};
+                    enrichedProduct.attribute_values.forEach((attributeValue) => {
+                        if (attributeValue?.attribute_id != null && attributeValue?.value != null) {
+                            attrMap[String(attributeValue.attribute_id)] = attributeValue.value;
+                        }
+                    });
+                    enrichedProduct.attributes_map = attrMap;
+                }
+
+                const parentId = Number(enrichedProduct.parent_product_id) || 0;
+                if (parentId > 0 && !enrichedProduct.entry_kind) {
+                    enrichedProduct.entry_kind = SEARCH_ENTRY_VARIATION;
+                    enrichedProduct.parent_product_id = parentId;
+                }
+
+                const addition = buildOrderItemsFromSearchEntry(enrichedProduct)[0];
+                if (!addition) return;
+
+                nextItems[index] = createOrderLineItem({
+                    ...addition,
+                    line_id: originalItem.line_id,
+                    order_item_id: originalItem.order_item_id,
+                    quantity: originalItem.quantity,
+                    price: originalItem.price,
+                    notes: originalItem.notes,
+                    sort_order: originalItem.sort_order,
+                    replaced_from_name: originalItem.name,
+                    ai_meta: mergeOrderAiItemMeta(originalItem.ai_meta, addition.ai_meta),
+                });
+            });
+
+            return {
+                ...prev,
+                items: applySequentialOrderLineSortOrder(nextItems),
+                cost_total: calculateItemsCostTotal(nextItems),
+            };
+        });
+
+        setSelectedLineItemIds(new Set());
+        showTransientNotification('success', `Đã đổi nhóm ${replacements.length} sản phẩm và giữ nguyên giá chốt.`);
+    }, [buildOrderItemsFromSearchEntry, showTransientNotification]);
+
     const selectedOrderLineItems = useMemo(
         () => formData.items.filter((item) => selectedLineItemIds.has(normalizeCanvasText(item?.line_id))),
         [formData.items, selectedLineItemIds]
+    );
+    const actualProductCategoryGroupReplaceLineIdSet = useMemo(() => new Set(
+        (Array.isArray(actualProductCategoryGroupReplaceModal.lineIds)
+            ? actualProductCategoryGroupReplaceModal.lineIds
+            : []
+        ).map(normalizeCanvasText).filter(Boolean)
+    ), [actualProductCategoryGroupReplaceModal.lineIds]);
+    const actualProductCategoryGroupReplaceItems = useMemo(
+        () => formData.items.filter((item) => actualProductCategoryGroupReplaceLineIdSet.has(normalizeCanvasText(item?.line_id))),
+        [actualProductCategoryGroupReplaceLineIdSet, formData.items]
     );
     const isAllLineItemsSelected = formData.items.length > 0 && selectedOrderLineItems.length === formData.items.length;
     const hasAnyLineItemSelected = selectedOrderLineItems.length > 0;
@@ -19140,6 +20214,15 @@ const OrderForm = () => {
                 selectedItems={selectedOrderLineItems}
                 attributes={productQuickFilterAttributes}
                 onApply={applyBulkReplacements}
+                onApplyCategoryGroup={applyBulkCategoryGroupReplacements}
+                currencyFormatter={formatQuoteMoney}
+            />
+            <ActualProductCategoryGroupReplaceModal
+                show={actualProductCategoryGroupReplaceModal.show}
+                onClose={closeActualProductCategoryGroupReplaceModal}
+                selectedItems={actualProductCategoryGroupReplaceItems}
+                attributes={productQuickFilterAttributes}
+                onApply={handleApplyActualProductCategoryGroupReplacement}
                 currencyFormatter={formatQuoteMoney}
             />
             <OrderPriceMultiplierModal

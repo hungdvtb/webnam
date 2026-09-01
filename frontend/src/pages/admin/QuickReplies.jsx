@@ -60,6 +60,7 @@ const normalizeZaloTarget = (value) => (String(value || '').trim().toLowerCase()
 const sidebarTitleForTarget = (value) => `${SIDEBAR_BASE_TITLE} ${normalizeZaloTarget(value) === 'web' ? 'Web' : 'PC'}`;
 const sidebarWindowNameForTarget = (value) => `quick-reply-zalo-sidebar-${normalizeZaloTarget(value)}`;
 const sidebarBrowserKeywordsForTarget = (value) => [sidebarTitleForTarget(value)];
+const ZALO_WEB_URL = 'https://chat.zalo.me/';
 
 const readInitialZaloTarget = () => {
     if (typeof window === 'undefined') {
@@ -425,6 +426,65 @@ const sidebarWindowMetrics = () => {
         top,
     };
 };
+
+const zaloWebWindowMetrics = (sidebarMetrics) => {
+    const screenRef = window.screen || {};
+    const left = Number(screenRef.availLeft || 0);
+    const top = Number(screenRef.availTop || 0);
+    const availableWidth = Number(screenRef.availWidth || window.outerWidth || 1440);
+    const availableHeight = Number(screenRef.availHeight || window.outerHeight || 900);
+    const width = Math.max(640, availableWidth - Number(sidebarMetrics?.width || 420));
+
+    return {
+        width,
+        height: availableHeight,
+        left,
+        top,
+    };
+};
+
+const isLocalWindowControlHost = () => {
+    if (typeof window === 'undefined') {
+        return false;
+    }
+
+    const hostname = String(window.location.hostname || '').toLowerCase();
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
+};
+
+const shouldUseFrontendOnlySidebarDock = (target) => ['pc', 'web'].includes(normalizeZaloTarget(target)) && !isLocalWindowControlHost();
+
+const openZaloWebChatWindow = (sidebarMetrics) => {
+    const metrics = zaloWebWindowMetrics(sidebarMetrics);
+    const features = [
+        'popup=yes',
+        'toolbar=yes',
+        'location=yes',
+        'menubar=no',
+        'status=no',
+        `width=${metrics.width}`,
+        `height=${metrics.height}`,
+        `left=${metrics.left}`,
+        `top=${metrics.top}`,
+        'resizable=yes',
+        'scrollbars=yes',
+    ].join(',');
+    const zaloWindow = window.open(ZALO_WEB_URL, 'quick-reply-zalo-web-chat', features);
+
+    if (zaloWindow) {
+        try {
+            zaloWindow.resizeTo(metrics.width, metrics.height);
+            zaloWindow.moveTo(metrics.left, metrics.top);
+            zaloWindow.focus();
+        } catch {
+            // Browsers can limit window positioning; opening the Zalo tab is still useful.
+        }
+    }
+
+    return zaloWindow;
+};
+
+const isWindowsBackendOnlyMessage = (message) => String(message || '').includes('backend đang chạy trên Windows');
 
 const sleep = (delay) => new Promise((resolve) => window.setTimeout(resolve, delay));
 
@@ -2110,6 +2170,8 @@ function QuickReplies() {
         const targetOption = ZALO_TARGET_OPTIONS.find((option) => option.value === panelTarget) || ZALO_TARGET_OPTIONS[0];
         const targetLabel = targetOption.label;
         const targetAppName = panelTarget === 'web' ? 'Zalo Web Chrome' : 'Zalo Desktop';
+        const frontendOnlySidebarDock = shouldUseFrontendOnlySidebarDock(panelTarget);
+        const browserOnlyWebDock = frontendOnlySidebarDock && panelTarget === 'web';
         const metrics = sidebarWindowMetrics();
         const sidebarUrl = new URL('/admin/quick-replies', window.location.origin);
         sidebarUrl.searchParams.set('mode', 'zalo-sidebar');
@@ -2140,6 +2202,7 @@ function QuickReplies() {
                 'scrollbars=yes',
             ].join(',');
             const sidebarWindow = window.open(sidebarUrl.toString(), sidebarWindowNameForTarget(panelTarget), popupFeatures);
+            const zaloWebWindow = browserOnlyWebDock ? openZaloWebChatWindow(metrics) : null;
             let sidebarReady = false;
             if (sidebarWindow) {
                 sidebarWindowsRef.current[panelTarget] = sidebarWindow;
@@ -2165,16 +2228,49 @@ function QuickReplies() {
                 throw new Error('Panel trả lời nhanh chưa tải xong. Mình đã thử nạp lại cửa sổ panel, bạn bấm Panel phải lần nữa nếu vẫn thấy trắng.');
             }
 
-            const response = await quickReplyApi.splitZalo({
-                mode: 'sidebar',
-                sidebar_width: metrics.width,
-                sidebar_url: sidebarWindow ? '' : sidebarUrl.toString(),
-                require_browser: false,
-                manage_browser: !sidebarWindow,
-                browser_window_keywords: sidebarBrowserKeywordsForTarget(panelTarget),
-                zalo_target: panelTarget,
-                gap: 0,
-            });
+            if (frontendOnlySidebarDock) {
+                if (!sidebarWindow) {
+                    throw new Error('Chrome đang chặn popup panel trả lời nhanh. Bật cho phép popup cho trang này rồi bấm Panel phải lại.');
+                }
+
+                if (browserOnlyWebDock) {
+                    setMessage(zaloWebWindow
+                        ? 'Đã mở Zalo Web bên trái và panel Web bên phải. Mở đúng chat khách trong cửa sổ Zalo Web rồi gửi.'
+                        : 'Đã mở panel Web. Nếu chưa thấy Zalo Web bên trái, bật cho phép popup hoặc mở chat.zalo.me thủ công.');
+                } else {
+                    setMessage('Đã mở panel PC bên phải. Bản web không tự kéo được Zalo PC; kéo Zalo app sang trái rồi gửi như bình thường.');
+                }
+                return;
+            }
+
+            let response;
+            try {
+                response = await quickReplyApi.splitZalo({
+                    mode: 'sidebar',
+                    sidebar_width: metrics.width,
+                    sidebar_url: sidebarWindow ? '' : sidebarUrl.toString(),
+                    require_browser: false,
+                    manage_browser: !sidebarWindow,
+                    browser_window_keywords: sidebarBrowserKeywordsForTarget(panelTarget),
+                    zalo_target: panelTarget,
+                    gap: 0,
+                });
+            } catch (splitErr) {
+                const splitMessage = await apiErrorMessage(splitErr, `Không mở được panel ${targetLabel} bên phải. Hãy mở ${targetAppName} rồi thử lại.`);
+                if (isWindowsBackendOnlyMessage(splitMessage)) {
+                    if (panelTarget === 'web') {
+                        const fallbackZaloWindow = openZaloWebChatWindow(metrics);
+                        setMessage(fallbackZaloWindow
+                            ? 'Đã mở panel Web và Zalo Web. Backend hiện không chạy trên Windows nên trình duyệt tự mở cửa sổ Zalo Web thay cho chia màn hình tự động.'
+                            : 'Đã mở panel Web. Backend hiện không chạy trên Windows; nếu chưa thấy Zalo Web bên trái, bật popup hoặc mở chat.zalo.me thủ công.');
+                    } else {
+                        setMessage('Đã mở panel PC bên phải. Backend hiện không chạy trên Windows nên không tự kéo được Zalo PC; kéo Zalo app sang trái rồi gửi như bình thường.');
+                    }
+                    return;
+                }
+                throw new Error(splitMessage);
+            }
+
             const result = response?.data?.result || {};
             if (!sidebarWindow && !result.browser_found) {
                 setMessage(`Đã đặt ${targetLabel} bên trái. Nếu panel chưa hiện, bật cho phép popup rồi bấm Panel phải lại.`);

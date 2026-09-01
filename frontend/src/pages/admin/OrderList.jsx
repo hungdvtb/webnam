@@ -1791,46 +1791,24 @@ const WarehousePickingReplacementModal = ({
                             </div>
                             <div className="divide-y divide-primary/10">
                                 {visibleRows.map((row) => {
-                                    const rowChanged = !isWarehousePickingRowUsingOriginal(row);
-                                    const showActualPicker = rowChanged || editingRowIds.has(row.row_id);
-
                                     return (
-                                        <div key={row.row_id} className={`grid grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] items-center bg-white ${showActualPicker ? 'min-h-[92px]' : 'min-h-[72px]'}`}>
+                                        <div key={row.row_id} className="grid min-h-[92px] grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] items-center bg-white">
                                             <div className="flex min-w-0 flex-col justify-center border-r border-primary/10 px-5 py-4">
                                                 <div className="flex flex-wrap items-center gap-1.5">
                                                     <span className="rounded-sm border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-black text-sky-700">STT {row.line_number}</span>
                                                     <span className="rounded-sm border border-orange-200 bg-orange-50 px-2 py-0.5 text-[11px] font-black text-orange-700">{formatOrderItemQuantity(row.quantity)}x</span>
                                                 </div>
-                                                <div className="mt-2 flex items-center gap-2">
-                                                    <div className="min-w-0 flex-1 truncate text-[14px] font-black text-primary" title={row.original?.name}>
-                                                        {row.original?.name}
-                                                    </div>
-                                                    {!showActualPicker ? (
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => openRowPicker(row.row_id)}
-                                                            disabled={saving}
-                                                            className="inline-flex h-8 shrink-0 items-center justify-center gap-1 rounded-sm border border-emerald-200 bg-emerald-50 px-2.5 text-[11px] font-black text-emerald-700 transition-all hover:border-emerald-300 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
-                                                            title="Đổi hàng thực nhặt"
-                                                        >
-                                                            <span className="material-symbols-outlined text-[14px]">swap_horiz</span>
-                                                            Đổi
-                                                        </button>
-                                                    ) : null}
-                                                </div>
+                                                <div className="mt-2 truncate text-[14px] font-black text-primary" title={row.original?.name}>{row.original?.name}</div>
                                                 {row.original?.sku ? (
                                                     <div className="mt-1 truncate text-[12px] font-black text-primary/35" title={row.original.sku}>{row.original.sku}</div>
                                                 ) : null}
                                             </div>
                                             <div className="flex min-w-0 items-center px-5 py-4">
-                                                {showActualPicker ? (
-                                                    <WarehousePickingCandidateCombobox
-                                                        row={row}
-                                                        saving={saving}
-                                                        onSelectCandidate={handleSelectCandidate}
-                                                        autoOpenToken={rowPickerOpenTokens[row.row_id] || 0}
-                                                    />
-                                                ) : null}
+                                                <WarehousePickingCandidateCombobox
+                                                    row={row}
+                                                    saving={saving}
+                                                    onSelectCandidate={onSelectCandidate}
+                                                />
                                             </div>
                                         </div>
                                     );
@@ -6537,10 +6515,15 @@ const OrderList = () => {
 
     const openOrderEditor = useCallback((orderId, options = {}) => {
         const returnTo = options.returnTo || currentListUrl;
+        const params = new URLSearchParams();
+        params.set('return_to', returnTo);
+        if (options.bulkReplaceMode) {
+            params.set('bulk_replace', options.bulkReplaceMode);
+        }
 
         warmOrderEditor(orderId);
         persistCurrentOrderListState();
-        navigate(`/admin/orders/edit/${orderId}?return_to=${encodeURIComponent(returnTo)}`);
+        navigate(`/admin/orders/edit/${orderId}?${params.toString()}`);
     }, [currentListUrl, navigate, persistCurrentOrderListState, warmOrderEditor]);
 
     const handleBulkDelete = async () => {
@@ -8179,7 +8162,7 @@ const OrderList = () => {
                                             </div>
                                         )}
 
-                                        <div className="mt-4 flex items-center gap-2">
+                                        <div className={`mt-4 grid gap-2 ${isTrashView ? 'grid-cols-1' : 'grid-cols-3'}`}>
                                             {!isTrashView && (
                                                 <button
                                                     type="button"
@@ -8187,10 +8170,25 @@ const OrderList = () => {
                                                         event.stopPropagation();
                                                         openOrderEditor(o.id);
                                                     }}
-                                                    className="inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-[16px] bg-primary px-4 text-[12px] font-black uppercase tracking-[0.12em] text-white transition-all hover:bg-primary/90"
+                                                    title={isDraftRow ? 'Mở nháp' : 'Mở đơn'}
+                                                    aria-label={isDraftRow ? 'Mở nháp' : 'Mở đơn'}
+                                                    className="inline-flex min-h-[44px] w-full items-center justify-center rounded-[16px] bg-primary px-2 text-white transition-all hover:bg-primary/90"
                                                 >
                                                     <span className="material-symbols-outlined text-[18px]">{isDraftRow ? 'edit_note' : 'open_in_new'}</span>
-                                                    {isDraftRow ? 'Mở nháp' : 'Mở đơn'}
+                                                </button>
+                                            )}
+                                            {!isTrashView && (
+                                                <button
+                                                    type="button"
+                                                    onClick={(event) => {
+                                                        event.stopPropagation();
+                                                        openOrderEditor(o.id, { bulkReplaceMode: 'category_group' });
+                                                    }}
+                                                    title="Đổi nhóm theo danh mục"
+                                                    aria-label="Đổi nhóm theo danh mục"
+                                                    className="inline-flex min-h-[44px] w-full items-center justify-center rounded-[16px] border border-sky-200 bg-sky-50 px-2 text-sky-700 transition-all hover:bg-sky-600 hover:text-white"
+                                                >
+                                                    <span className="material-symbols-outlined text-[18px]">category</span>
                                                 </button>
                                             )}
                                             <button
@@ -8200,7 +8198,9 @@ const OrderList = () => {
                                                     openWarehousePickingReplacementModal([o.id]);
                                                 }}
                                                 disabled={warehousePickingReplacementLoading || warehousePickingReplacementSaving}
-                                                className={`inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-[16px] border px-3 text-[10px] font-black uppercase leading-tight tracking-[0.08em] transition-all ${
+                                                title="Đổi khi nhặt hàng"
+                                                aria-label="Đổi khi nhặt hàng"
+                                                className={`inline-flex min-h-[44px] w-full items-center justify-center rounded-[16px] border px-2 transition-all ${
                                                     !warehousePickingReplacementLoading && !warehousePickingReplacementSaving
                                                         ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-600 hover:text-white'
                                                         : 'border-primary/10 bg-white text-primary/30'
@@ -8209,7 +8209,6 @@ const OrderList = () => {
                                                 <span className={`material-symbols-outlined text-[18px] ${warehousePickingReplacementLoading ? 'animate-refresh-spin' : ''}`}>
                                                     {warehousePickingReplacementLoading ? 'progress_activity' : 'inventory_2'}
                                                 </span>
-                                                Đổi khi nhặt hàng
                                             </button>
                                         </div>
                                     </div>

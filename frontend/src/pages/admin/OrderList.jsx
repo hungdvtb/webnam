@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { orderApi, productApi, productReplacementApi, shipmentApi, warehouseApi } from '../../services/api';
+import { categoryApi, orderApi, productApi, productReplacementApi, shipmentApi, warehouseApi } from '../../services/api';
 import { useNavigate, useLocation } from 'react-router-dom';
 import AccountSelector from '../../components/AccountSelector';
 import { useAuth } from '../../context/AuthContext';
@@ -960,6 +960,10 @@ const buildWarehousePickingOriginalCandidate = (item) => normalizeWarehousePicki
     id: Number(item?.product_id) || 0,
     name: getWarehousePickingSourceName(item),
     sku: getWarehousePickingSourceSku(item),
+    category_id: item?.category_id ?? item?.product?.category_id ?? item?.product_category_id,
+    product_category_id: item?.product_category_id ?? item?.product?.category_id ?? item?.category_id,
+    attributes_map: item?.attributes_map ?? item?.product?.attributes_map ?? item?.attributes ?? item?.product?.attributes,
+    attribute_values: item?.attribute_values ?? item?.product?.attribute_values,
     cost_price: item?.cost_price ?? item?.product?.cost_price ?? item?.product?.expected_cost,
     price: item?.price,
     available_to_sell: item?.product?.available_to_sell ?? item?.product?.stock_quantity ?? item?.product?.computed_stock,
@@ -1030,6 +1034,531 @@ const EMPTY_WAREHOUSE_PICKING_DECLARATION_PROMPT = {
     submitting: false,
 };
 const WAREHOUSE_PICKING_REPLACEMENT_HISTORY_KEY = '__warehousePickingReplacementOpen';
+const WAREHOUSE_PICKING_REPLACEMENT_TAB_LINE = 'line';
+const WAREHOUSE_PICKING_REPLACEMENT_TAB_CATEGORY_GROUP = 'category_group';
+const WAREHOUSE_PICKING_CATEGORY_GROUP_MAX_PRODUCT_PAGES = 8;
+const WAREHOUSE_PICKING_CATEGORY_GROUP_STYLE_WORDS = new Set([
+    'men', 'mau', 'mau1', 'mau2', 'lam', 'ran', 'vang', 'anh', 'kim',
+    'xanh', 'do', 'nau', 'trang', 'den', 'hong', 'ngoc', 'hoang', 'thach',
+]);
+const WAREHOUSE_PICKING_CATEGORY_GROUP_GENERIC_WORDS = new Set([
+    'san', 'pham', 'loai', 'kieu', 'mau', 'so', 'dong', 'hang', 'mac',
+    'dinh', 'combo', 'set', 'bo', 'cai', 'chiec', 'cao', 'thap', 'nho',
+    'lon', 'phi', 'ph', 'cm',
+]);
+const WAREHOUSE_PICKING_CATEGORY_GROUP_TYPE_PHRASES = [
+    ['chan de bat huong', 'Đế bát hương', 'de_bat_huong'],
+    ['de bat huong', 'Đế bát hương', 'de_bat_huong'],
+    ['bat huong', 'Bát hương', 'bat_huong'],
+    ['bat tra sam', 'Bát trà sâm', 'bat_tra_sam'],
+    ['bat sam', 'Bát sâm', 'bat_sam'],
+    ['bat com', 'Bát cơm', 'bat_com'],
+    ['am tra', 'Ấm trà', 'am_tra'],
+    ['am chen', 'Ấm chén', 'am_chen'],
+    ['lo huong', 'Lọ hương', 'lo_huong'],
+    ['ong huong', 'Ống hương', 'ong_huong'],
+    ['mam bong', 'Mâm bồng', 'mam_bong'],
+    ['mam ngu qua', 'Mâm ngũ quả', 'mam_ngu_qua'],
+    ['ky ngai chen', 'Kỷ ngai chén', 'ky_ngai_chen'],
+    ['ky ngai', 'Kỷ ngai', 'ky_ngai'],
+    ['ngai chen', 'Ngai chén', 'ngai_chen'],
+    ['choe', 'Chóe', 'choe'],
+    ['den dau', 'Đèn', 'den'],
+    ['den', 'Đèn', 'den', true],
+    ['nam ruou', 'Nậm', 'nam'],
+    ['nam', 'Nậm', 'nam', true],
+    ['lo luong', 'Lọ lượn', 'lo_luong'],
+    ['lo hoa', 'Lọ hoa', 'lo_hoa'],
+    ['loc binh', 'Lộc bình', 'loc_binh'],
+    ['luc binh', 'Lục bình', 'luc_binh'],
+    ['dia cau', 'Đĩa', 'dia'],
+    ['dia', 'Đĩa', 'dia', true],
+    ['bo dua', 'Bộ đũa', 'bo_dua'],
+    ['chen', 'Chén', 'chen', true],
+    ['bat', 'Bát', 'bat', true],
+];
+
+const compactWarehousePickingGroupText = (value = '') => normalizeWarehouseReplacementText(value).replace(/\s+/g, '');
+
+const resolveWarehousePickingCategoryRows = (payload) => {
+    if (Array.isArray(payload)) return payload;
+    if (Array.isArray(payload?.data)) return payload.data;
+    if (Array.isArray(payload?.categories)) return payload.categories;
+    return [];
+};
+
+const flattenWarehousePickingCategoryOptions = (categories = [], depth = 0, ancestors = []) => {
+    const rows = [];
+
+    (Array.isArray(categories) ? categories : []).forEach((category) => {
+        if (!category || typeof category !== 'object') return;
+
+        const name = String(category?.name || '').trim();
+        const pathParts = [...ancestors, name].filter(Boolean);
+        rows.push({
+            ...category,
+            id: Number(category?.id) || category?.id,
+            depth,
+            name,
+            path: pathParts.join(' / '),
+        });
+        rows.push(...flattenWarehousePickingCategoryOptions(category?.children || [], depth + 1, pathParts));
+    });
+
+    return rows;
+};
+
+const buildWarehousePickingCategoryWordSet = (...categories) => {
+    const words = new Set();
+
+    categories.forEach((category) => {
+        [
+            category?.name,
+            category?.path,
+            category?.slug,
+        ].filter(Boolean).forEach((value) => {
+            normalizeWarehouseReplacementText(value)
+                .split(/\s+/)
+                .filter(Boolean)
+                .forEach((word) => {
+                    if (/^\d+$/.test(word) && Number(word) > 9) return;
+                    words.add(word);
+                });
+        });
+    });
+
+    return words;
+};
+
+const parseWarehousePickingGroupAttributeValues = (value) => {
+    if (Array.isArray(value)) {
+        return value.flatMap(parseWarehousePickingGroupAttributeValues);
+    }
+
+    if (value && typeof value === 'object') {
+        if (value.value !== undefined) return parseWarehousePickingGroupAttributeValues(value.value);
+        if (value.name !== undefined) return parseWarehousePickingGroupAttributeValues(value.name);
+        if (value.label !== undefined) return parseWarehousePickingGroupAttributeValues(value.label);
+
+        return Object.values(value).flatMap(parseWarehousePickingGroupAttributeValues);
+    }
+
+    return String(value ?? '')
+        .split(/[,\n|/]+/)
+        .map(normalizeWarehouseReplacementText)
+        .filter(Boolean);
+};
+
+const buildWarehousePickingGroupAttributeMap = (entry = {}) => {
+    const result = {};
+    const directMap = entry?.attributes_map
+        || entry?.attribute_map
+        || entry?.attributes
+        || entry?.product?.attributes_map
+        || entry?.product?.attribute_map
+        || entry?.product?.attributes
+        || {};
+
+    if (directMap && typeof directMap === 'object' && !Array.isArray(directMap)) {
+        Object.entries(directMap).forEach(([attributeId, value]) => {
+            const values = parseWarehousePickingGroupAttributeValues(value);
+            if (values.length > 0) result[String(attributeId)] = values;
+        });
+    }
+
+    const attributeValues = Array.isArray(entry?.attribute_values)
+        ? entry.attribute_values
+        : (Array.isArray(entry?.product?.attribute_values) ? entry.product.attribute_values : []);
+    attributeValues.forEach((attributeValue) => {
+        const attributeId = attributeValue?.attribute_id ?? attributeValue?.id;
+        if (attributeId == null) return;
+
+        const values = parseWarehousePickingGroupAttributeValues(
+            attributeValue?.value ?? attributeValue?.name ?? attributeValue?.label
+        );
+        if (values.length > 0) result[String(attributeId)] = values;
+    });
+
+    return result;
+};
+
+const getWarehousePickingGroupCategoryId = (entry = {}) => String(
+    entry?.category_id
+    ?? entry?.product_category_id
+    ?? entry?.product?.category_id
+    ?? entry?.product?.product_category_id
+    ?? ''
+).trim();
+
+const extractWarehousePickingGroupType = (text = '') => {
+    const normalized = normalizeWarehouseReplacementText(text);
+    const matched = WAREHOUSE_PICKING_CATEGORY_GROUP_TYPE_PHRASES.find(([phrase, , , prefixOnly = false]) => {
+        const normalizedPhrase = normalizeWarehouseReplacementText(phrase);
+        if (!normalizedPhrase) return false;
+
+        const startsAsProductType = normalized === normalizedPhrase
+            || normalized.startsWith(normalizedPhrase + ' ')
+            || normalized.startsWith('bo ' + normalizedPhrase + ' ');
+
+        return prefixOnly
+            ? startsAsProductType
+            : startsAsProductType || normalized.includes(' ' + normalizedPhrase + ' ');
+    });
+
+    return matched
+        ? { key: matched[2] || normalizeWarehouseReplacementText(matched[0]).replace(/\s+/g, '_'), label: matched[1] }
+        : { key: '', label: '' };
+};
+
+const extractWarehousePickingGroupDimensions = (...values) => {
+    const dimensions = new Set();
+
+    values.forEach((value, valueIndex) => {
+        const normalized = normalizeWarehouseReplacementText(value);
+        if (!normalized) return;
+
+        let matched = null;
+        const phiPattern = /\b(?:phi|ph|p)\s*0*([0-9]{1,3})\b/g;
+        while ((matched = phiPattern.exec(normalized)) !== null) {
+            dimensions.add(`phi${Number(matched[1])}`);
+        }
+
+        const cmPattern = /\b0*([0-9]{1,3})\s*(?:cm|centimet)\b/g;
+        while ((matched = cmPattern.exec(normalized)) !== null) {
+            dimensions.add(`cm${Number(matched[1])}`);
+        }
+
+        const sizePattern = /\bs\s*0*([0-9]{1,2})\b/g;
+        while ((matched = sizePattern.exec(normalized)) !== null) {
+            dimensions.add(`s${Number(matched[1])}`);
+        }
+
+        const pairPattern = /\b0*([0-9]{1,3})\s*x\s*0*([0-9]{1,3})\b/g;
+        while ((matched = pairPattern.exec(normalized)) !== null) {
+            dimensions.add(`${Number(matched[1])}x${Number(matched[2])}`);
+        }
+
+        if (valueIndex === 0) {
+            const standaloneSizePattern = /\b0*([1-9][0-9])\b/g;
+            while ((matched = standaloneSizePattern.exec(normalized)) !== null) {
+                dimensions.add(`n${Number(matched[1])}`);
+            }
+        }
+    });
+
+    return Array.from(dimensions).sort();
+};
+
+const buildWarehousePickingGroupDimensionNumberKey = (dimensions = []) => Array.from(new Set(
+    (Array.isArray(dimensions) ? dimensions : [])
+        .map((dimension) => String(dimension).match(/[0-9]+/g)?.join('x') || '')
+        .filter(Boolean)
+)).sort((left, right) => Number(left.split('x')[0]) - Number(right.split('x')[0])).join('_');
+
+const stripWarehousePickingGroupWords = (value, categoryWords = new Set()) => (
+    normalizeWarehouseReplacementText(value)
+        .split(/\s+/)
+        .filter((word) => (
+            word
+            && !categoryWords.has(word)
+            && !WAREHOUSE_PICKING_CATEGORY_GROUP_STYLE_WORDS.has(word)
+            && !WAREHOUSE_PICKING_CATEGORY_GROUP_GENERIC_WORDS.has(word)
+            && !/^mau[0-9]+$/.test(word)
+        ))
+        .join(' ')
+);
+
+const buildWarehousePickingGroupIdentity = (entry, { categoryWords = new Set() } = {}) => {
+    const attributeMap = buildWarehousePickingGroupAttributeMap(entry);
+    const name = getWarehousePickingCandidateName(entry);
+    const sku = getWarehousePickingCandidateSku(entry);
+    const attributeText = Object.values(attributeMap).flat().join(' ');
+    const combinedText = [name, sku, attributeText].filter(Boolean).join(' ');
+    const strippedName = stripWarehousePickingGroupWords(name, categoryWords);
+    const strippedSku = stripWarehousePickingGroupWords(sku, categoryWords);
+    const type = extractWarehousePickingGroupType(combinedText);
+    const dimensions = extractWarehousePickingGroupDimensions(name, sku, attributeText);
+    const dimensionNumberKey = buildWarehousePickingGroupDimensionNumberKey(dimensions);
+    const coreTokens = Array.from(new Set(
+        strippedName
+            .split(/\s+/)
+            .filter((token) => token && !/^[0-9]+$/.test(token))
+    ));
+    const fallbackCore = coreTokens.slice(0, 5).join('_');
+    const primaryKey = [
+        type.key || fallbackCore,
+        dimensionNumberKey || compactWarehousePickingGroupText(strippedSku) || fallbackCore,
+    ].filter(Boolean).join('|');
+
+    return {
+        type,
+        dimensionNumberKey,
+        strippedCompactName: compactWarehousePickingGroupText(strippedName),
+        strippedCompactSku: compactWarehousePickingGroupText(strippedSku),
+        primaryKey,
+        attributeMap,
+        tokens: coreTokens,
+    };
+};
+
+const isWarehousePickingGroupStyleAttribute = (attribute) => {
+    const normalized = normalizeWarehouseReplacementText([
+        attribute?.name,
+        attribute?.code,
+    ].filter(Boolean).join(' '));
+
+    return [
+        'men',
+        'mau',
+        'color',
+        'glaze',
+        'hoa van',
+        'bo suu tap',
+        'dong mau',
+        'loai men',
+    ].some((keyword) => normalized.includes(keyword));
+};
+
+const warehousePickingGroupValuesIntersect = (left = [], right = []) => {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length === 0 || right.length === 0) {
+        return false;
+    }
+
+    const rightSet = new Set(right);
+    return left.some((value) => value && rightSet.has(value));
+};
+
+const scoreWarehousePickingGroupCandidate = (source, candidate, context = {}) => {
+    const sourceIdentity = buildWarehousePickingGroupIdentity(source, context);
+    const candidateIdentity = buildWarehousePickingGroupIdentity(candidate, context);
+    const attributeById = context.attributeById || {};
+    let score = 0;
+    const reasons = [];
+
+    if (
+        sourceIdentity.type.key
+        && candidateIdentity.type.key
+        && sourceIdentity.type.key !== candidateIdentity.type.key
+    ) {
+        return {
+            sourceIdentity,
+            candidateIdentity,
+            score: Number.NEGATIVE_INFINITY,
+            reasons: ['khác loại sản phẩm'],
+        };
+    }
+
+    if (sourceIdentity.primaryKey && sourceIdentity.primaryKey === candidateIdentity.primaryKey) {
+        score += 7000;
+        reasons.push('trùng loại + kích thước');
+    }
+
+    if (sourceIdentity.type.key && sourceIdentity.type.key === candidateIdentity.type.key) {
+        score += 2400;
+        reasons.push(sourceIdentity.type.label || 'trùng loại sản phẩm');
+    } else if (sourceIdentity.type.key || candidateIdentity.type.key) {
+        score -= 1800;
+    }
+
+    if (sourceIdentity.dimensionNumberKey) {
+        const sourceNumbers = sourceIdentity.dimensionNumberKey.split('_').filter(Boolean);
+        const candidateNumbers = new Set(candidateIdentity.dimensionNumberKey.split('_').filter(Boolean));
+        const matchedNumbers = sourceNumbers.filter((value) => candidateNumbers.has(value));
+        if (matchedNumbers.length === sourceNumbers.length) {
+            score += 2600;
+            reasons.push(`trùng size ${matchedNumbers.join(', ')}`);
+        } else if (matchedNumbers.length > 0) {
+            score += 900;
+            reasons.push(`gần đúng size ${matchedNumbers.join(', ')}`);
+        } else {
+            score -= 2400;
+        }
+    }
+
+    if (
+        sourceIdentity.strippedCompactSku
+        && candidateIdentity.strippedCompactSku
+        && sourceIdentity.strippedCompactSku === candidateIdentity.strippedCompactSku
+    ) {
+        score += 1800;
+        reasons.push('trùng mã lõi SKU');
+    }
+
+    if (
+        sourceIdentity.strippedCompactName
+        && candidateIdentity.strippedCompactName
+        && sourceIdentity.strippedCompactName === candidateIdentity.strippedCompactName
+    ) {
+        score += 1400;
+        reasons.push('trùng tên lõi');
+    }
+
+    Object.entries(sourceIdentity.attributeMap).forEach(([attributeId, sourceValues]) => {
+        const attribute = attributeById[String(attributeId)];
+        if (isWarehousePickingGroupStyleAttribute(attribute)) return;
+
+        const candidateValues = candidateIdentity.attributeMap[String(attributeId)];
+        if (!candidateValues || candidateValues.length === 0) return;
+
+        if (warehousePickingGroupValuesIntersect(sourceValues, candidateValues)) {
+            score += 600;
+        } else {
+            score -= 500;
+        }
+    });
+
+    if (sourceIdentity.tokens.length > 0 && candidateIdentity.tokens.length > 0) {
+        const candidateTokenSet = new Set(candidateIdentity.tokens);
+        const overlap = sourceIdentity.tokens.filter((token) => candidateTokenSet.has(token));
+        const ratio = overlap.length / sourceIdentity.tokens.length;
+        score += Math.round(ratio * 900);
+        if (ratio >= 0.8) {
+            reasons.push('tên lõi gần giống');
+        }
+    }
+
+    const sourceProductId = getWarehousePickingCandidateProductId(source);
+    const candidateProductId = getWarehousePickingCandidateProductId(candidate);
+    if (sourceProductId > 0 && sourceProductId === candidateProductId) {
+        score -= 5000;
+    }
+
+    return {
+        sourceIdentity,
+        candidateIdentity,
+        score,
+        reasons: Array.from(new Set(reasons)).slice(0, 3),
+    };
+};
+
+const isSelectableWarehousePickingGroupProduct = (product) => (
+    product
+    && normalizeWarehouseReplacementText(product?.type) !== 'configurable'
+    && normalizeWarehouseReplacementText(product?.type) !== 'variable'
+    && !product?.has_variations
+);
+
+const findWarehousePickingCategoryGroupReplacement = (source, candidates = [], context = {}) => {
+    const scored = (Array.isArray(candidates) ? candidates : [])
+        .filter(isSelectableWarehousePickingGroupProduct)
+        .map((candidate) => ({
+            product: candidate,
+            ...scoreWarehousePickingGroupCandidate(source, candidate, context),
+        }))
+        .sort((left, right) => right.score - left.score);
+
+    const best = scored[0] || null;
+    const second = scored[1] || null;
+    if (!best || best.score < 2200) {
+        return {
+            product: null,
+            status: 'missing',
+            statusLabel: 'Không tìm thấy',
+            confidence: 0,
+            reasons: [],
+            score: best?.score || 0,
+            competingProduct: second?.product || null,
+        };
+    }
+
+    const margin = best.score - (second?.score || 0);
+    const exactPrimaryKey = best.sourceIdentity.primaryKey
+        && best.sourceIdentity.primaryKey === best.candidateIdentity.primaryKey;
+    const highConfidence = best.score >= 7200 && exactPrimaryKey && margin >= 500;
+
+    return {
+        product: best.product,
+        status: highConfidence ? 'matched' : 'review',
+        statusLabel: highConfidence ? 'Tìm thấy chuẩn' : 'Cần kiểm tra',
+        confidence: highConfidence ? 95 : Math.max(55, Math.min(82, Math.round(best.score / 100))),
+        reasons: best.reasons,
+        score: best.score,
+        competingProduct: second?.product || null,
+    };
+};
+
+const getWarehousePickingCategoryGroupMostCommonCategoryId = (rows = []) => {
+    const counts = new Map();
+
+    (Array.isArray(rows) ? rows : []).forEach((row) => {
+        const categoryId = getWarehousePickingGroupCategoryId(row?.original);
+        if (!categoryId) return;
+        counts.set(categoryId, (counts.get(categoryId) || 0) + 1);
+    });
+
+    return Array.from(counts.entries())
+        .sort((left, right) => right[1] - left[1])
+        .map(([categoryId]) => categoryId)[0] || '';
+};
+
+const fetchWarehousePickingCategoryGroupProducts = async (categoryId, signal) => {
+    const rows = [];
+    let page = 1;
+    let lastPage = 1;
+
+    do {
+        const response = await productApi.getAll({
+            picker: 1,
+            replace_picker: 1,
+            allow_variants: 1,
+            category_id: categoryId,
+            per_page: 200,
+            page,
+            _warehouse_category_group_replace: `${Date.now()}-${page}`,
+        }, signal);
+        const payload = response.data || {};
+        const pageRows = Array.isArray(payload.data) ? payload.data : [];
+        rows.push(...pageRows.map((entry) => normalizeWarehousePickingCandidate(entry, {
+            is_manual_search_result: true,
+        })).filter(Boolean));
+        lastPage = Math.max(1, Number(payload.last_page || 1));
+        page += 1;
+    } while (page <= lastPage && page <= WAREHOUSE_PICKING_CATEGORY_GROUP_MAX_PRODUCT_PAGES);
+
+    return rows;
+};
+
+const applyWarehousePickingCategoryGroupPreviewRows = (rows = [], previewRows = []) => {
+    const replacementByRowId = new Map(
+        (Array.isArray(previewRows) ? previewRows : [])
+            .map((previewRow) => [
+                previewRow?.rowId,
+                normalizeWarehousePickingCandidate(previewRow?.replacementCandidate, {
+                    is_manual_search_result: true,
+                }),
+            ])
+            .filter(([, candidate]) => candidate?.key)
+    );
+
+    if (replacementByRowId.size === 0) return rows;
+
+    return (Array.isArray(rows) ? rows : []).map((row) => {
+        const replacementCandidate = replacementByRowId.get(row?.row_id);
+        if (!replacementCandidate?.key) return row;
+
+        return {
+            ...row,
+            candidates: mergeWarehousePickingCandidates(row?.candidates || [], [replacementCandidate]),
+            selected_key: replacementCandidate.key,
+        };
+    });
+};
+
+const cloneWarehousePickingReplacementRowSnapshot = (row = {}) => {
+    if (!row || typeof row !== 'object') {
+        return {};
+    }
+
+    if (typeof structuredClone === 'function') {
+        try {
+            return structuredClone(row);
+        } catch {
+            // Fall back for row snapshots that include non-cloneable fields.
+        }
+    }
+
+    return JSON.parse(JSON.stringify(row));
+};
 
 const getWarehousePickingDeclarationAskKey = (row, candidate) => {
     const sourceKey = row?.original_key || getWarehousePickingCandidateKey(row?.original);
@@ -1585,7 +2114,8 @@ const WarehousePickingCandidateCombobox = ({
 const WarehousePickingReplacementModal = ({
     open,
     orders = [],
-    rows,
+    rows = [],
+    attributes = [],
     loading,
     saving,
     searchTerm,
@@ -1593,7 +2123,13 @@ const WarehousePickingReplacementModal = ({
     onSelectCandidate,
     onClose,
     onSubmit,
+    onSubmitCategoryGroup,
+    categoryGroupUndoRows = [],
+    onRestoreCategoryGroupRow,
+    onRestoreAllCategoryGroupRows,
 }) => {
+    const [activeTab, setActiveTab] = useState(WAREHOUSE_PICKING_REPLACEMENT_TAB_LINE);
+    const isCategoryGroupTab = activeTab === WAREHOUSE_PICKING_REPLACEMENT_TAB_CATEGORY_GROUP;
     const normalizedSearch = normalizeWarehouseReplacementText(searchTerm);
     const visibleRows = useMemo(() => (
         normalizedSearch
@@ -1604,6 +2140,17 @@ const WarehousePickingReplacementModal = ({
         () => rows.filter((row) => !isWarehousePickingRowUsingOriginal(row)).length,
         [rows]
     );
+    const normalizedCategoryGroupUndoRows = Array.isArray(categoryGroupUndoRows) ? categoryGroupUndoRows : [];
+    const hasCategoryGroupUndoRows = normalizedCategoryGroupUndoRows.length > 0;
+    const [categoryGroupCategories, setCategoryGroupCategories] = useState([]);
+    const [categoryGroupCategoriesLoading, setCategoryGroupCategoriesLoading] = useState(false);
+    const [categoryGroupSourceId, setCategoryGroupSourceId] = useState('');
+    const [categoryGroupTargetId, setCategoryGroupTargetId] = useState('');
+    const [categoryGroupPreviewRows, setCategoryGroupPreviewRows] = useState([]);
+    const [categoryGroupPreviewing, setCategoryGroupPreviewing] = useState(false);
+    const [categoryGroupLoading, setCategoryGroupLoading] = useState(false);
+    const [categoryGroupError, setCategoryGroupError] = useState('');
+    const categoryGroupPreviewAbortRef = useRef(null);
     const [editingRowIds, setEditingRowIds] = useState(new Set());
     const [rowPickerOpenTokens, setRowPickerOpenTokens] = useState({});
     const orderCount = useMemo(
@@ -1623,6 +2170,74 @@ const WarehousePickingReplacementModal = ({
             })
             .filter(Boolean)
     ), [orders]);
+    const rowCategorySignature = useMemo(() => (
+        (Array.isArray(rows) ? rows : [])
+            .map((row) => [
+                row?.row_id,
+                row?.original_key,
+                getWarehousePickingGroupCategoryId(row?.original),
+                row?.original?.name,
+                row?.original?.sku,
+            ].filter(Boolean).join(':'))
+            .join('|')
+    ), [rows]);
+    const categoryGroupOptions = useMemo(
+        () => flattenWarehousePickingCategoryOptions(categoryGroupCategories),
+        [categoryGroupCategories]
+    );
+    const categoryGroupById = useMemo(() => {
+        const map = new Map();
+        categoryGroupOptions.forEach((category) => {
+            map.set(String(category.id), category);
+        });
+        return map;
+    }, [categoryGroupOptions]);
+    const categoryGroupSource = categoryGroupById.get(String(categoryGroupSourceId)) || null;
+    const categoryGroupTarget = categoryGroupById.get(String(categoryGroupTargetId)) || null;
+    const categoryGroupAttributeById = useMemo(() => {
+        const map = {};
+        (Array.isArray(attributes) ? attributes : []).forEach((attribute) => {
+            if (attribute?.id != null) map[String(attribute.id)] = attribute;
+        });
+        return map;
+    }, [attributes]);
+    const categoryGroupSourceRows = useMemo(() => (
+        (Array.isArray(rows) ? rows : []).filter((row) => (
+            categoryGroupSourceId
+                ? getWarehousePickingGroupCategoryId(row?.original) === String(categoryGroupSourceId)
+                : false
+        ))
+    ), [categoryGroupSourceId, rows]);
+    const categoryGroupMatchedCount = categoryGroupPreviewRows.filter((row) => row.replacementCandidate).length;
+    const categoryGroupReviewCount = categoryGroupPreviewRows.filter((row) => row.status === 'review').length;
+    const categoryGroupMissingCount = categoryGroupPreviewRows.filter((row) => row.status === 'missing').length;
+    const canRunCategoryGroupPreview = !loading
+        && !saving
+        && !categoryGroupLoading
+        && categoryGroupSourceRows.length > 0
+        && categoryGroupSourceId
+        && categoryGroupTargetId
+        && categoryGroupSourceId !== categoryGroupTargetId;
+    const canSubmitCategoryGroup = !loading
+        && !saving
+        && !categoryGroupLoading
+        && categoryGroupMatchedCount > 0;
+    const canSaveReplacements = !loading
+        && !saving
+        && rows.length > 0;
+
+    const resetCategoryGroupPreview = useCallback(() => {
+        categoryGroupPreviewAbortRef.current?.abort();
+        categoryGroupPreviewAbortRef.current = null;
+        setCategoryGroupPreviewRows([]);
+        setCategoryGroupPreviewing(false);
+        setCategoryGroupLoading(false);
+        setCategoryGroupError('');
+    }, []);
+
+    const renderCategoryGroupOptionLabel = useCallback((category) => (
+        `${'--'.repeat(Number(category?.depth) || 0)} ${category?.name || 'Danh mục'}`.trim()
+    ), []);
     const openRowPicker = useCallback((rowId) => {
         if (saving) return;
 
@@ -1656,9 +2271,120 @@ const WarehousePickingReplacementModal = ({
     }, [onSelectCandidate, rows]);
 
     useEffect(() => {
+        if (!open || !isCategoryGroupTab || categoryGroupCategories.length > 0) {
+            return undefined;
+        }
+
+        let disposed = false;
+        setCategoryGroupCategoriesLoading(true);
+
+        categoryApi.getAll()
+            .then((response) => {
+                if (disposed) return;
+                setCategoryGroupCategories(resolveWarehousePickingCategoryRows(response.data));
+            })
+            .catch((error) => {
+                if (disposed) return;
+                console.error('Cannot load warehouse picking categories.', error);
+                setCategoryGroupCategories([]);
+                setCategoryGroupError('Không tải được danh mục sản phẩm.');
+            })
+            .finally(() => {
+                if (!disposed) setCategoryGroupCategoriesLoading(false);
+            });
+
+        return () => {
+            disposed = true;
+        };
+    }, [categoryGroupCategories.length, isCategoryGroupTab, open]);
+
+    useEffect(() => {
+        if (!open) return;
+
+        setCategoryGroupSourceId(getWarehousePickingCategoryGroupMostCommonCategoryId(rows));
+        setCategoryGroupTargetId('');
+        resetCategoryGroupPreview();
+    }, [open, resetCategoryGroupPreview, rowCategorySignature, rows]);
+
+    useEffect(() => () => {
+        categoryGroupPreviewAbortRef.current?.abort();
+    }, []);
+
+    const handleRunCategoryGroupPreview = useCallback(async () => {
+        if (!canRunCategoryGroupPreview) return;
+
+        categoryGroupPreviewAbortRef.current?.abort();
+        const controller = new AbortController();
+        categoryGroupPreviewAbortRef.current = controller;
+
+        setCategoryGroupLoading(true);
+        setCategoryGroupPreviewing(true);
+        setCategoryGroupError('');
+
+        try {
+            const targetProducts = await fetchWarehousePickingCategoryGroupProducts(categoryGroupTargetId, controller.signal);
+            const categoryWords = buildWarehousePickingCategoryWordSet(categoryGroupSource, categoryGroupTarget);
+            const context = {
+                attributeById: categoryGroupAttributeById,
+                categoryWords,
+            };
+            const nextRows = categoryGroupSourceRows.map((row) => {
+                const result = findWarehousePickingCategoryGroupReplacement(row.original, targetProducts, context);
+                return {
+                    rowId: row.row_id,
+                    lineNumber: row.line_number,
+                    orderNumber: row.order_number,
+                    row,
+                    sourceCandidate: row.original,
+                    replacementCandidate: result.product,
+                    status: result.status,
+                    statusLabel: result.statusLabel,
+                    confidence: result.confidence,
+                    reasons: result.reasons,
+                    score: result.score,
+                    competingCandidate: result.competingProduct,
+                };
+            });
+
+            setCategoryGroupPreviewRows(nextRows);
+        } catch (error) {
+            if (error?.code !== 'ERR_CANCELED' && error?.name !== 'CanceledError' && error?.name !== 'AbortError') {
+                console.error('Cannot preview warehouse picking category group replacement.', error);
+                setCategoryGroupError('Không tải được sản phẩm trong danh mục đích.');
+            }
+        } finally {
+            if (categoryGroupPreviewAbortRef.current === controller) {
+                categoryGroupPreviewAbortRef.current = null;
+            }
+            setCategoryGroupLoading(false);
+        }
+    }, [
+        canRunCategoryGroupPreview,
+        categoryGroupAttributeById,
+        categoryGroupSource,
+        categoryGroupSourceRows,
+        categoryGroupTarget,
+        categoryGroupTargetId,
+    ]);
+
+    const handleSubmitCategoryGroup = useCallback(() => {
+        const rowsToApply = categoryGroupPreviewRows.filter((row) => row.replacementCandidate);
+        if (rowsToApply.length === 0) return;
+
+        onSubmitCategoryGroup?.(rowsToApply);
+    }, [categoryGroupPreviewRows, onSubmitCategoryGroup]);
+
+    useEffect(() => {
         if (!open) {
+            setActiveTab(WAREHOUSE_PICKING_REPLACEMENT_TAB_LINE);
             setEditingRowIds(new Set());
             setRowPickerOpenTokens({});
+            setCategoryGroupSourceId('');
+            setCategoryGroupTargetId('');
+            setCategoryGroupPreviewRows([]);
+            setCategoryGroupPreviewing(false);
+            setCategoryGroupLoading(false);
+            setCategoryGroupError('');
         }
     }, [open]);
 
@@ -1682,7 +2408,9 @@ const WarehousePickingReplacementModal = ({
                 <div className="flex items-start justify-between gap-3 border-b border-primary/10 bg-primary/[0.03] px-4 py-4 sm:gap-4 sm:px-5">
                     <div className="min-w-0">
                         <div className="text-[10px] font-black uppercase tracking-[0.18em] text-primary/45">Kho nhặt hàng</div>
-                        <h2 className="mt-1 text-[18px] font-black text-primary">Đổi khi nhặt hàng</h2>
+                        <h2 className="mt-1 text-[18px] font-black text-primary">
+                            {isCategoryGroupTab ? 'Đổi nhóm khi nhặt hàng' : 'Đổi khi nhặt hàng'}
+                        </h2>
                         <div className="mt-1 text-[12px] font-bold text-primary/50">
                             {loading ? 'Đang tải sản phẩm trong đơn...' : `${formatNumber(orderCount)} đơn, ${formatNumber(rows.length)} dòng sản phẩm`}
                         </div>
@@ -1707,25 +2435,296 @@ const WarehousePickingReplacementModal = ({
                     </button>
                 </div>
 
-                <div className="flex flex-col gap-2 border-b border-primary/10 px-4 py-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3 sm:px-5">
-                    <div className="relative min-w-0 flex-1 sm:min-w-[260px]">
-                        <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-primary/30">search</span>
-                        <input
-                            value={searchTerm}
-                            onChange={(event) => onSearchTermChange(event.target.value)}
-                            placeholder="Tìm theo STT, mã SP hoặc tên sản phẩm..."
-                            className="h-10 w-full rounded-sm border border-primary/15 bg-white pl-10 pr-3 text-[13px] font-semibold text-primary outline-none transition-all placeholder:text-primary/25 focus:border-primary/40 focus:ring-2 focus:ring-primary/10"
-                            autoFocus
-                        />
-                    </div>
-                    <div className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-sm border border-emerald-200 bg-emerald-50 px-3 text-[12px] font-black text-emerald-700 sm:justify-start">
-                        <span className="material-symbols-outlined text-[17px]">swap_horiz</span>
-                        {formatNumber(changedCount)} dòng lấy khác mã gốc
+                <div className="hidden border-b border-primary/10 bg-white px-5 pt-3 sm:block">
+                    <div className="grid grid-cols-2 gap-1 rounded-sm border border-primary/10 bg-primary/[0.03] p-1">
+                        <button
+                            type="button"
+                            onClick={() => setActiveTab(WAREHOUSE_PICKING_REPLACEMENT_TAB_LINE)}
+                            disabled={saving}
+                            className={`inline-flex h-10 items-center justify-center gap-2 rounded-sm px-3 text-[12px] font-black uppercase tracking-[0.08em] transition-all ${
+                                !isCategoryGroupTab
+                                    ? 'bg-primary text-white shadow-sm'
+                                    : 'text-primary/45 hover:bg-white hover:text-primary'
+                            }`}
+                        >
+                            <span className="material-symbols-outlined text-[17px]">view_list</span>
+                            Đổi từng dòng
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setActiveTab(WAREHOUSE_PICKING_REPLACEMENT_TAB_CATEGORY_GROUP)}
+                            disabled={saving}
+                            className={`inline-flex h-10 items-center justify-center gap-2 rounded-sm px-3 text-[12px] font-black uppercase tracking-[0.08em] transition-all ${
+                                isCategoryGroupTab
+                                    ? 'bg-emerald-600 text-white shadow-sm'
+                                    : 'text-primary/45 hover:bg-emerald-50 hover:text-emerald-700'
+                            }`}
+                        >
+                            <span className="material-symbols-outlined text-[17px]">category</span>
+                            Đổi nhóm theo danh mục
+                        </button>
                     </div>
                 </div>
 
+                <div className="flex flex-col gap-2 border-b border-primary/10 px-4 py-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3 sm:px-5">
+                    {isCategoryGroupTab ? (
+                        <>
+                            <div className="grid min-w-0 flex-1 gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+                                <label className="min-w-0">
+                                    <span className="mb-1 block text-[11px] font-black uppercase tracking-[0.12em] text-primary/45">Danh mục nguồn</span>
+                                    <select
+                                        value={categoryGroupSourceId}
+                                        onChange={(event) => {
+                                            setCategoryGroupSourceId(event.target.value);
+                                            resetCategoryGroupPreview();
+                                        }}
+                                        disabled={categoryGroupCategoriesLoading || saving}
+                                        className="h-10 w-full rounded-sm border border-primary/15 bg-white px-3 text-[13px] font-semibold text-primary outline-none transition-all focus:border-primary/40 focus:ring-2 focus:ring-primary/10 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                        <option value="">{categoryGroupCategoriesLoading ? 'Đang tải danh mục...' : '-- Chọn danh mục nguồn --'}</option>
+                                        {categoryGroupOptions.map((category) => (
+                                            <option key={`warehouse-source-${category.id}`} value={category.id}>
+                                                {renderCategoryGroupOptionLabel(category)}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </label>
+                                <label className="min-w-0">
+                                    <span className="mb-1 block text-[11px] font-black uppercase tracking-[0.12em] text-primary/45">Danh mục đích</span>
+                                    <select
+                                        value={categoryGroupTargetId}
+                                        onChange={(event) => {
+                                            setCategoryGroupTargetId(event.target.value);
+                                            resetCategoryGroupPreview();
+                                        }}
+                                        disabled={categoryGroupCategoriesLoading || saving}
+                                        className="h-10 w-full rounded-sm border border-primary/15 bg-white px-3 text-[13px] font-semibold text-primary outline-none transition-all focus:border-primary/40 focus:ring-2 focus:ring-primary/10 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                        <option value="">{categoryGroupCategoriesLoading ? 'Đang tải danh mục...' : '-- Chọn danh mục đích --'}</option>
+                                        {categoryGroupOptions.map((category) => (
+                                            <option key={`warehouse-target-${category.id}`} value={category.id}>
+                                                {renderCategoryGroupOptionLabel(category)}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </label>
+                                <button
+                                    type="button"
+                                    onClick={handleRunCategoryGroupPreview}
+                                    disabled={!canRunCategoryGroupPreview}
+                                    className="inline-flex h-10 items-center justify-center gap-2 self-end rounded-sm bg-primary px-4 text-[12px] font-black uppercase tracking-[0.08em] text-white transition-all hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-40"
+                                >
+                                    <span className={`material-symbols-outlined text-[17px] ${categoryGroupLoading ? 'animate-refresh-spin' : ''}`}>
+                                        {categoryGroupLoading ? 'progress_activity' : 'find_replace'}
+                                    </span>
+                                    {categoryGroupPreviewing ? 'Tìm lại' : 'Tìm tương ứng'}
+                                </button>
+                            </div>
+                            <div className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-sm border border-sky-200 bg-sky-50 px-3 text-[12px] font-black text-sky-700 sm:justify-start">
+                                <span className="material-symbols-outlined text-[17px]">filter_alt</span>
+                                {formatNumber(categoryGroupSourceRows.length)} dòng nguồn
+                            </div>
+                        </>
+                    ) : (
+                        <>
+                            <div className="relative min-w-0 flex-1 sm:min-w-[260px]">
+                                <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-primary/30">search</span>
+                                <input
+                                    value={searchTerm}
+                                    onChange={(event) => onSearchTermChange(event.target.value)}
+                                    placeholder="Tìm theo STT, mã SP hoặc tên sản phẩm..."
+                                    className="h-10 w-full rounded-sm border border-primary/15 bg-white pl-10 pr-3 text-[13px] font-semibold text-primary outline-none transition-all placeholder:text-primary/25 focus:border-primary/40 focus:ring-2 focus:ring-primary/10"
+                                    autoFocus
+                                />
+                            </div>
+                            <div className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-sm border border-emerald-200 bg-emerald-50 px-3 text-[12px] font-black text-emerald-700 sm:justify-start">
+                                <span className="material-symbols-outlined text-[17px]">swap_horiz</span>
+                                {formatNumber(changedCount)} dòng lấy khác mã gốc
+                            </div>
+                        </>
+                    )}
+                </div>
+
                 <div className="min-h-[360px] flex-1 overflow-auto bg-[#f8fafc]">
-                    {loading ? (
+                    {isCategoryGroupTab ? (
+                        <div className="p-4">
+                            {categoryGroupError ? (
+                                <div className="mb-3 rounded-sm border border-rose-200 bg-rose-50 px-4 py-3 text-[13px] font-bold text-rose-700">
+                                    {categoryGroupError}
+                                </div>
+                            ) : null}
+                            {hasCategoryGroupUndoRows ? (
+                                <div className="mb-3 rounded-sm border border-amber-200 bg-amber-50/85 px-4 py-3 shadow-sm">
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                        <div className="min-w-0">
+                                            <div className="flex items-center gap-2 text-[12px] font-black uppercase tracking-[0.12em] text-amber-800">
+                                                <span className="material-symbols-outlined text-[17px]">history</span>
+                                                Vừa áp dụng đổi nhóm {formatNumber(normalizedCategoryGroupUndoRows.length)} dòng
+                                            </div>
+                                            <div className="mt-1 text-[12px] font-semibold text-amber-800/70">
+                                                Kiểm tra lại trước khi bấm Áp dụng vào đơn.
+                                            </div>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={onRestoreAllCategoryGroupRows}
+                                            disabled={saving}
+                                            className="inline-flex h-9 items-center justify-center gap-1.5 rounded-sm border border-amber-300 bg-white px-3 text-[12px] font-black text-amber-800 transition-all hover:border-amber-400 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                            <span className="material-symbols-outlined text-[16px]">restart_alt</span>
+                                            Hoàn tác tất cả
+                                        </button>
+                                    </div>
+                                    <div className="mt-3 grid max-h-28 gap-1.5 overflow-y-auto pr-1 sm:grid-cols-2">
+                                        {normalizedCategoryGroupUndoRows.map((entry) => (
+                                            <button
+                                                key={`${entry.batchId || 'warehouse-group-undo'}-${entry.rowId}`}
+                                                type="button"
+                                                onClick={() => onRestoreCategoryGroupRow?.(entry.rowId)}
+                                                disabled={saving}
+                                                className="flex min-h-9 min-w-0 items-center gap-2 rounded-sm border border-amber-200 bg-white/85 px-2.5 py-1.5 text-left text-[12px] font-bold text-primary transition-all hover:border-amber-300 hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+                                            >
+                                                <span className="material-symbols-outlined shrink-0 text-[15px] text-amber-700">undo</span>
+                                                <span className="shrink-0 rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] font-black text-sky-700">
+                                                    STT {entry.lineNumber || '?'}
+                                                </span>
+                                                <span className="min-w-0 flex-1 truncate">
+                                                    {entry.toName || 'Hàng mới'}{' -> '}{entry.fromName || 'Hàng cũ'}
+                                                </span>
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            ) : null}
+                            {categoryGroupPreviewing ? (
+                                <div className="overflow-hidden rounded-sm border border-primary/10 bg-white">
+                                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-primary/10 bg-primary/[0.03] px-4 py-3">
+                                        <div className="text-[13px] font-black text-primary">Kết quả đổi nhóm theo danh mục</div>
+                                        <div className="flex flex-wrap items-center gap-1.5">
+                                            <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-black text-emerald-700">
+                                                {formatNumber(categoryGroupMatchedCount)}/{formatNumber(categoryGroupPreviewRows.length)} đổi được
+                                            </span>
+                                            {categoryGroupReviewCount > 0 ? (
+                                                <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-black text-amber-700">
+                                                    {formatNumber(categoryGroupReviewCount)} cần kiểm tra
+                                                </span>
+                                            ) : null}
+                                            {categoryGroupMissingCount > 0 ? (
+                                                <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[11px] font-black text-rose-700">
+                                                    {formatNumber(categoryGroupMissingCount)} chưa thấy
+                                                </span>
+                                            ) : null}
+                                        </div>
+                                    </div>
+                                    <div className="grid grid-cols-[minmax(0,1fr)_36px_minmax(0,1fr)_150px] gap-3 border-b border-primary/10 bg-[#eef3f8] px-4 py-3 text-[11px] font-black uppercase tracking-[0.12em] text-primary/55">
+                                        <div>Sản phẩm gốc</div>
+                                        <div />
+                                        <div>Hàng thực nhặt</div>
+                                        <div>Trạng thái</div>
+                                    </div>
+                                    <div className="max-h-[52vh] overflow-y-auto">
+                                        {categoryGroupLoading && categoryGroupPreviewRows.length === 0 ? (
+                                            <div className="flex h-[260px] items-center justify-center">
+                                                <div className="flex items-center gap-3 rounded-sm border border-primary/10 bg-white px-4 py-3 text-[13px] font-bold text-primary/60 shadow-sm">
+                                                    <span className="material-symbols-outlined animate-refresh-spin text-[18px]">progress_activity</span>
+                                                    Đang đối chiếu sản phẩm trong danh mục đích...
+                                                </div>
+                                            </div>
+                                        ) : categoryGroupPreviewRows.length > 0 ? (
+                                            categoryGroupPreviewRows.map((previewRow) => {
+                                                const replacement = previewRow.replacementCandidate;
+                                                const statusClass = previewRow.status === 'matched'
+                                                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                                    : previewRow.status === 'review'
+                                                        ? 'border-amber-200 bg-amber-50 text-amber-700'
+                                                        : 'border-rose-200 bg-rose-50 text-rose-700';
+                                                const stockValue = resolveWarehouseReplacementNumber(
+                                                    replacement?.available_to_sell,
+                                                    replacement?.stock_quantity
+                                                );
+
+                                                return (
+                                                    <div
+                                                        key={previewRow.rowId}
+                                                        className="grid min-h-[82px] grid-cols-[minmax(0,1fr)_36px_minmax(0,1fr)_150px] items-center gap-3 border-b border-primary/5 bg-white px-4 py-3 last:border-b-0"
+                                                    >
+                                                        <div className="min-w-0">
+                                                            <div className="flex flex-wrap items-center gap-1.5">
+                                                                <span className="rounded-sm border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-black text-sky-700">
+                                                                    STT {previewRow.lineNumber}
+                                                                </span>
+                                                                <span className="rounded-sm border border-orange-200 bg-orange-50 px-2 py-0.5 text-[11px] font-black text-orange-700">
+                                                                    {formatOrderItemQuantity(previewRow.row?.quantity)}x
+                                                                </span>
+                                                            </div>
+                                                            <div className="mt-2 truncate text-[14px] font-black text-primary" title={previewRow.sourceCandidate?.name}>
+                                                                {previewRow.sourceCandidate?.name}
+                                                            </div>
+                                                            {previewRow.sourceCandidate?.sku ? (
+                                                                <div className="mt-1 truncate text-[12px] font-black text-primary/35">
+                                                                    {previewRow.sourceCandidate.sku}
+                                                                </div>
+                                                            ) : null}
+                                                        </div>
+                                                        <div className="flex justify-center">
+                                                            <span className={`material-symbols-outlined text-[18px] ${replacement ? 'text-emerald-600' : 'text-rose-500'}`}>
+                                                                {replacement ? 'arrow_forward' : 'error'}
+                                                            </span>
+                                                        </div>
+                                                        <div className="min-w-0">
+                                                            {replacement ? (
+                                                                <>
+                                                                    <div className="truncate text-[14px] font-black text-emerald-800" title={replacement.name}>
+                                                                        {replacement.name}
+                                                                    </div>
+                                                                    <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                                                                        {replacement.sku ? (
+                                                                            <span className="max-w-[180px] truncate rounded-full border border-primary/10 bg-white px-2 py-0.5 text-[10px] font-black text-primary/45">
+                                                                                {replacement.sku}
+                                                                            </span>
+                                                                        ) : null}
+                                                                        {stockValue !== null ? (
+                                                                            <span className="rounded-full border border-primary/10 bg-white px-2 py-0.5 text-[10px] font-black text-emerald-700">
+                                                                                Còn {formatOrderItemQuantity(stockValue)}
+                                                                            </span>
+                                                                        ) : null}
+                                                                        {(previewRow.reasons || []).map((reason) => (
+                                                                            <span key={reason} className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] font-black text-sky-700">
+                                                                                {reason}
+                                                                            </span>
+                                                                        ))}
+                                                                    </div>
+                                                                </>
+                                                            ) : (
+                                                                <div className="text-[13px] font-bold text-primary/35">
+                                                                    Chưa map được sản phẩm tương ứng
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                        <div>
+                                                            <span className={`inline-flex rounded-full border px-2 py-1 text-[11px] font-black ${statusClass}`}>
+                                                                {previewRow.statusLabel}
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })
+                                        ) : (
+                                            <div className="px-4 py-10 text-center text-[13px] font-bold text-primary/40">
+                                                Chưa có dòng nào thuộc danh mục nguồn đã chọn.
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="flex h-[420px] items-center justify-center text-center">
+                                    <div className="rounded-sm border border-dashed border-primary/15 bg-white px-5 py-6 text-[13px] font-bold text-primary/45">
+                                        Chọn danh mục nguồn và danh mục đích rồi bấm tìm để xem preview.
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    ) : loading ? (
                         <div className="flex h-[420px] items-center justify-center">
                             <div className="flex items-center gap-3 rounded-sm border border-primary/10 bg-white px-4 py-3 text-[13px] font-bold text-primary/60 shadow-sm">
                                 <span className="material-symbols-outlined animate-refresh-spin text-[18px]">progress_activity</span>
@@ -1827,9 +2826,11 @@ const WarehousePickingReplacementModal = ({
 
                 <div className="flex flex-col gap-3 border-t border-primary/10 bg-white px-4 py-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:px-5 sm:py-4">
                     <div className="text-[12px] font-bold text-primary/45">
-                        Bên trái là hàng khách chốt, bên phải là hàng kho sẽ lấy thực tế.
+                        {isCategoryGroupTab
+                            ? 'Chỉ đổi hàng thực nhặt theo danh mục, giữ nguyên hàng khách chốt và giá đơn.'
+                            : 'Bên trái là hàng khách chốt, bên phải là hàng kho sẽ lấy thực tế.'}
                     </div>
-                    <div className="flex w-full items-center gap-2 sm:w-auto">
+                    <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
                         <button
                             type="button"
                             onClick={onClose}
@@ -1838,12 +2839,27 @@ const WarehousePickingReplacementModal = ({
                         >
                             Hủy
                         </button>
+                        {isCategoryGroupTab ? (
+                            <button
+                                type="button"
+                                onClick={handleSubmitCategoryGroup}
+                                disabled={!canSubmitCategoryGroup}
+                                className={`inline-flex h-10 flex-[1.4] items-center justify-center gap-2 rounded-sm px-5 text-[13px] font-black text-white transition-all sm:flex-none ${
+                                    !canSubmitCategoryGroup
+                                        ? 'cursor-not-allowed bg-primary/25'
+                                        : 'bg-primary hover:bg-primary/90 shadow-sm'
+                                }`}
+                            >
+                                <span className="material-symbols-outlined text-[18px]">published_with_changes</span>
+                                {`Áp dụng nhóm${categoryGroupMatchedCount > 0 ? ` (${formatNumber(categoryGroupMatchedCount)})` : ''}`}
+                            </button>
+                        ) : null}
                         <button
                             type="button"
                             onClick={onSubmit}
-                            disabled={loading || saving || rows.length === 0}
+                            disabled={!canSaveReplacements}
                             className={`inline-flex h-10 flex-[1.8] items-center justify-center gap-2 rounded-sm px-5 text-[13px] font-black text-white transition-all sm:flex-none ${
-                                loading || saving || rows.length === 0
+                                !canSaveReplacements
                                     ? 'cursor-not-allowed bg-emerald-300'
                                     : 'bg-emerald-600 hover:bg-emerald-700 shadow-sm'
                             }`}
@@ -1851,7 +2867,9 @@ const WarehousePickingReplacementModal = ({
                             <span className={`material-symbols-outlined text-[18px] ${saving ? 'animate-refresh-spin' : ''}`}>
                                 {saving ? 'progress_activity' : 'save'}
                             </span>
-                            {saving ? 'Đang lưu...' : 'Áp dụng vào đơn'}
+                            {saving
+                                ? 'Đang lưu...'
+                                : 'Áp dụng vào đơn'}
                         </button>
                     </div>
                 </div>
@@ -2803,6 +3821,7 @@ const buildOrderListRequestParams = ({
     isTrashView = false,
     scopedOrderIds = null,
     selectedOnlyIds = [],
+    canViewCustomerPhone = true,
 }) => {
     const baseScopedIds = Array.isArray(scopedOrderIds)
         ? parseOrderIdList(scopedOrderIds)
@@ -2848,7 +3867,7 @@ const buildOrderListRequestParams = ({
     if (filters.status_exclude?.length) params.status_exclude = normalizeOrderListFilterValues(filters.status_exclude).join(',');
     if (filters.customer_name?.trim()) params.customer_name = filters.customer_name.trim();
     if (filters.order_number?.trim()) params.order_number = filters.order_number.trim();
-    if (filters.customer_phone?.trim()) params.customer_phone = filters.customer_phone.trim();
+    if (canViewCustomerPhone && filters.customer_phone?.trim()) params.customer_phone = filters.customer_phone.trim();
     if (filters.order_type?.length) params.order_type = normalizeOrderTypeFilterValues(filters.order_type).join(',');
     if (filters.profit_manager_id) params.profit_manager_id = filters.profit_manager_id;
     if (filters.shipping_address?.trim()) params.shipping_address = filters.shipping_address.trim();
@@ -4164,6 +5183,7 @@ const OrderList = () => {
     const location = useLocation();
     const [activeAccountId, setActiveAccountId] = useState(() => readActiveAccountId());
     const canViewCost = hasAdminDataPermission(user, 'cost.view', activeAccountId);
+    const canViewCustomerPhone = hasAdminDataPermission(user, 'customer_phone.view', activeAccountId);
     const canCreateOrders = hasAdminPermission(user, 'orders.create', activeAccountId);
     const canDeleteOrders = hasAdminPermission(user, 'orders.delete_soft', activeAccountId);
     const canDeleteOrdersPermanently = hasAdminPermission(user, 'orders.delete_permanent', activeAccountId);
@@ -4316,6 +5336,7 @@ const OrderList = () => {
     const [warehousePickingReplacementLoading, setWarehousePickingReplacementLoading] = useState(false);
     const [warehousePickingReplacementSaving, setWarehousePickingReplacementSaving] = useState(false);
     const [warehousePickingReplacementSearch, setWarehousePickingReplacementSearch] = useState('');
+    const [warehousePickingCategoryGroupUndo, setWarehousePickingCategoryGroupUndo] = useState({ id: '', rows: [] });
     const [warehousePickingDeclarationPrompt, setWarehousePickingDeclarationPrompt] = useState(EMPTY_WAREHOUSE_PICKING_DECLARATION_PROMPT);
     const [warehousePickingLeavePromptOpen, setWarehousePickingLeavePromptOpen] = useState(false);
     const warehousePickingDeclarationDismissedRef = useRef(new Set());
@@ -4828,6 +5849,7 @@ const OrderList = () => {
                 isTrashView,
                 scopedOrderIds,
                 selectedOnlyIds,
+                canViewCustomerPhone,
             });
 
             const response = await orderApi.getAll(params, controller.signal);
@@ -4847,7 +5869,7 @@ const OrderList = () => {
                 setLoading(false);
             }
         }
-    }, [filters, isActiveAccountReady, isDraftView, isMainView, isReturnFollowupView, isReturnWorkbenchView, isTrashView, pagination.per_page, returnWorkbenchIds, sortConfig]);
+    }, [canViewCustomerPhone, filters, isActiveAccountReady, isDraftView, isMainView, isReturnFollowupView, isReturnWorkbenchView, isTrashView, pagination.per_page, returnWorkbenchIds, sortConfig]);
 
     const handleOutsideDeliveryUnpaidToggle = useCallback(() => {
         const nextActive = !isOutsideDeliveryUnpaidFilterActive;
@@ -4927,6 +5949,7 @@ const OrderList = () => {
                 scopedOrderIds: isReturnWorkbenchView
                     ? (explicitScopedIds.length ? explicitScopedIds : returnWorkbenchIds)
                     : explicitScopedIds,
+                canViewCustomerPhone,
             });
 
             delete payload.page;
@@ -5016,6 +6039,7 @@ const OrderList = () => {
         returnWorkbenchIds,
         routeOrderIdsKey,
         sortConfig,
+        canViewCustomerPhone,
     ]);
 
     const handleMoveSelectedToReturnWorkbench = useCallback(async () => {
@@ -6033,6 +7057,7 @@ const OrderList = () => {
         setWarehousePickingReplacementSearch('');
         setWarehousePickingReplacementLoading(false);
         setWarehousePickingReplacementSaving(false);
+        setWarehousePickingCategoryGroupUndo({ id: '', rows: [] });
         setWarehousePickingDeclarationPrompt(EMPTY_WAREHOUSE_PICKING_DECLARATION_PROMPT);
         setWarehousePickingLeavePromptOpen(false);
         warehousePickingDeclarationDismissedRef.current.clear();
@@ -6061,6 +7086,7 @@ const OrderList = () => {
         setWarehousePickingReplacementOrders([]);
         setWarehousePickingReplacementRows([]);
         setWarehousePickingReplacementSearch('');
+        setWarehousePickingCategoryGroupUndo({ id: '', rows: [] });
         setWarehousePickingDeclarationPrompt(EMPTY_WAREHOUSE_PICKING_DECLARATION_PROMPT);
         warehousePickingDeclarationDismissedRef.current.clear();
 
@@ -6280,7 +7306,7 @@ const OrderList = () => {
         warehousePickingDeclarationPrompt,
     ]);
 
-    const handleSubmitWarehousePickingReplacements = useCallback(async () => {
+    const handleSubmitWarehousePickingReplacements = useCallback(async (rowsOverride = null) => {
         if (warehousePickingReplacementSaving || warehousePickingReplacementLoading || !warehousePickingReplacementOrders.length) {
             return;
         }
@@ -6288,7 +7314,8 @@ const OrderList = () => {
         setWarehousePickingReplacementSaving(true);
 
         try {
-            const rowsByOrderId = warehousePickingReplacementRows.reduce((map, row) => {
+            const rowsForSave = Array.isArray(rowsOverride) ? rowsOverride : warehousePickingReplacementRows;
+            const rowsByOrderId = rowsForSave.reduce((map, row) => {
                 const orderKey = String(row.order_id);
                 const itemKey = row.item_id ? `item:${row.item_id}` : `index:${row.item_index}`;
                 if (!map.has(orderKey)) map.set(orderKey, new Map());
@@ -6321,7 +7348,7 @@ const OrderList = () => {
                 });
             }));
 
-            persistWarehousePickingHistoryFromRows(warehousePickingReplacementRows);
+            persistWarehousePickingHistoryFromRows(rowsForSave);
 
             const orderCount = warehousePickingReplacementOrders.length;
             resetWarehousePickingReplacementModal();
@@ -6351,6 +7378,119 @@ const OrderList = () => {
         warehousePickingReplacementRows,
         warehousePickingReplacementSaving,
     ]);
+
+    const handleSubmitWarehousePickingCategoryGroupReplacements = useCallback((previewRows = []) => {
+        const rowsToApply = (Array.isArray(previewRows) ? previewRows : [])
+            .filter((row) => row?.rowId && row?.replacementCandidate);
+
+        if (rowsToApply.length === 0) {
+            setNotification({ type: 'error', message: 'Chưa có dòng nào đủ điều kiện đổi nhóm.' });
+            return;
+        }
+
+        const currentRowById = new Map(
+            warehousePickingReplacementRows.map((row) => [row.row_id, row])
+        );
+        const undoRows = rowsToApply
+            .map((previewRow) => {
+                const currentRow = currentRowById.get(previewRow.rowId);
+                const replacementCandidate = normalizeWarehousePickingCandidate(previewRow.replacementCandidate, {
+                    is_manual_search_result: true,
+                });
+                const currentCandidate = getWarehousePickingSelectedCandidate(currentRow);
+
+                if (!currentRow || !replacementCandidate?.key || replacementCandidate.key === currentCandidate?.key) {
+                    return null;
+                }
+
+                return {
+                    batchId: `warehouse-category-group-undo-${Date.now()}`,
+                    rowId: currentRow.row_id,
+                    lineNumber: currentRow.line_number,
+                    orderNumber: currentRow.order_number,
+                    fromName: getWarehousePickingCandidateLabel(currentCandidate || currentRow.original),
+                    toName: getWarehousePickingCandidateLabel(replacementCandidate),
+                    row: cloneWarehousePickingReplacementRowSnapshot(currentRow),
+                };
+            })
+            .filter(Boolean);
+
+        if (undoRows.length === 0) {
+            setNotification({ type: 'error', message: 'Các dòng tìm được chưa tạo thay đổi mới trong bảng.' });
+            return;
+        }
+
+        const nextRows = applyWarehousePickingCategoryGroupPreviewRows(warehousePickingReplacementRows, rowsToApply);
+        setWarehousePickingReplacementRows(nextRows);
+        setWarehousePickingCategoryGroupUndo({
+            id: `warehouse-category-group-undo-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            rows: undoRows,
+        });
+        setNotification({
+            type: 'success',
+            message: `Đã áp dụng đổi nhóm ${formatNumber(undoRows.length)} dòng trong bảng. Kiểm tra rồi bấm Áp dụng vào đơn.`,
+        });
+    }, [
+        warehousePickingReplacementRows,
+    ]);
+
+    const restoreWarehousePickingCategoryGroupRows = useCallback((rowIds = []) => {
+        const requestedRowIds = new Set(
+            (Array.isArray(rowIds) ? rowIds : [])
+                .map((rowId) => String(rowId || '').trim())
+                .filter(Boolean)
+        );
+        const undoRows = (Array.isArray(warehousePickingCategoryGroupUndo.rows) ? warehousePickingCategoryGroupUndo.rows : [])
+            .filter((entry) => requestedRowIds.size === 0 || requestedRowIds.has(String(entry?.rowId || '').trim()));
+
+        if (undoRows.length === 0) {
+            setNotification({ type: 'error', message: 'Không còn dòng đổi nhóm nào để hoàn tác.' });
+            return;
+        }
+
+        const restoreByRowId = new Map(
+            undoRows
+                .map((entry) => [String(entry?.rowId || '').trim(), cloneWarehousePickingReplacementRowSnapshot(entry?.row || {})])
+                .filter(([rowId, row]) => rowId && row?.row_id)
+        );
+
+        if (restoreByRowId.size === 0) {
+            setNotification({ type: 'error', message: 'Không khôi phục được dòng vừa đổi nhóm.' });
+            return;
+        }
+
+        setWarehousePickingReplacementRows((currentRows) => (
+            currentRows.map((row) => {
+                const rowId = String(row?.row_id || '').trim();
+                return restoreByRowId.has(rowId)
+                    ? cloneWarehousePickingReplacementRowSnapshot(restoreByRowId.get(rowId))
+                    : row;
+            })
+        ));
+
+        const restoredRowIds = new Set(Array.from(restoreByRowId.keys()));
+        setWarehousePickingCategoryGroupUndo((current) => {
+            const remainingRows = (Array.isArray(current.rows) ? current.rows : []).filter(
+                (entry) => !restoredRowIds.has(String(entry?.rowId || '').trim())
+            );
+
+            return remainingRows.length > 0
+                ? { ...current, rows: remainingRows }
+                : { id: '', rows: [] };
+        });
+        setNotification({
+            type: 'success',
+            message: `Đã hoàn tác ${formatNumber(restoreByRowId.size)} dòng đổi nhóm.`,
+        });
+    }, [warehousePickingCategoryGroupUndo.rows]);
+
+    const handleRestoreAllWarehousePickingCategoryGroupRows = useCallback(() => {
+        restoreWarehousePickingCategoryGroupRows();
+    }, [restoreWarehousePickingCategoryGroupRows]);
+
+    const handleRestoreOneWarehousePickingCategoryGroupRow = useCallback((rowId) => {
+        restoreWarehousePickingCategoryGroupRows([rowId]);
+    }, [restoreWarehousePickingCategoryGroupRows]);
 
     const handleWarehousePickingLeaveStay = useCallback(() => {
         if (warehousePickingReplacementSaving) return;
@@ -6885,7 +8025,7 @@ const OrderList = () => {
         if (filters.status_exclude?.length) c++;
         if (filters.customer_name) c++;
         if (filters.order_number) c++;
-        if (filters.customer_phone) c++;
+        if (canViewCustomerPhone && filters.customer_phone) c++;
         if (filters.order_type?.length) c++;
         if (filters.profit_manager_id) c++;
         if (filters.shipping_carrier_code) c++;
@@ -6900,7 +8040,12 @@ const OrderList = () => {
     };
 
     const { listTitle, emptyTitle, emptyDescription, selectedLabel, createTitle } = currentViewMeta;
-    const renderOrderSearch = (containerClassName = 'flex-1 relative', placeholder = 'Tìm tên SP, mã SP, mã đơn, khách hàng, SĐT, mã vận đơn... Enter hoặc dấu phẩy để thêm') => (
+    const renderOrderSearch = (
+        containerClassName = 'flex-1 relative',
+        placeholder = canViewCustomerPhone
+            ? 'Tìm tên SP, mã SP, mã đơn, khách hàng, SĐT, mã vận đơn... Enter hoặc dấu phẩy để thêm'
+            : 'Tìm tên SP, mã SP, mã đơn, khách hàng, mã vận đơn... Enter hoặc dấu phẩy để thêm'
+    ) => (
         <div className={containerClassName} ref={searchContainerRef}>
             <MultiKeywordSearchInput
                 keywords={filters.search_terms}
@@ -7039,7 +8184,9 @@ const OrderList = () => {
 
                     {selectedIds.length === 0 && renderOrderSearch(
                         'relative w-full lg:order-last lg:flex-1',
-                        'Tìm tên SP, mã SP, mã đơn, khách hàng, SĐT, mã vận đơn...'
+                        canViewCustomerPhone
+                            ? 'Tìm tên SP, mã SP, mã đơn, khách hàng, SĐT, mã vận đơn...'
+                            : 'Tìm tên SP, mã SP, mã đơn, khách hàng, mã vận đơn...'
                     )}
 
                     <div className="hidden flex-wrap items-center gap-2 lg:flex">
@@ -7582,10 +8729,12 @@ const OrderList = () => {
                             <label className="text-[13px] font-medium text-stone-600">Mã đơn</label>
                             <input name="order_number" type="text" className="w-full h-10 bg-white border border-primary/10 rounded-sm px-3 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary" value={tempFilters.order_number} onChange={handleTempFilterChange} />
                         </div>
-                        <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
-                            <label className="text-[13px] font-medium text-stone-600">SĐT khách</label>
-                            <input name="customer_phone" type="text" className="w-full h-10 bg-white border border-primary/10 rounded-sm px-3 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary" value={tempFilters.customer_phone} onChange={handleTempFilterChange} />
-                        </div>
+                        {canViewCustomerPhone && (
+                            <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
+                                <label className="text-[13px] font-medium text-stone-600">SĐT khách</label>
+                                <input name="customer_phone" type="text" className="w-full h-10 bg-white border border-primary/10 rounded-sm px-3 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary" value={tempFilters.customer_phone} onChange={handleTempFilterChange} />
+                            </div>
+                        )}
                         <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
                             <label className="text-[13px] font-medium text-stone-600">Trạng thái</label>
                             <div className="relative">
@@ -8079,7 +9228,9 @@ const OrderList = () => {
                                             <div className="shrink-0 text-right">
                                                 <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/35">Tổng tiền</div>
                                                 <div className="mt-1 text-[18px] font-black leading-none text-brick">{formatMoney(o.total_price || 0)}</div>
-                                                <div className="mt-1 whitespace-nowrap text-[11px] font-bold text-sky-700/80">Giá vốn nhập {formatMoney(getOrderCostTotalValue(o))}</div>
+                                                {canViewCost && (
+                                                    <div className="mt-1 whitespace-nowrap text-[11px] font-bold text-sky-700/80">Giá vốn nhập {formatMoney(getOrderCostTotalValue(o))}</div>
+                                                )}
                                                 <div className="mt-1 whitespace-nowrap text-[11px] font-bold text-primary/55">Phí ship {formatMoney(shippingFee)}</div>
                                                 <div className="mt-1 text-[11px] font-semibold text-primary/45">{dateDisplay.date}</div>
                                             </div>
@@ -8089,15 +9240,17 @@ const OrderList = () => {
                                             <div className="flex items-start justify-between gap-3">
                                                 <div className="min-w-0">
                                                     <div className="truncate text-[14px] font-black text-primary">{o.customer_name || 'Khách lẻ'}</div>
-                                                    <div className={`mt-1 truncate text-[13px] font-black ${getOrderCustomerPhoneTextClass(o)}`}>{o.customer_phone || 'Chưa có số điện thoại'}</div>
+                                                    {canViewCustomerPhone && (
+                                                        <div className={`mt-1 truncate text-[13px] font-black ${getOrderCustomerPhoneTextClass(o)}`}>{o.customer_phone || 'Chưa có số điện thoại'}</div>
+                                                    )}
                                                 </div>
                                                 <button
                                                     type="button"
-                                                    onClick={(event) => handleCopy(o.customer_phone || o.customer_name || '', event)}
-                                                    disabled={!(o.customer_phone || o.customer_name)}
+                                                    onClick={(event) => handleCopy((canViewCustomerPhone ? o.customer_phone : '') || o.customer_name || '', event)}
+                                                    disabled={!((canViewCustomerPhone ? o.customer_phone : '') || o.customer_name)}
                                                     className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-primary/10 bg-white px-3 text-[11px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03] disabled:cursor-not-allowed disabled:opacity-40"
                                                 >
-                                                    <span className="material-symbols-outlined text-[16px]">{copiedText === (o.customer_phone || o.customer_name || '') ? 'check' : 'content_copy'}</span>
+                                                    <span className="material-symbols-outlined text-[16px]">{copiedText === ((canViewCustomerPhone ? o.customer_phone : '') || o.customer_name || '') ? 'check' : 'content_copy'}</span>
                                                     Copy KH
                                                 </button>
                                             </div>
@@ -8182,10 +9335,10 @@ const OrderList = () => {
                                                     type="button"
                                                     onClick={(event) => {
                                                         event.stopPropagation();
-                                                        openOrderEditor(o.id, { bulkReplaceMode: 'category_group' });
+                                                        openOrderEditor(o.id);
                                                     }}
-                                                    title="Đổi nhóm theo danh mục"
-                                                    aria-label="Đổi nhóm theo danh mục"
+                                                    title="Mở đơn để chọn sản phẩm đổi nhóm"
+                                                    aria-label="Mở đơn để chọn sản phẩm đổi nhóm"
                                                     className="inline-flex min-h-[44px] w-full items-center justify-center rounded-[16px] border border-sky-200 bg-sky-50 px-2 text-sky-700 transition-all hover:bg-sky-600 hover:text-white"
                                                 >
                                                     <span className="material-symbols-outlined text-[18px]">category</span>
@@ -8315,12 +9468,14 @@ const OrderList = () => {
                                                             <span className="material-symbols-outlined text-[14px]">{copiedText === o.customer_name ? 'check' : 'content_copy'}</span>
                                                         </button>
                                                     </div>
-                                                    <div className="flex items-center justify-between group/phone_c">
-                                                        <span className={`text-[13px] font-black truncate ${getOrderCustomerPhoneTextClass(o)}`}>{o.customer_phone}</span>
-                                                        <button onClick={(e) => { e.stopPropagation(); handleCopy(o.customer_phone, e); }} className={`opacity-0 group-hover/phone_c:opacity-100 p-0.5 hover:text-primary transition-all ${copiedText === o.customer_phone ? 'text-green-500 opacity-100' : 'text-primary/20'}`}>
-                                                            <span className="material-symbols-outlined text-[12px]">{copiedText === o.customer_phone ? 'check' : 'content_copy'}</span>
-                                                        </button>
-                                                    </div>
+                                                    {canViewCustomerPhone && (
+                                                        <div className="flex items-center justify-between group/phone_c">
+                                                            <span className={`text-[13px] font-black truncate ${getOrderCustomerPhoneTextClass(o)}`}>{o.customer_phone}</span>
+                                                            <button onClick={(e) => { e.stopPropagation(); handleCopy(o.customer_phone, e); }} className={`opacity-0 group-hover/phone_c:opacity-100 p-0.5 hover:text-primary transition-all ${copiedText === o.customer_phone ? 'text-green-500 opacity-100' : 'text-primary/20'}`}>
+                                                                <span className="material-symbols-outlined text-[12px]">{copiedText === o.customer_phone ? 'check' : 'content_copy'}</span>
+                                                            </button>
+                                                        </div>
+                                                    )}
                                                 </div>
                                             </td>
                                         );
@@ -8869,6 +10024,7 @@ const OrderList = () => {
                 open={warehousePickingReplacementOpen}
                 orders={warehousePickingReplacementOrders}
                 rows={warehousePickingReplacementRows}
+                attributes={allAttributes}
                 loading={warehousePickingReplacementLoading}
                 saving={warehousePickingReplacementSaving}
                 searchTerm={warehousePickingReplacementSearch}
@@ -8876,6 +10032,10 @@ const OrderList = () => {
                 onSelectCandidate={handleWarehousePickingReplacementSelect}
                 onClose={closeWarehousePickingReplacementModal}
                 onSubmit={handleSubmitWarehousePickingReplacements}
+                onSubmitCategoryGroup={handleSubmitWarehousePickingCategoryGroupReplacements}
+                categoryGroupUndoRows={warehousePickingCategoryGroupUndo.rows}
+                onRestoreCategoryGroupRow={handleRestoreOneWarehousePickingCategoryGroupRow}
+                onRestoreAllCategoryGroupRows={handleRestoreAllWarehousePickingCategoryGroupRows}
             />
             <WarehousePickingReplacementDeclarationPrompt
                 open={warehousePickingDeclarationPrompt.open}

@@ -43,12 +43,36 @@ class AccessControlService
         'cost.view',
         'profit.view',
         'finance.view',
+        'customer_phone.view',
     ];
 
     public const PROFIT_SCOPE_ALL = 'profit.scope.all';
+    public const CUSTOMER_PHONE_DATA_PERMISSION = 'customer_phone.view';
     public const USER_CHANGE_PASSWORD_PERMISSION = 'users.change_password';
+    public const INVENTORY_SHELF_LOCATION_PERMISSIONS = [
+        'view' => 'inventory.shelf_locations.view',
+        'create' => 'inventory.shelf_locations.create',
+        'update' => 'inventory.shelf_locations.update',
+        'delete_soft' => 'inventory.shelf_locations.delete_soft',
+    ];
+    public const INVENTORY_REPLACEMENT_PERMISSIONS = [
+        'view' => 'inventory.replacements.view',
+        'create' => 'inventory.replacements.create',
+        'update' => 'inventory.replacements.update',
+        'delete_soft' => 'inventory.replacements.delete_soft',
+    ];
+    public const INVENTORY_REPLACEMENT_LOOKUP_PERMISSION = 'inventory.replacement_lookup.view';
     public const SPECIAL_PERMISSIONS = [
         self::USER_CHANGE_PASSWORD_PERMISSION,
+        self::INVENTORY_SHELF_LOCATION_PERMISSIONS['view'],
+        self::INVENTORY_SHELF_LOCATION_PERMISSIONS['create'],
+        self::INVENTORY_SHELF_LOCATION_PERMISSIONS['update'],
+        self::INVENTORY_SHELF_LOCATION_PERMISSIONS['delete_soft'],
+        self::INVENTORY_REPLACEMENT_PERMISSIONS['view'],
+        self::INVENTORY_REPLACEMENT_PERMISSIONS['create'],
+        self::INVENTORY_REPLACEMENT_PERMISSIONS['update'],
+        self::INVENTORY_REPLACEMENT_PERMISSIONS['delete_soft'],
+        self::INVENTORY_REPLACEMENT_LOOKUP_PERMISSION,
     ];
     private const LEGACY_PROFIT_SCOPE_CHANNEL_PREFIX = 'profit.scope.channel.';
     public const PROFIT_SCOPE_MANAGER_PREFIX = 'profit.scope.manager.';
@@ -61,6 +85,9 @@ class AccessControlService
         'sale' => 'sale',
         'sales' => 'sale',
         'warehouse' => 'warehouse',
+        'employee' => 'employee',
+        'nhan_vien' => 'employee',
+        'nhanvien' => 'employee',
         'viewer' => 'viewer',
         'custom' => 'custom',
     ];
@@ -101,6 +128,20 @@ class AccessControlService
                 self::permissionsForModules(['dashboard', 'orders', 'products'], ['view']),
                 self::permissionsForModules(['inventory', 'warehouses'], ['view', 'create', 'update', 'delete_soft', 'export'])
             ))),
+            'employee' => array_values(array_unique(array_merge(
+                self::permissionsForModules(['dashboard'], ['view']),
+                self::permissionsForModules(['orders'], ['view', 'create', 'update', 'export']),
+                self::permissionsForModules(['payroll'], ['view']),
+                [
+                    self::INVENTORY_SHELF_LOCATION_PERMISSIONS['view'],
+                    self::INVENTORY_SHELF_LOCATION_PERMISSIONS['create'],
+                    self::INVENTORY_SHELF_LOCATION_PERMISSIONS['update'],
+                    self::INVENTORY_REPLACEMENT_PERMISSIONS['view'],
+                    self::INVENTORY_REPLACEMENT_PERMISSIONS['create'],
+                    self::INVENTORY_REPLACEMENT_PERMISSIONS['update'],
+                    self::INVENTORY_REPLACEMENT_LOOKUP_PERMISSION,
+                ]
+            ))),
             'viewer' => self::permissionsForModules([
                 'dashboard',
                 'products',
@@ -121,6 +162,7 @@ class AccessControlService
                 self::DATA_PERMISSIONS,
                 [self::PROFIT_SCOPE_ALL]
             ))),
+            'sale', 'warehouse', 'viewer' => [self::CUSTOMER_PHONE_DATA_PERMISSION],
             default => [],
         };
     }
@@ -240,10 +282,10 @@ class AccessControlService
             }
 
             $module = str_contains($permission, '.')
-                ? explode('.', $permission, 2)[0]
+                ? self::moduleFromDetailedPermission($permission)
                 : $permission;
 
-            if (in_array($module, self::MODULES, true)) {
+            if ($module !== null && in_array($module, self::MODULES, true)) {
                 $modules[] = $module;
             }
         }
@@ -442,6 +484,41 @@ class AccessControlService
         return array_values(array_unique($permissions));
     }
 
+    private static function moduleFromDetailedPermission(string $permission): ?string
+    {
+        if ($permission === 'users.manage') {
+            return 'users';
+        }
+
+        $segments = explode('.', $permission);
+        if (count($segments) !== 2) {
+            return null;
+        }
+
+        [$module, $action] = $segments;
+        if (!in_array($module, self::MODULES, true) || !in_array($action, self::ACTIONS, true)) {
+            return null;
+        }
+
+        return $module;
+    }
+
+    private static function fallbackModulePermissionForFeaturePermission(string $permission): ?string
+    {
+        $segments = explode('.', $permission);
+        if (count($segments) < 3) {
+            return null;
+        }
+
+        $module = $segments[0];
+        $action = $segments[count($segments) - 1];
+        if (!in_array($module, self::MODULES, true) || !in_array($action, self::ACTIONS, true)) {
+            return null;
+        }
+
+        return "{$module}.{$action}";
+    }
+
     private function accountPivots(User $user, int|string|null $accountId = null): Collection
     {
         $user->loadMissing('accounts');
@@ -553,6 +630,15 @@ class AccessControlService
 
         if ($requiredPermission === 'users.manage') {
             return in_array('users.update', $permissions, true) || in_array('users.*', $permissions, true);
+        }
+
+        $fallbackModulePermission = self::fallbackModulePermissionForFeaturePermission($requiredPermission);
+        if (
+            $fallbackModulePermission !== null
+            && $fallbackModulePermission !== $requiredPermission
+            && in_array($fallbackModulePermission, $permissions, true)
+        ) {
+            return true;
         }
 
         return false;

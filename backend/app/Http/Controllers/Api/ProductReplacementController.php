@@ -9,6 +9,7 @@ use App\Models\ProductReplacementGroup;
 use App\Models\ProductReplacementItem;
 use App\Services\AccountDataScopeService;
 use App\Support\InventoryQuantity;
+use App\Services\AccessControlService;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -24,6 +25,8 @@ class ProductReplacementController extends Controller
     public function index(Request $request)
     {
         $search = trim((string) $request->input('search', ''));
+        $canViewCost = $this->canViewReplacementDataPermission($request, 'cost.view');
+        $canViewProfit = $this->canViewReplacementDataPermission($request, 'profit.view');
         $perPage = max(5, min(100, (int) $request->input('per_page', 30)));
 
         $query = ProductReplacementGroup::query()
@@ -63,7 +66,7 @@ class ProductReplacementController extends Controller
 
         return response()->json([
             'data' => collect($groups->items())
-                ->map(fn (ProductReplacementGroup $group) => $this->groupPayload($group, $locationsByProductId))
+                ->map(fn (ProductReplacementGroup $group) => $this->groupPayload($group, $locationsByProductId, $canViewCost, $canViewProfit))
                 ->values()
                 ->all(),
             'current_page' => $groups->currentPage(),
@@ -94,7 +97,12 @@ class ProductReplacementController extends Controller
         });
 
         return response()->json([
-            'data' => $this->groupPayload($group->load(['items.product.unit'])),
+            'data' => $this->groupPayload(
+                $group->load(['items.product.unit']),
+                [],
+                $this->canViewReplacementDataPermission($request, 'cost.view'),
+                $this->canViewReplacementDataPermission($request, 'profit.view')
+            ),
         ], 201);
     }
 
@@ -121,7 +129,12 @@ class ProductReplacementController extends Controller
         });
 
         return response()->json([
-            'data' => $this->groupPayload($group->load(['items.product.unit'])),
+            'data' => $this->groupPayload(
+                $group->load(['items.product.unit']),
+                [],
+                $this->canViewReplacementDataPermission($request, 'cost.view'),
+                $this->canViewReplacementDataPermission($request, 'profit.view')
+            ),
         ]);
     }
 
@@ -142,6 +155,8 @@ class ProductReplacementController extends Controller
             'quantity' => 'nullable|numeric|min:0',
         ]);
 
+        $canViewCost = $this->canViewReplacementDataPermission($request, 'cost.view');
+        $canViewProfit = $this->canViewReplacementDataPermission($request, 'profit.view');
         $product = $this->findLookupProduct($validated);
         if (!$product) {
             return response()->json([
@@ -174,7 +189,7 @@ class ProductReplacementController extends Controller
                         'sku' => $product->sku,
                         'product_id' => (int) $product->id,
                     ],
-                    'product' => $this->productPayload($product, [], $lockedPrice, $quantity),
+                    'product' => $this->productPayload($product, [], $lockedPrice, $quantity, $canViewCost, $canViewProfit),
                     'group' => null,
                     'alternatives' => [],
                     'suggestions' => [],
@@ -194,7 +209,7 @@ class ProductReplacementController extends Controller
 
         $alternatives = $group->items
             ->filter(fn (ProductReplacementItem $item) => (int) $item->product_id !== (int) $product->id)
-            ->map(fn (ProductReplacementItem $item) => $this->replacementEntryPayload($item, $locationsByProductId, $lockedPrice, $quantity))
+            ->map(fn (ProductReplacementItem $item) => $this->replacementEntryPayload($item, $locationsByProductId, $lockedPrice, $quantity, $canViewCost, $canViewProfit))
             ->filter()
             ->sortBy([
                 ['is_available', 'desc'],
@@ -211,8 +226,8 @@ class ProductReplacementController extends Controller
                     'sku' => $product->sku,
                     'product_id' => (int) $product->id,
                 ],
-                'product' => $this->productPayload($product, $locationsByProductId[(int) $product->id] ?? [], $lockedPrice, $quantity),
-                'group' => $this->groupPayload($group, $locationsByProductId),
+                'product' => $this->productPayload($product, $locationsByProductId[(int) $product->id] ?? [], $lockedPrice, $quantity, $canViewCost, $canViewProfit),
+                'group' => $this->groupPayload($group, $locationsByProductId, $canViewCost, $canViewProfit),
                 'alternatives' => $alternatives,
                 'suggestions' => $alternatives,
             ],
@@ -439,10 +454,15 @@ class ProductReplacementController extends Controller
         return round((float) ($rawPrice ?? $product->price ?? 0), 2);
     }
 
-    private function groupPayload(ProductReplacementGroup $group, array $locationsByProductId = []): array
+    private function groupPayload(
+        ProductReplacementGroup $group,
+        array $locationsByProductId = [],
+        bool $canViewCost = true,
+        bool $canViewProfit = true
+    ): array
     {
         $items = $group->items
-            ->map(fn (ProductReplacementItem $item) => $this->replacementEntryPayload($item, $locationsByProductId))
+            ->map(fn (ProductReplacementItem $item) => $this->replacementEntryPayload($item, $locationsByProductId, null, 1, $canViewCost, $canViewProfit))
             ->filter()
             ->values()
             ->all();
@@ -463,7 +483,9 @@ class ProductReplacementController extends Controller
         ProductReplacementItem $item,
         array $locationsByProductId = [],
         ?float $lockedPrice = null,
-        float $quantity = 1
+        float $quantity = 1,
+        bool $canViewCost = true,
+        bool $canViewProfit = true
     ): ?array {
         $product = $item->product;
         if (!$product) {
@@ -474,7 +496,9 @@ class ProductReplacementController extends Controller
             $product,
             $locationsByProductId[(int) $product->id] ?? [],
             $lockedPrice,
-            $quantity
+            $quantity,
+            $canViewCost,
+            $canViewProfit
         );
 
         return array_merge($payload, [
@@ -491,7 +515,14 @@ class ProductReplacementController extends Controller
         ]);
     }
 
-    private function productPayload(Product $product, array $warehouseLocations = [], ?float $lockedPrice = null, float $quantity = 1): array
+    private function productPayload(
+        Product $product,
+        array $warehouseLocations = [],
+        ?float $lockedPrice = null,
+        float $quantity = 1,
+        bool $canViewCost = true,
+        bool $canViewProfit = true
+    ): array
     {
         $stockQuantity = InventoryQuantity::normalize($product->stock_quantity ?? 0);
         $warehouseQuantity = collect($warehouseLocations)->sum(fn (array $location) => InventoryQuantity::normalize($location['quantity'] ?? 0));
@@ -501,7 +532,7 @@ class ProductReplacementController extends Controller
         $lineCost = round($costPrice * $quantity, 2);
         $lineRevenue = round($effectiveSellingPrice * $quantity, 2);
 
-        return [
+        $payload = [
             'id' => (int) $product->id,
             'product_id' => (int) $product->id,
             'account_id' => (int) ($product->account_id ?? 0),
@@ -530,6 +561,35 @@ class ProductReplacementController extends Controller
             'deleted' => $product->trashed(),
             'is_available' => !$product->trashed() && (bool) $product->status && $stockQuantity > 0,
         ];
+
+        if (!$canViewCost) {
+            $payload['expected_cost'] = null;
+            $payload['cost_price'] = null;
+            $payload['replacement_cost_price'] = null;
+        }
+
+        if (!$canViewProfit) {
+            $payload['replacement_profit_total'] = null;
+        }
+
+        return $payload;
+    }
+
+    private function canViewReplacementDataPermission(Request $request, string $permission): bool
+    {
+        $access = app(AccessControlService::class);
+        $user = $access->resolveUserFromRequest($request);
+
+        if (!$user) {
+            return false;
+        }
+
+        return $access->canViewData(
+            $user,
+            $permission,
+            $access->resolveAccountIdFromRequest($request)
+        );
+
     }
 
     private function warehouseLocationsByProductId(array $productIds): array

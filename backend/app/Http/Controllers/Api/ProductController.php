@@ -26,6 +26,7 @@ use App\Services\Inventory\ProductPricingService;
 use App\Services\AI\AiExceptionClassifier;
 use App\Services\AI\ProductReviewAiGenerationService;
 use App\Services\AccountDataScopeService;
+use App\Services\AccessControlService;
 use App\Services\MediaService;
 use App\Services\GoogleMerchant\GoogleMerchantSettingsService;
 use App\Services\OrderInventorySlipService;
@@ -80,6 +81,109 @@ class ProductController extends Controller
         }
 
         return $this->schemaHasColumnCache[$cacheKey];
+    }
+
+    private function canViewProductCostData(Request $request, int|string|null $accountId = null): bool
+    {
+        $access = app(AccessControlService::class);
+        $user = $access->resolveUserFromRequest($request);
+
+        if (!$user) {
+            return false;
+        }
+
+        return $access->canViewData(
+            $user,
+            'cost.view',
+            $accountId ?? $access->resolveAccountIdFromRequest($request)
+        );
+    }
+
+    private function scrubProductCostPayload(mixed $payload, bool $canViewCost): mixed
+    {
+        if ($canViewCost) {
+            return $payload;
+        }
+
+        if ($payload instanceof Product) {
+            $visited = [];
+            $this->scrubProductCostModel($payload, $visited);
+
+            return $payload;
+        }
+
+        if ($payload instanceof Collection) {
+            return $payload->map(fn ($item) => $this->scrubProductCostPayload($item, false));
+        }
+
+        if (is_array($payload)) {
+            foreach ($payload as $key => $value) {
+                if (is_array($value) || $value instanceof Product || $value instanceof Collection) {
+                    $payload[$key] = $this->scrubProductCostPayload($value, false);
+                }
+
+                if (is_string($key) && in_array($key, $this->productCostPayloadKeys(), true)) {
+                    $payload[$key] = null;
+                }
+            }
+        }
+
+        return $payload;
+    }
+
+    private function scrubProductCostModel(Product $product, array &$visited): void
+    {
+        $objectId = spl_object_id($product);
+        if (isset($visited[$objectId])) {
+            return;
+        }
+
+        $visited[$objectId] = true;
+        foreach ($this->productCostPayloadKeys() as $key) {
+            $product->setAttribute($key, null);
+        }
+
+        if ($product->pivot) {
+            foreach ($this->productCostPayloadKeys() as $key) {
+                $product->pivot->setAttribute($key, null);
+            }
+        }
+
+        foreach (['parentConfigurable', 'variations', 'groupedItems', 'bundleItems', 'linkedProducts', 'parentProducts'] as $relation) {
+            if (!$product->relationLoaded($relation)) {
+                continue;
+            }
+
+            $related = $product->getRelation($relation);
+            if ($related instanceof Product) {
+                $this->scrubProductCostModel($related, $visited);
+                continue;
+            }
+
+            if ($related instanceof Collection) {
+                $related->each(function ($item) use (&$visited): void {
+                    if ($item instanceof Product) {
+                        $this->scrubProductCostModel($item, $visited);
+                    }
+                });
+            }
+        }
+    }
+
+    private function productCostPayloadKeys(): array
+    {
+        return [
+            'expected_cost',
+            'cost_price',
+            'current_cost_price',
+            'ordered_current_cost_price',
+            'inventory_display_cost',
+            'inventory_cost_source',
+            'unit_cost',
+            'total_cost',
+            'cost_total',
+            'imported_value_total',
+        ];
     }
 
     private function normalizeBundleOptionStatus($value): string
@@ -3888,10 +3992,15 @@ class ProductController extends Controller
     protected function loadProductResource(Product $product): Product
     {
         $product = $this->appendSupplierMeta($product->load($this->productResourceRelations()));
+        $request = request();
 
-        return $this->maskNonPickProductWarehouseSequences(
+        $product = $this->maskNonPickProductWarehouseSequences(
             $this->syncProductResourceInventoryStocks(request(), $product)
         );
+
+        return $request instanceof Request
+            ? $this->scrubProductCostPayload($product, $this->canViewProductCostData($request))
+            : $product;
     }
 
     protected function maskNonPickProductWarehouseSequences(Product $product): Product
@@ -8617,6 +8726,7 @@ class ProductController extends Controller
 
     protected function supplementPickerIndex(Request $request)
     {
+        $canViewCost = $this->canViewProductCostData($request);
         $searchTerm = trim((string) $request->input('search', ''));
         $perPage = min(max((int) $request->input('per_page', 40), 1), 80);
 
@@ -8662,7 +8772,10 @@ class ProductController extends Controller
         $paginated = $query->simplePaginate($perPage);
         $paginated->setCollection(
             $paginated->getCollection()
-                ->map(fn (Product $product) => $this->supplementPickerProductPayload($product))
+                ->map(fn (Product $product) => $this->scrubProductCostPayload(
+                    $this->supplementPickerProductPayload($product),
+                    $canViewCost
+                ))
         );
 
         return response()->json($paginated);
@@ -8882,6 +8995,7 @@ class ProductController extends Controller
     }
     protected function pickerIndex(Request $request)
     {
+        $canViewCost = $this->canViewProductCostData($request);
         $quickFiltersEnabled = $this->productQuickFiltersEnabled($request);
         $replacePicker = $request->boolean('replace_picker');
         $lightPicker = $request->boolean('light_picker');
@@ -9237,7 +9351,9 @@ class ProductController extends Controller
         });
 
         if ($lightPicker) {
-            $paginated->setCollection($pickerPayload);
+            $paginated->setCollection(
+                $pickerPayload->map(fn (array $product) => $this->scrubProductCostPayload($product, $canViewCost))
+            );
 
             return response()->json($paginated);
         }
@@ -9289,7 +9405,10 @@ class ProductController extends Controller
         );
 
         $paginated->setCollection(
-            $pickerPayload->map(fn (array $product) => $this->appendInventorySnapshotToPickerPayload($product, $inventorySnapshotMap))
+            $pickerPayload->map(fn (array $product) => $this->scrubProductCostPayload(
+                $this->appendInventorySnapshotToPickerPayload($product, $inventorySnapshotMap),
+                $canViewCost
+            ))
         );
 
         return response()->json($paginated);
@@ -9308,6 +9427,7 @@ class ProductController extends Controller
             return $this->pickerIndex($request);
         }
 
+        $canViewCost = $this->canViewProductCostData($request);
         $parentOnly = $request->boolean('parent_only') || $request->boolean('top_level_only');
         $includeNestedProducts = ! $request->boolean('summary');
         [$query, $actualStockSql] = $this->buildAdminProductListBaseQuery($request, $includeNestedProducts);
@@ -9916,11 +10036,11 @@ class ProductController extends Controller
             );
 
             $paginatedMatches->setCollection(
-                $products->map(function (Product $product) use ($stockMap) {
-                    return $this->syncProductStocksFromInventory(
+                $products->map(function (Product $product) use ($stockMap, $canViewCost) {
+                    return $this->scrubProductCostPayload($this->syncProductStocksFromInventory(
                         $this->trimAdminProductListPayload($this->appendSupplierMeta($product)),
                         $stockMap
-                    );
+                    ), $canViewCost);
                 })
             );
 
@@ -9984,11 +10104,11 @@ class ProductController extends Controller
                 ->all()
         );
         $paginated->setCollection(
-            $paginated->getCollection()->map(function (Product $product) use ($stockMap) {
-                return $this->syncProductStocksFromInventory(
+            $paginated->getCollection()->map(function (Product $product) use ($stockMap, $canViewCost) {
+                return $this->scrubProductCostPayload($this->syncProductStocksFromInventory(
                     $this->trimAdminProductListPayload($this->appendSupplierMeta($product)),
                     $stockMap
-                );
+                ), $canViewCost);
             })
         );
 
@@ -13452,7 +13572,10 @@ class ProductController extends Controller
         }
 
         return response()->json(
-            $this->syncProductResourceInventoryStocks($request, $product)
+            $this->scrubProductCostPayload(
+                $this->syncProductResourceInventoryStocks($request, $product),
+                $this->canViewProductCostData($request)
+            )
         );
     }
 
@@ -13672,6 +13795,7 @@ class ProductController extends Controller
 
     public function refreshOrderItems(Request $request)
     {
+        $canViewCost = $this->canViewProductCostData($request);
         $validated = $request->validate([
             'items' => 'required|array|min:1',
             'items.*.product_id' => 'required|integer',
@@ -13960,7 +14084,7 @@ class ProductController extends Controller
             }
         }
         return response()->json([
-            'items' => $items,
+            'items' => $this->scrubProductCostPayload($items, $canViewCost),
             'issues' => $issues,
             'requested_count' => $requestedItems->count(),
             'refreshed_count' => count($items),

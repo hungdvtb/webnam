@@ -2,7 +2,14 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import Pagination from '../../components/Pagination';
 import { productReplacementApi } from '../../services/api';
+import { useAuth } from '../../context/AuthContext';
 import { useUI } from '../../context/UIContext';
+import {
+    ADMIN_INVENTORY_REPLACEMENT_LOOKUP_PERMISSION,
+    ADMIN_INVENTORY_REPLACEMENT_PERMISSIONS,
+    hasAdminDataPermission,
+    hasAdminPermission,
+} from '../../utils/adminPermissions';
 
 const emptyPagination = { current_page: 1, last_page: 1, total: 0, per_page: 30 };
 const inputClass = 'h-10 rounded-sm border border-primary/15 bg-white px-3 text-[13px] font-semibold text-primary outline-none transition placeholder:text-primary/35 focus:border-primary';
@@ -63,12 +70,17 @@ const ReplacementItemChips = ({ items = [] }) => (
     </div>
 );
 
-const ReplacementFinancialBlock = ({ item, compact = false }) => {
+const ReplacementFinancialBlock = ({ item, compact = false, canViewCost = true, canViewProfit = true }) => {
     const profit = Number(item?.replacement_profit_total || 0);
     const profitClass = profit < 0 ? 'text-brick' : profit === 0 ? 'text-amber-600' : 'text-emerald-700';
+    const expandedColumnClass = canViewCost && canViewProfit
+        ? 'md:grid-cols-4'
+        : canViewCost || canViewProfit
+            ? 'md:grid-cols-3'
+            : 'md:grid-cols-2';
 
     return (
-        <div className={`grid gap-2 ${compact ? 'sm:grid-cols-2' : 'md:grid-cols-4'}`}>
+        <div className={`grid gap-2 ${compact ? 'sm:grid-cols-2' : expandedColumnClass}`}>
             <div className="rounded-sm border border-primary/10 bg-white px-3 py-2">
                 <div className="text-[10px] font-black uppercase tracking-[0.12em] text-primary/40">Giá niêm yết</div>
                 <div className="mt-1 text-[13px] font-black text-primary">{formatMoney(item?.list_price ?? item?.price)}đ</div>
@@ -77,27 +89,39 @@ const ReplacementFinancialBlock = ({ item, compact = false }) => {
                 <div className="text-[10px] font-black uppercase tracking-[0.12em] text-sky-700/60">Giá giữ theo đơn</div>
                 <div className="mt-1 text-[13px] font-black text-sky-800">{formatMoney(item?.locked_price ?? item?.effective_selling_price)}đ</div>
             </div>
-            <div className="rounded-sm border border-primary/10 bg-white px-3 py-2">
-                <div className="text-[10px] font-black uppercase tracking-[0.12em] text-primary/40">Giá vốn mã lấy</div>
-                <div className="mt-1 text-[13px] font-black text-primary">{formatMoney(item?.cost_price)}đ</div>
-            </div>
-            <div className="rounded-sm border border-primary/10 bg-white px-3 py-2">
-                <div className="text-[10px] font-black uppercase tracking-[0.12em] text-primary/40">Lãi sau đổi</div>
-                <div className={`mt-1 text-[13px] font-black ${profitClass}`}>{formatMoney(profit)}đ</div>
-            </div>
+            {canViewCost && (
+                <div className="rounded-sm border border-primary/10 bg-white px-3 py-2">
+                    <div className="text-[10px] font-black uppercase tracking-[0.12em] text-primary/40">Giá vốn mã lấy</div>
+                    <div className="mt-1 text-[13px] font-black text-primary">{formatMoney(item?.cost_price)}đ</div>
+                </div>
+            )}
+            {canViewProfit && (
+                <div className="rounded-sm border border-primary/10 bg-white px-3 py-2">
+                    <div className="text-[10px] font-black uppercase tracking-[0.12em] text-primary/40">Lãi sau đổi</div>
+                    <div className={`mt-1 text-[13px] font-black ${profitClass}`}>{formatMoney(profit)}đ</div>
+                </div>
+            )}
         </div>
     );
 };
 
 const ProductReplacementManager = ({ mode = 'manage' }) => {
+    const { user } = useAuth();
     const { showToast } = useUI();
     const isLookupMode = mode === 'lookup';
+    const canViewCost = hasAdminDataPermission(user, 'cost.view');
+    const canViewProfit = hasAdminDataPermission(user, 'profit.view');
+    const canCreateReplacement = hasAdminPermission(user, ADMIN_INVENTORY_REPLACEMENT_PERMISSIONS.create);
+    const canUpdateReplacement = hasAdminPermission(user, ADMIN_INVENTORY_REPLACEMENT_PERMISSIONS.update);
+    const canDeleteReplacement = hasAdminPermission(user, ADMIN_INVENTORY_REPLACEMENT_PERMISSIONS.delete_soft);
+    const canLookupReplacement = hasAdminPermission(user, ADMIN_INVENTORY_REPLACEMENT_LOOKUP_PERMISSION);
     const [groups, setGroups] = useState([]);
     const [pagination, setPagination] = useState(emptyPagination);
     const [search, setSearch] = useState('');
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
     const [form, setForm] = useState({ id: null, name: '', expression: '', notes: '' });
+    const canSaveReplacementGroup = form.id ? canUpdateReplacement : canCreateReplacement;
     const [lookupSku, setLookupSku] = useState('');
     const [lookupPrice, setLookupPrice] = useState('');
     const [lookupQuantity, setLookupQuantity] = useState('1');
@@ -135,6 +159,11 @@ const ProductReplacementManager = ({ mode = 'manage' }) => {
 
     const saveGroup = async (event) => {
         event.preventDefault();
+        if (!canSaveReplacementGroup) {
+            showToast({ type: 'error', message: 'Tài khoản của bạn chưa có quyền lưu nhóm mã thay thế.' });
+            return;
+        }
+
         if (!form.expression.trim()) {
             showToast({ type: 'warning', message: 'Nhập ít nhất 2 mã sản phẩm, ví dụ MR70 = MR71.' });
             return;
@@ -305,7 +334,7 @@ const ProductReplacementManager = ({ mode = 'manage' }) => {
                                                     </div>
                                                 </div>
                                             </div>
-                                            <ReplacementFinancialBlock item={item} />
+                                            <ReplacementFinancialBlock item={item} canViewCost={canViewCost} canViewProfit={canViewProfit} />
                                         </div>
                                     </div>
                                 )) : (
@@ -350,13 +379,16 @@ const ProductReplacementManager = ({ mode = 'manage' }) => {
                     <div className="text-[10px] font-black uppercase tracking-[0.18em] text-primary/45">Khai báo kho</div>
                     <h1 className="mt-1 text-2xl font-black text-primary">Mã sản phẩm thay thế</h1>
                 </div>
-                <Link to="/admin/inventory/tra-ma-kho" className={ghostButton}>
-                    <span className="material-symbols-outlined text-[18px]">qr_code_scanner</span>
-                    Tra nhanh cho kho
-                </Link>
+                {canLookupReplacement && (
+                    <Link to="/admin/inventory/tra-ma-kho" className={ghostButton}>
+                        <span className="material-symbols-outlined text-[18px]">qr_code_scanner</span>
+                        Tra nhanh cho kho
+                    </Link>
+                )}
             </div>
 
-            <form onSubmit={saveGroup} className={`${panelClass} p-4`}>
+            {(canCreateReplacement || canUpdateReplacement) && (
+                <form onSubmit={saveGroup} className={`${panelClass} p-4`}>
                 <div className="grid gap-3 xl:grid-cols-[minmax(260px,1fr)_220px_260px_auto]">
                     <div>
                         <label className="mb-1 block text-[11px] font-black uppercase tracking-[0.12em] text-primary/45">Nhập nhanh theo mã</label>
@@ -386,7 +418,7 @@ const ProductReplacementManager = ({ mode = 'manage' }) => {
                         />
                     </div>
                     <div className="flex items-end gap-2">
-                        <button type="submit" disabled={saving} className={primaryButton}>
+                        <button type="submit" disabled={saving || !canSaveReplacementGroup} className={primaryButton}>
                             <span className="material-symbols-outlined text-[18px]">{form.id ? 'save' : 'add'}</span>
                             {saving ? 'Đang lưu' : form.id ? 'Cập nhật' : 'Lưu nhóm'}
                         </button>
@@ -395,7 +427,8 @@ const ProductReplacementManager = ({ mode = 'manage' }) => {
                         ) : null}
                     </div>
                 </div>
-            </form>
+                </form>
+            )}
 
             <div className={`${panelClass} flex min-h-0 flex-1 flex-col`}>
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-primary/10 px-4 py-3">
@@ -456,14 +489,18 @@ const ProductReplacementManager = ({ mode = 'manage' }) => {
                                     </td>
                                     <td className="px-4 py-3 align-top">
                                         <div className="flex justify-end gap-2">
-                                            <button type="button" onClick={() => editGroup(group)} className={ghostButton}>
-                                                <span className="material-symbols-outlined text-[16px]">edit</span>
-                                                Sửa
-                                            </button>
-                                            <button type="button" onClick={() => deleteGroup(group)} className={dangerButton}>
-                                                <span className="material-symbols-outlined text-[16px]">delete</span>
-                                                Xóa
-                                            </button>
+                                            {canUpdateReplacement && (
+                                                <button type="button" onClick={() => editGroup(group)} className={ghostButton}>
+                                                    <span className="material-symbols-outlined text-[16px]">edit</span>
+                                                    Sửa
+                                                </button>
+                                            )}
+                                            {canDeleteReplacement && (
+                                                <button type="button" onClick={() => deleteGroup(group)} className={dangerButton}>
+                                                    <span className="material-symbols-outlined text-[16px]">delete</span>
+                                                    Xóa
+                                                </button>
+                                            )}
                                         </div>
                                     </td>
                                 </tr>

@@ -30,13 +30,36 @@ export const ADMIN_DATA_PERMISSION_OPTIONS = [
     { id: 'cost.view', label: 'Xem giá nhập / giá vốn' },
     { id: 'profit.view', label: 'Xem lãi gộp / lợi nhuận' },
     { id: 'finance.view', label: 'Xem dữ liệu tài chính' },
+    { id: 'customer_phone.view', label: 'Xem SĐT khách hàng' },
 ];
 
 export const ADMIN_PROFIT_SCOPE_ALL_PERMISSION = 'profit.scope.all';
 export const ADMIN_CHANGE_PASSWORD_PERMISSION = 'users.change_password';
+export const ADMIN_INVENTORY_SHELF_LOCATION_PERMISSIONS = {
+    view: 'inventory.shelf_locations.view',
+    create: 'inventory.shelf_locations.create',
+    update: 'inventory.shelf_locations.update',
+    delete_soft: 'inventory.shelf_locations.delete_soft',
+};
+export const ADMIN_INVENTORY_REPLACEMENT_PERMISSIONS = {
+    view: 'inventory.replacements.view',
+    create: 'inventory.replacements.create',
+    update: 'inventory.replacements.update',
+    delete_soft: 'inventory.replacements.delete_soft',
+};
+export const ADMIN_INVENTORY_REPLACEMENT_LOOKUP_PERMISSION = 'inventory.replacement_lookup.view';
 
 export const ADMIN_SPECIAL_PERMISSION_OPTIONS = [
     { id: ADMIN_CHANGE_PASSWORD_PERMISSION, label: 'Đổi mật khẩu quản trị' },
+    { id: ADMIN_INVENTORY_SHELF_LOCATION_PERMISSIONS.view, label: 'Vị trí kệ - Xem' },
+    { id: ADMIN_INVENTORY_SHELF_LOCATION_PERMISSIONS.create, label: 'Vị trí kệ - Thêm' },
+    { id: ADMIN_INVENTORY_SHELF_LOCATION_PERMISSIONS.update, label: 'Vị trí kệ - Sửa' },
+    { id: ADMIN_INVENTORY_SHELF_LOCATION_PERMISSIONS.delete_soft, label: 'Vị trí kệ - Xóa' },
+    { id: ADMIN_INVENTORY_REPLACEMENT_PERMISSIONS.view, label: 'Mã thay thế - Xem' },
+    { id: ADMIN_INVENTORY_REPLACEMENT_PERMISSIONS.create, label: 'Mã thay thế - Thêm' },
+    { id: ADMIN_INVENTORY_REPLACEMENT_PERMISSIONS.update, label: 'Mã thay thế - Sửa' },
+    { id: ADMIN_INVENTORY_REPLACEMENT_PERMISSIONS.delete_soft, label: 'Mã thay thế - Xóa' },
+    { id: ADMIN_INVENTORY_REPLACEMENT_LOOKUP_PERMISSION, label: 'Tra mã kho' },
 ];
 
 export const ADMIN_ROLE_OPTIONS = [
@@ -44,6 +67,7 @@ export const ADMIN_ROLE_OPTIONS = [
     { id: 'manager', label: 'Quản lý' },
     { id: 'sale', label: 'Nhân viên sale' },
     { id: 'warehouse', label: 'Nhân viên kho' },
+    { id: 'employee', label: 'Nhân viên' },
     { id: 'viewer', label: 'Chỉ xem' },
     { id: 'custom', label: 'Tùy chỉnh' },
 ];
@@ -54,6 +78,7 @@ export const ADMIN_DETAILED_PERMISSION_IDS = ADMIN_PERMISSION_OPTIONS.flatMap((m
 )).concat('users.manage', ...ADMIN_SPECIAL_PERMISSION_OPTIONS.map((permission) => permission.id));
 
 const ADMIN_MODULE_IDS = new Set(LEGACY_ADMIN_PERMISSION_IDS);
+const ADMIN_ACTION_IDS = new Set(ADMIN_ACTION_OPTIONS.map((action) => action.id));
 const ROLE_ALIASES = {
     owner: 'owner',
     manager: 'manager',
@@ -61,6 +86,9 @@ const ROLE_ALIASES = {
     sale: 'sale',
     sales: 'sale',
     warehouse: 'warehouse',
+    employee: 'employee',
+    nhan_vien: 'employee',
+    nhanvien: 'employee',
     viewer: 'viewer',
     custom: 'custom',
 };
@@ -80,6 +108,35 @@ function modulePermissions(modules, actions) {
             ? actions.map((action) => `${module}.${action}`)
             : []
     )));
+}
+
+function moduleFromDetailedPermission(permission) {
+    if (permission === 'users.manage') {
+        return 'users';
+    }
+
+    const segments = String(permission || '').split('.');
+    if (segments.length !== 2) {
+        return null;
+    }
+
+    const [module, action] = segments;
+    return ADMIN_MODULE_IDS.has(module) && ADMIN_ACTION_IDS.has(action) ? module : null;
+}
+
+function fallbackModulePermissionForFeaturePermission(permission) {
+    const segments = String(permission || '').split('.');
+    if (segments.length < 3) {
+        return null;
+    }
+
+    const module = segments[0];
+    const action = segments[segments.length - 1];
+    if (!ADMIN_MODULE_IDS.has(module) || !ADMIN_ACTION_IDS.has(action)) {
+        return null;
+    }
+
+    return `${module}.${action}`;
 }
 
 export function permissionsForRole(role) {
@@ -118,6 +175,19 @@ export function permissionsForRole(role) {
                 ...modulePermissions(['dashboard', 'orders', 'products'], ['view']),
                 ...modulePermissions(['inventory', 'warehouses'], ['view', 'create', 'update', 'delete_soft', 'export']),
             ]);
+        case 'employee':
+            return unique([
+                ...modulePermissions(['dashboard'], ['view']),
+                ...modulePermissions(['orders'], ['view', 'create', 'update', 'export']),
+                ...modulePermissions(['payroll'], ['view']),
+                ADMIN_INVENTORY_SHELF_LOCATION_PERMISSIONS.view,
+                ADMIN_INVENTORY_SHELF_LOCATION_PERMISSIONS.create,
+                ADMIN_INVENTORY_SHELF_LOCATION_PERMISSIONS.update,
+                ADMIN_INVENTORY_REPLACEMENT_PERMISSIONS.view,
+                ADMIN_INVENTORY_REPLACEMENT_PERMISSIONS.create,
+                ADMIN_INVENTORY_REPLACEMENT_PERMISSIONS.update,
+                ADMIN_INVENTORY_REPLACEMENT_LOOKUP_PERMISSION,
+            ]);
         case 'viewer':
             return modulePermissions(['dashboard', 'products', 'orders', 'customers', 'leads', 'inventory', 'warehouses'], ['view']);
         default:
@@ -126,9 +196,17 @@ export function permissionsForRole(role) {
 }
 
 export function dataPermissionsForRole(role) {
-    return ['owner', 'manager'].includes(normalizeRole(role))
-        ? [...ADMIN_DATA_PERMISSION_OPTIONS.map((permission) => permission.id), ADMIN_PROFIT_SCOPE_ALL_PERMISSION]
-        : [];
+    const normalizedRole = normalizeRole(role);
+
+    if (['owner', 'manager'].includes(normalizedRole)) {
+        return [...ADMIN_DATA_PERMISSION_OPTIONS.map((permission) => permission.id), ADMIN_PROFIT_SCOPE_ALL_PERMISSION];
+    }
+
+    if (['sale', 'warehouse', 'viewer'].includes(normalizedRole)) {
+        return ['customer_phone.view'];
+    }
+
+    return [];
 }
 
 function parsePermissionPayload(rawPermissions) {
@@ -207,6 +285,7 @@ export function accountAccessesFromUser(user) {
     return user.accounts.map((account) => ({
         account_id: account.id,
         role: normalizeRole(account.pivot?.role || 'custom'),
+        permission_label: account.pivot?.permission_label || '',
         status: account.pivot?.status ?? 1,
         permissions: parsePermissionPayload(account.pivot?.permissions) || [],
         data_permissions: parsePermissionPayload(account.pivot?.data_permissions) || [],
@@ -244,8 +323,7 @@ export function normalizeAdminPermissions(user, accountId = readActiveAccountId(
     const detailedPermissions = normalizeDetailedAdminPermissions(user, accountId);
 
     const modules = detailedPermissions.map((permission) => {
-        const [module] = String(permission || '').split('.');
-        return ADMIN_MODULE_IDS.has(module) ? module : null;
+        return moduleFromDetailedPermission(permission);
     });
 
     if (hasPayrollScopedAccess(user, accountId)) {
@@ -269,6 +347,11 @@ export function hasAdminPermission(user, permission, accountId = readActiveAccou
     const [module] = String(permission || '').split('.');
     if (permission === 'users.manage') {
         return permissions.includes('users.update') || permissions.includes('users.*');
+    }
+
+    const fallbackModulePermission = fallbackModulePermissionForFeaturePermission(permission);
+    if (fallbackModulePermission && permissions.includes(fallbackModulePermission)) {
+        return true;
     }
 
     return permissions.includes(`${module}.*`);

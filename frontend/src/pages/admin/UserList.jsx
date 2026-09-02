@@ -37,6 +37,14 @@ const labelForRole = (role) => (
     ADMIN_ROLE_OPTIONS.find((option) => option.id === role)?.label || role || 'Tùy chỉnh'
 );
 
+const cleanPermissionLabel = (value) => String(value ?? '').trim();
+
+const labelForAccess = (access) => cleanPermissionLabel(access.permission_label) || labelForRole(access.role);
+
+const defaultPermissionLabel = (userName, role = 'employee') => (
+    cleanPermissionLabel(userName) || labelForRole(role)
+);
+
 const permissionId = (moduleId, actionId) => `${moduleId}.${actionId}`;
 const PROFIT_SCOPE_ALL = 'profit.scope.all';
 const LEGACY_PROFIT_SCOPE_CHANNEL_PREFIX = 'profit.scope.channel.';
@@ -59,14 +67,16 @@ const moduleIdsFromDetailedPermissions = (permissions = []) => Array.from(new Se
 const normalizeAccessPayload = (access) => ({
     account_id: Number(access.account_id),
     role: access.role || 'custom',
+    permission_label: access.permission_label == null ? '' : String(access.permission_label),
     status: Number(access.status ?? 1) === 1 ? 1 : 0,
     permissions: Array.isArray(access.permissions) ? access.permissions : [],
     data_permissions: Array.isArray(access.data_permissions) ? access.data_permissions : [],
 });
 
-const accessForAccount = (account, role = 'sale') => ({
+const accessForAccount = (account, role = 'employee', userName = '') => ({
     account_id: Number(account.id),
     role,
+    permission_label: defaultPermissionLabel(userName, role),
     status: 1,
     permissions: permissionsForRole(role),
     data_permissions: dataPermissionsForRole(role),
@@ -215,9 +225,16 @@ const UserList = () => {
                 ...current,
                 account_accesses: exists
                     ? current.account_accesses.filter((access) => Number(access.account_id) !== accountId)
-                    : [...current.account_accesses, accessForAccount(account)],
+                    : [...current.account_accesses, accessForAccount(account, 'employee', current.name)],
             };
         });
+    };
+
+    const changePermissionLabel = (accountId, permissionLabel) => {
+        updateAccess(accountId, (access) => ({
+            ...access,
+            permission_label: permissionLabel,
+        }));
     };
 
     const changeRole = (accountId, role) => {
@@ -451,8 +468,8 @@ const UserList = () => {
                                                     return (
                                                         <div key={access.account_id} className="flex items-center gap-1.5">
                                                             <span className="size-1 shrink-0 rounded-full bg-gold/40" />
-                                                            <span className="truncate text-[11px] font-bold text-primary/70">{account?.name || `Cửa hàng #${access.account_id}`}</span>
-                                                            <span className="shrink-0 text-[9px] font-black uppercase text-stone/30">{labelForRole(access.role)}</span>
+                                                            <span className="min-w-0 flex-1 truncate text-[11px] font-bold text-primary/70">{account?.name || `Cửa hàng #${access.account_id}`}</span>
+                                                            <span className="max-w-[120px] shrink-0 truncate text-[9px] font-black uppercase text-stone/30">{labelForAccess(access)}</span>
                                                         </div>
                                                     );
                                                 }) : (
@@ -572,11 +589,23 @@ const UserList = () => {
                                                     </label>
 
                                                     {isSelected && (
-                                                        <select value={access.role} onChange={(event) => changeRole(account.id, event.target.value)} className="h-9 rounded-sm border border-gold/20 bg-[#fcfcfa] px-3 text-[11px] font-black uppercase tracking-wider text-primary focus:border-gold focus:outline-none">
-                                                            {ADMIN_ROLE_OPTIONS.map((role) => (
-                                                                <option key={role.id} value={role.id}>{role.label}</option>
-                                                            ))}
-                                                        </select>
+                                                        <div className="flex flex-1 flex-wrap items-center justify-end gap-2">
+                                                            <label className="flex min-w-[220px] flex-1 items-center gap-2 rounded-sm border border-gold/20 bg-[#fcfcfa] px-3 py-2 md:max-w-xs">
+                                                                <span className="shrink-0 text-[10px] font-black uppercase tracking-widest text-primary/40">Tên quyền</span>
+                                                                <input
+                                                                    type="text"
+                                                                    value={access.permission_label}
+                                                                    onChange={(event) => changePermissionLabel(account.id, event.target.value)}
+                                                                    placeholder={labelForRole(access.role)}
+                                                                    className="min-w-0 flex-1 bg-transparent text-[12px] font-bold text-primary outline-none placeholder:text-stone/30"
+                                                                />
+                                                            </label>
+                                                            <select value={access.role} onChange={(event) => changeRole(account.id, event.target.value)} className="h-9 rounded-sm border border-gold/20 bg-[#fcfcfa] px-3 text-[11px] font-black uppercase tracking-wider text-primary focus:border-gold focus:outline-none">
+                                                                {ADMIN_ROLE_OPTIONS.map((role) => (
+                                                                    <option key={role.id} value={role.id}>{role.label}</option>
+                                                                ))}
+                                                            </select>
+                                                        </div>
                                                     )}
                                                 </div>
 

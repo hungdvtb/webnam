@@ -31,7 +31,8 @@ class UserController extends Controller
             'account_ids.*' => 'integer|exists:accounts,id',
             'account_accesses' => 'nullable|array',
             'account_accesses.*.account_id' => 'required_with:account_accesses|integer|exists:accounts,id',
-            'account_accesses.*.role' => ['nullable', 'string', 'max:50', Rule::in(['owner', 'manager', 'staff', 'sale', 'warehouse', 'viewer', 'custom'])],
+            'account_accesses.*.role' => ['nullable', 'string', 'max:50', Rule::in(['owner', 'manager', 'staff', 'sale', 'warehouse', 'employee', 'viewer', 'custom'])],
+            'account_accesses.*.permission_label' => 'nullable|string|max:255',
             'account_accesses.*.status' => 'nullable|boolean',
             'account_accesses.*.permissions' => 'nullable|array',
             'account_accesses.*.permissions.*' => 'string',
@@ -85,7 +86,8 @@ class UserController extends Controller
             'account_ids.*' => 'integer|exists:accounts,id',
             'account_accesses' => 'nullable|array',
             'account_accesses.*.account_id' => 'required_with:account_accesses|integer|exists:accounts,id',
-            'account_accesses.*.role' => ['nullable', 'string', 'max:50', Rule::in(['owner', 'manager', 'staff', 'sale', 'warehouse', 'viewer', 'custom'])],
+            'account_accesses.*.role' => ['nullable', 'string', 'max:50', Rule::in(['owner', 'manager', 'staff', 'sale', 'warehouse', 'employee', 'viewer', 'custom'])],
+            'account_accesses.*.permission_label' => 'nullable|string|max:255',
             'account_accesses.*.status' => 'nullable|boolean',
             'account_accesses.*.permissions' => 'nullable|array',
             'account_accesses.*.permissions.*' => 'string',
@@ -200,9 +202,11 @@ class UserController extends Controller
                 $role = $access['role'] ?? 'custom';
                 $permissions = $access['permissions'] ?? AccessControlService::permissionsForRole($role);
                 $dataPermissions = $access['data_permissions'] ?? AccessControlService::dataPermissionsForRole($role);
+                $permissionLabel = trim((string) ($access['permission_label'] ?? ''));
 
                 $payload[$accountId] = [
                     'role' => $role,
+                    'permission_label' => $permissionLabel !== '' ? $permissionLabel : null,
                     'status' => array_key_exists('status', $access) ? (int) (bool) $access['status'] : 1,
                     'permissions' => json_encode(AccessControlService::sanitizePermissionsForStorage($permissions)),
                     'data_permissions' => json_encode(AccessControlService::normalizeDataPermissions($dataPermissions)),
@@ -226,6 +230,7 @@ class UserController extends Controller
         foreach ($validated['account_ids'] as $accountId) {
             $payload[(int) $accountId] = [
                 'role' => 'custom',
+                'permission_label' => null,
                 'status' => 1,
                 'permissions' => json_encode($permissions),
                 'data_permissions' => json_encode([]),

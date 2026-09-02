@@ -11,6 +11,7 @@ use App\Models\PayrollScheduleRegistration;
 use App\Models\PayrollUserScope;
 use App\Models\PayrollWorkShift;
 use App\Models\User;
+use App\Services\AccessControlService;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
@@ -770,7 +771,7 @@ class PayrollController extends Controller
             ];
         }
 
-        if ($this->userHasPayrollModulePermission($user)) {
+        if ($this->userHasPayrollModulePermission($user, $accountId)) {
             return [
                 'scope_type' => 'Tất cả',
                 'employee_id' => null,
@@ -797,24 +798,17 @@ class PayrollController extends Controller
         ];
     }
 
-    private function userHasPayrollModulePermission(User $user): bool
+    private function userHasPayrollModulePermission(User $user, int $accountId): bool
     {
-        $permissions = $user->permissions;
+        $access = app(AccessControlService::class);
 
-        if ($permissions === null) {
-            return true;
+        foreach (['payroll.create', 'payroll.delete_soft', 'payroll.export'] as $permission) {
+            if ($access->can($user, $permission, $accountId)) {
+                return true;
+            }
         }
 
-        if (is_string($permissions)) {
-            $decoded = json_decode($permissions, true);
-            $permissions = is_array($decoded) ? $decoded : [];
-        }
-
-        if (!is_array($permissions)) {
-            return false;
-        }
-
-        return in_array('payroll', $permissions, true);
+        return false;
     }
 
     private function applyEmployeeScope(Builder $query, array $scope): void

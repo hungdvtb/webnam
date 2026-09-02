@@ -50,6 +50,65 @@ class UserPermissionsApiTest extends TestCase
             ->assertJsonPath('is_admin', false);
     }
 
+    public function test_it_persists_editable_permission_label_for_account_accesses(): void
+    {
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]), ['*']);
+
+        $account = Account::query()->create([
+            'name' => 'Permission Label Account',
+            'domain' => uniqid('permission-label-', true) . '.test',
+            'status' => true,
+        ]);
+
+        $response = $this->postJson('/api/users', [
+            'name' => 'Nam Order Staff',
+            'email' => 'nam.order.staff@example.com',
+            'password' => 'secret123',
+            'status' => 1,
+            'account_accesses' => [[
+                'account_id' => $account->id,
+                'role' => 'employee',
+                'permission_label' => 'Nam - order staff',
+                'status' => 1,
+                'permissions' => AccessControlService::permissionsForRole('employee'),
+                'data_permissions' => [],
+            ]],
+        ])->assertCreated();
+
+        $userId = $response->json('id');
+
+        $response->assertJsonPath('accounts.0.pivot.permission_label', 'Nam - order staff');
+        $this->assertDatabaseHas('account_user', [
+            'account_id' => $account->id,
+            'user_id' => $userId,
+            'role' => 'employee',
+            'permission_label' => 'Nam - order staff',
+        ]);
+
+        $this->putJson("/api/users/{$userId}", [
+            'name' => 'Nam Order Staff',
+            'email' => 'nam.order.staff@example.com',
+            'status' => 1,
+            'account_accesses' => [[
+                'account_id' => $account->id,
+                'role' => 'employee',
+                'permission_label' => 'Nam - ca chieu',
+                'status' => 1,
+                'permissions' => AccessControlService::permissionsForRole('employee'),
+                'data_permissions' => [],
+            ]],
+        ])
+            ->assertOk()
+            ->assertJsonPath('accounts.0.pivot.permission_label', 'Nam - ca chieu');
+
+        $this->assertDatabaseHas('account_user', [
+            'account_id' => $account->id,
+            'user_id' => $userId,
+            'role' => 'employee',
+            'permission_label' => 'Nam - ca chieu',
+        ]);
+    }
+
     public function test_user_update_permission_cannot_change_password_through_password_endpoint(): void
     {
         $operator = User::factory()->create(['is_admin' => false, 'status' => 1]);

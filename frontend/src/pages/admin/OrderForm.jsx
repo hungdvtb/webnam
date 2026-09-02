@@ -59,7 +59,7 @@ import {
     normalizeRoundedImportCostNumber,
 } from '../../utils/money';
 import { buildOrderAiQuickRuleOptions, normalizeOrderAiRules } from '../../utils/orderAiRules';
-import { hasAdminPermission } from '../../utils/adminPermissions';
+import { hasAdminDataPermission, hasAdminPermission } from '../../utils/adminPermissions';
 import {
     copyProductQuickSetupItemsToNamespace,
     findProductQuickSetupItems,
@@ -6249,13 +6249,14 @@ const OrderPriceMultiplierModal = ({
     onClose,
     onApply,
     currencyFormatter = formatQuoteMoney,
+    canViewCost = true,
 }) => {
     const [saleMultiplierInput, setSaleMultiplierInput] = useState('3');
     const [costMultiplierInput, setCostMultiplierInput] = useState('3');
 
     const saleMultiplier = parseOrderPriceMultiplier(saleMultiplierInput);
-    const costMultiplier = parseOrderPriceMultiplier(costMultiplierInput);
-    const isValid = saleMultiplier !== null && costMultiplier !== null && selectedItems.length > 0;
+    const costMultiplier = canViewCost ? parseOrderPriceMultiplier(costMultiplierInput) : 1;
+    const isValid = saleMultiplier !== null && (!canViewCost || costMultiplier !== null) && selectedItems.length > 0;
     const previewItems = selectedItems.slice(0, 5).map((item) => {
         const currentSalePrice = parseMoneyNumber(item?.price, 0) || 0;
         const currentCostPrice = parseMoneyNumber(item?.cost_price, 0) || 0;
@@ -6278,14 +6279,16 @@ const OrderPriceMultiplierModal = ({
 
         onApply({
             saleMultiplier,
-            costMultiplier,
+            costMultiplier: canViewCost ? costMultiplier : 1,
         });
     };
 
     const applyPreset = (value) => {
         const nextValue = String(value);
         setSaleMultiplierInput(nextValue);
-        setCostMultiplierInput(nextValue);
+        if (canViewCost) {
+            setCostMultiplierInput(nextValue);
+        }
     };
 
     if (!show) return null;
@@ -6331,7 +6334,7 @@ const OrderPriceMultiplierModal = ({
                 </div>
 
                 <div className="space-y-5 px-6 py-5">
-                    <div className="grid gap-3 md:grid-cols-2">
+                    <div className={`grid gap-3 ${canViewCost ? 'md:grid-cols-2' : ''}`}>
                         <label className="block">
                             <span className="mb-1.5 block text-[11px] font-black uppercase tracking-[0.12em] text-primary/45">Hệ số giá bán</span>
                             <div className="flex h-12 items-center rounded-sm border border-primary/10 bg-primary/[0.03] px-3 focus-within:border-primary/30 focus-within:bg-white">
@@ -6351,23 +6354,25 @@ const OrderPriceMultiplierModal = ({
                             </div>
                         </label>
 
-                        <label className="block">
-                            <span className="mb-1.5 block text-[11px] font-black uppercase tracking-[0.12em] text-primary/45">Hệ số giá nhập</span>
-                            <div className="flex h-12 items-center rounded-sm border border-primary/10 bg-primary/[0.03] px-3 focus-within:border-primary/30 focus-within:bg-white">
-                                <span className="material-symbols-outlined mr-2 text-[18px] text-sky-700/70">inventory_2</span>
-                                <input
-                                    type="text"
-                                    inputMode="decimal"
-                                    value={costMultiplierInput}
-                                    onChange={(event) => setCostMultiplierInput(normalizeOrderPriceMultiplierDraft(event.target.value))}
-                                    className="h-full w-full bg-transparent text-[18px] font-black text-primary focus:outline-none"
-                                    placeholder="3"
-                                />
-                                <span className="text-[12px] font-black uppercase tracking-[0.1em] text-primary/30">
-                                    {formatOrderPriceMultiplier(costMultiplierInput)}
-                                </span>
-                            </div>
-                        </label>
+                        {canViewCost && (
+                            <label className="block">
+                                <span className="mb-1.5 block text-[11px] font-black uppercase tracking-[0.12em] text-primary/45">Hệ số giá nhập</span>
+                                <div className="flex h-12 items-center rounded-sm border border-primary/10 bg-primary/[0.03] px-3 focus-within:border-primary/30 focus-within:bg-white">
+                                    <span className="material-symbols-outlined mr-2 text-[18px] text-sky-700/70">inventory_2</span>
+                                    <input
+                                        type="text"
+                                        inputMode="decimal"
+                                        value={costMultiplierInput}
+                                        onChange={(event) => setCostMultiplierInput(normalizeOrderPriceMultiplierDraft(event.target.value))}
+                                        className="h-full w-full bg-transparent text-[18px] font-black text-primary focus:outline-none"
+                                        placeholder="3"
+                                    />
+                                    <span className="text-[12px] font-black uppercase tracking-[0.1em] text-primary/30">
+                                        {formatOrderPriceMultiplier(costMultiplierInput)}
+                                    </span>
+                                </div>
+                            </label>
+                        )}
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2">
@@ -6384,14 +6389,14 @@ const OrderPriceMultiplierModal = ({
                     </div>
 
                     <div className="overflow-hidden rounded-sm border border-primary/10">
-                        <div className="grid grid-cols-[minmax(0,1.6fr)_1fr_1fr] border-b border-primary/10 bg-primary/[0.04] px-4 py-2 text-[11px] font-black uppercase tracking-[0.1em] text-primary/45">
+                        <div className={`grid ${canViewCost ? 'grid-cols-[minmax(0,1.6fr)_1fr_1fr]' : 'grid-cols-[minmax(0,1.6fr)_1fr]'} border-b border-primary/10 bg-primary/[0.04] px-4 py-2 text-[11px] font-black uppercase tracking-[0.1em] text-primary/45`}>
                             <div>Sản phẩm</div>
                             <div className="text-right">Giá bán</div>
-                            <div className="text-right">Giá nhập</div>
+                            {canViewCost && <div className="text-right">Giá nhập</div>}
                         </div>
                         <div className="max-h-[260px] overflow-y-auto">
                             {previewItems.map((item) => (
-                                <div key={item.lineId} className="grid grid-cols-[minmax(0,1.6fr)_1fr_1fr] gap-3 border-b border-primary/5 px-4 py-3 last:border-b-0">
+                                <div key={item.lineId} className={`grid ${canViewCost ? 'grid-cols-[minmax(0,1.6fr)_1fr_1fr]' : 'grid-cols-[minmax(0,1.6fr)_1fr]'} gap-3 border-b border-primary/5 px-4 py-3 last:border-b-0`}>
                                     <div className="min-w-0 text-[12px] font-bold leading-[1.45] text-primary">
                                         <div className="truncate">{item.name}</div>
                                     </div>
@@ -6399,10 +6404,12 @@ const OrderPriceMultiplierModal = ({
                                         <div>{currencyFormatter(item.currentSalePrice)}</div>
                                         <div className="mt-1 text-emerald-700">{currencyFormatter(item.nextSalePrice)}</div>
                                     </div>
-                                    <div className="text-right text-[12px] font-bold text-primary/45">
-                                        <div>{currencyFormatter(item.currentCostPrice)}</div>
-                                        <div className="mt-1 text-sky-700">{currencyFormatter(item.nextCostPrice)}</div>
-                                    </div>
+                                    {canViewCost && (
+                                        <div className="text-right text-[12px] font-bold text-primary/45">
+                                            <div>{currencyFormatter(item.currentCostPrice)}</div>
+                                            <div className="mt-1 text-sky-700">{currencyFormatter(item.nextCostPrice)}</div>
+                                        </div>
+                                    )}
                                 </div>
                             ))}
                         </div>
@@ -6413,9 +6420,9 @@ const OrderPriceMultiplierModal = ({
                         ) : null}
                     </div>
 
-                    {(!saleMultiplier || !costMultiplier) ? (
+                    {(!saleMultiplier || (canViewCost && !costMultiplier)) ? (
                         <div className="rounded-sm border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] font-semibold text-rose-700">
-                            Nhập hệ số lớn hơn 0 cho cả giá bán và giá nhập.
+                            {canViewCost ? 'Nhập hệ số lớn hơn 0 cho cả giá bán và giá nhập.' : 'Nhập hệ số giá bán lớn hơn 0.'}
                         </div>
                     ) : null}
                 </div>
@@ -6950,6 +6957,7 @@ const OrderAiLineReplacePanel = ({
     onToggleGroupLine,
     onConfirmGroupReplacement,
     groupConfirmLabel = 'Đổi nhóm khi nhặt hàng',
+    canViewCost = true,
 }) => {
     const isAiLine = isOrderAiItem(currentLine);
     const isWarehousePickingTab = showWarehousePickingTab && activeTab === ACTUAL_PRODUCT_PICKER_TAB_WAREHOUSE;
@@ -7391,12 +7399,16 @@ const OrderAiLineReplacePanel = ({
                                                     <span className="rounded-sm border border-sky-200 bg-sky-50 px-2 py-1 text-sky-800">
                                                         Giữ đơn <b>{formatPanelMoney(financialPreview.lockedPrice)}</b>
                                                     </span>
-                                                    <span className="rounded-sm border border-primary/10 bg-white px-2 py-1">
-                                                        Giá vốn <b className="text-primary/70">{formatPanelMoney(financialPreview.costPrice)}</b>
-                                                    </span>
-                                                    <span className="rounded-sm border border-primary/10 bg-white px-2 py-1">
-                                                        Lãi <b className={profitClass}>{formatPanelMoney(financialPreview.profitTotal)}</b>
-                                                    </span>
+                                                    {canViewCost && (
+                                                        <>
+                                                            <span className="rounded-sm border border-primary/10 bg-white px-2 py-1">
+                                                                Giá vốn <b className="text-primary/70">{formatPanelMoney(financialPreview.costPrice)}</b>
+                                                            </span>
+                                                            <span className="rounded-sm border border-primary/10 bg-white px-2 py-1">
+                                                                Lãi <b className={profitClass}>{formatPanelMoney(financialPreview.profitTotal)}</b>
+                                                            </span>
+                                                        </>
+                                                    )}
                                                 </div>
                                             )}
                                         </div>
@@ -7600,6 +7612,8 @@ const OrderForm = () => {
     const { showModal } = useUI();
     const canCreateOrders = hasAdminPermission(user, 'orders.create');
     const canUpdateOrders = hasAdminPermission(user, 'orders.update');
+    const canViewCost = hasAdminDataPermission(user, 'cost.view');
+    const canViewCustomerPhone = hasAdminDataPermission(user, 'customer_phone.view');
     const productQuickFilterStorageKey = getProductQuickFilterStorageKey(user);
     const initialProductQuickFilterState = getStoredProductQuickFilterState(user);
 
@@ -7709,6 +7723,7 @@ const OrderForm = () => {
     const [selectedLineItemIds, setSelectedLineItemIds] = useState(new Set());
     const [deletedLineItemBatches, setDeletedLineItemBatches] = useState([]);
     const [showBulkReplaceModal, setShowBulkReplaceModal] = useState(false);
+    const [categoryGroupUndoState, setCategoryGroupUndoState] = useState({ id: '', items: [] });
     const [actualProductCategoryGroupReplaceModal, setActualProductCategoryGroupReplaceModal] = useState({
         show: false,
         lineIds: [],
@@ -7795,6 +7810,7 @@ const OrderForm = () => {
 
     useEffect(() => {
         setDeletedLineItemBatches([]);
+        setCategoryGroupUndoState({ id: '', items: [] });
     }, [duplicateFromId, id, leadId]);
     const orderAiQuickRuleOptions = useMemo(
         () => buildOrderAiQuickRuleOptions(orderAiTrainingRules.length > 0 ? orderAiTrainingRules : orderAiRules),
@@ -8646,8 +8662,8 @@ const OrderForm = () => {
         writeOrderFormStorageJson(orderFormVisibleColumnsStorageKey, normalizedVisibleColumns);
     }, [visibleColumns]);
     const desktopVisibleColumnIds = useMemo(
-        () => columnOrder.filter((id) => visibleColumns.includes(id)),
-        [columnOrder, visibleColumns]
+        () => columnOrder.filter((id) => visibleColumns.includes(id) && (canViewCost || id !== 'cost_price')),
+        [canViewCost, columnOrder, visibleColumns]
     );
     const desktopTableDensityKey = useMemo(
         () => resolveOrderFormTableDensityKey({
@@ -9531,7 +9547,7 @@ const OrderForm = () => {
             autoFilledFields.push('tên khách hàng');
         }
 
-        if (!hasNonEmptyText(formData.customer_phone) && detectedCustomerPhone) {
+        if (canViewCustomerPhone && !hasNonEmptyText(formData.customer_phone) && detectedCustomerPhone) {
             autoFilledFields.push('số điện thoại');
         }
 
@@ -9542,13 +9558,13 @@ const OrderForm = () => {
         setFormData(prev => ({
             ...prev,
             customer_name: !hasNonEmptyText(formData.customer_name) && detectedCustomerName ? detectedCustomerName : prev.customer_name,
-            customer_phone: !hasNonEmptyText(formData.customer_phone) && detectedCustomerPhone ? detectedCustomerPhone : prev.customer_phone,
+            customer_phone: canViewCustomerPhone && !hasNonEmptyText(formData.customer_phone) && detectedCustomerPhone ? detectedCustomerPhone : prev.customer_phone,
             shipping_address: !hasExistingShippingAddress && detectedAddressText ? detectedAddressText : prev.shipping_address,
             address_detail: !hasExistingShippingAddress && detectedAddressText ? detectedAddressText : prev.address_detail,
         }));
 
         setAddressDetection(buildAddressDetectionFeedback(autoFilledFields));
-    }, [formData]);
+    }, [canViewCustomerPhone, formData]);
 
     const handleCancel = useCallback(() => {
         requestLeaveOrderForm();
@@ -10890,12 +10906,14 @@ const OrderForm = () => {
         };
     }, []);
 
+    const selectableLineItemIds = useMemo(() => (
+        formData.items
+            .map((item) => normalizeCanvasText(item?.line_id))
+            .filter(Boolean)
+    ), [formData.items]);
+
     useEffect(() => {
-        const validLineIds = new Set(
-            formData.items
-                .map((item) => normalizeCanvasText(item?.line_id))
-                .filter(Boolean)
-        );
+        const validLineIds = new Set(selectableLineItemIds);
 
         setSelectedLineItemIds((prev) => {
             let changed = false;
@@ -10913,26 +10931,34 @@ const OrderForm = () => {
         if (lineItemSelectionAnchorRef.current && !validLineIds.has(lineItemSelectionAnchorRef.current)) {
             lineItemSelectionAnchorRef.current = '';
         }
-    }, [formData.items]);
+    }, [selectableLineItemIds]);
+
+    const selectAllLineItems = useCallback(() => {
+        if (selectableLineItemIds.length === 0) return;
+
+        lineItemSelectionAnchorRef.current = selectableLineItemIds[0] || '';
+        lineItemSelectionDragRef.current = null;
+        setSelectedOrderLineId((currentLineId) => currentLineId || selectableLineItemIds[0] || '');
+        setSelectedLineItemIds(new Set(selectableLineItemIds));
+    }, [selectableLineItemIds]);
+
+    const clearLineItemSelection = useCallback(() => {
+        lineItemSelectionAnchorRef.current = '';
+        lineItemSelectionDragRef.current = null;
+        setSelectedLineItemIds(new Set());
+    }, []);
 
     const toggleAllLineItemSelection = useCallback(() => {
-        const allLineIds = formData.items
-            .map((item) => normalizeCanvasText(item?.line_id))
-            .filter(Boolean);
+        const areAllCurrentLineItemsSelected = selectableLineItemIds.length > 0
+            && selectableLineItemIds.every((lineId) => selectedLineItemIds.has(lineId));
 
-        setSelectedLineItemIds((prev) => {
-            const areAllCurrentLineItemsSelected = allLineIds.length > 0
-                && allLineIds.every((lineId) => prev.has(lineId));
+        if (areAllCurrentLineItemsSelected) {
+            clearLineItemSelection();
+            return;
+        }
 
-            if (areAllCurrentLineItemsSelected) {
-                lineItemSelectionAnchorRef.current = '';
-                return new Set();
-            }
-
-            lineItemSelectionAnchorRef.current = allLineIds[0] || '';
-            return new Set(allLineIds);
-        });
-    }, [formData.items]);
+        selectAllLineItems();
+    }, [clearLineItemSelection, selectableLineItemIds, selectAllLineItems, selectedLineItemIds]);
 
     const handleBulkReplace = useCallback(() => {
         if (selectedLineItemIds.size === 0) return;
@@ -11002,57 +11028,75 @@ const OrderForm = () => {
             return;
         }
 
-        setFormData((prev) => {
-            const nextItems = [...prev.items];
+        const nextItems = [...formData.items];
+        const undoItems = [];
 
-            replacements.forEach(({ lineId, product }) => {
-                const index = nextItems.findIndex((item) => normalizeCanvasText(item?.line_id) === lineId);
-                if (index === -1) return;
+        replacements.forEach(({ lineId, product }) => {
+            const index = nextItems.findIndex((item) => normalizeCanvasText(item?.line_id) === lineId);
+            if (index === -1) return;
 
-                const originalItem = nextItems[index];
-                const enrichedProduct = { ...product };
-                if (!enrichedProduct.attributes_map && Array.isArray(enrichedProduct.attribute_values)) {
-                    const attrMap = {};
-                    enrichedProduct.attribute_values.forEach((attributeValue) => {
-                        if (attributeValue?.attribute_id != null && attributeValue?.value != null) {
-                            attrMap[String(attributeValue.attribute_id)] = attributeValue.value;
-                        }
-                    });
-                    enrichedProduct.attributes_map = attrMap;
-                }
-
-                const parentId = Number(enrichedProduct.parent_product_id) || 0;
-                if (parentId > 0 && !enrichedProduct.entry_kind) {
-                    enrichedProduct.entry_kind = SEARCH_ENTRY_VARIATION;
-                    enrichedProduct.parent_product_id = parentId;
-                }
-
-                const addition = buildOrderItemsFromSearchEntry(enrichedProduct)[0];
-                if (!addition) return;
-
-                nextItems[index] = createOrderLineItem({
-                    ...addition,
-                    line_id: originalItem.line_id,
-                    order_item_id: originalItem.order_item_id,
-                    quantity: originalItem.quantity,
-                    price: originalItem.price,
-                    notes: originalItem.notes,
-                    sort_order: originalItem.sort_order,
-                    replaced_from_name: originalItem.name,
-                    ai_meta: mergeOrderAiItemMeta(originalItem.ai_meta, addition.ai_meta),
+            const originalItem = nextItems[index];
+            const enrichedProduct = { ...product };
+            if (!enrichedProduct.attributes_map && Array.isArray(enrichedProduct.attribute_values)) {
+                const attrMap = {};
+                enrichedProduct.attribute_values.forEach((attributeValue) => {
+                    if (attributeValue?.attribute_id != null && attributeValue?.value != null) {
+                        attrMap[String(attributeValue.attribute_id)] = attributeValue.value;
+                    }
                 });
+                enrichedProduct.attributes_map = attrMap;
+            }
+
+            const parentId = Number(enrichedProduct.parent_product_id) || 0;
+            if (parentId > 0 && !enrichedProduct.entry_kind) {
+                enrichedProduct.entry_kind = SEARCH_ENTRY_VARIATION;
+                enrichedProduct.parent_product_id = parentId;
+            }
+
+            const addition = buildOrderItemsFromSearchEntry(enrichedProduct)[0];
+            if (!addition) return;
+
+            const replacementItem = createOrderLineItem({
+                ...addition,
+                line_id: originalItem.line_id,
+                order_item_id: originalItem.order_item_id,
+                quantity: originalItem.quantity,
+                price: originalItem.price,
+                notes: originalItem.notes,
+                sort_order: originalItem.sort_order,
+                replaced_from_name: originalItem.name,
+                ai_meta: mergeOrderAiItemMeta(originalItem.ai_meta, addition.ai_meta),
             });
 
-            return {
-                ...prev,
-                items: applySequentialOrderLineSortOrder(nextItems),
-                cost_total: calculateItemsCostTotal(nextItems),
-            };
+            undoItems.push({
+                lineId,
+                lineNumber: Number(originalItem.sort_order) || index + 1,
+                fromName: getOrderLineDisplayNameLabel(originalItem) || originalItem.name || 'Sản phẩm cũ',
+                toName: getOrderLineDisplayNameLabel(replacementItem) || replacementItem.name || 'Sản phẩm mới',
+                item: cloneOrderLineItemSnapshot(originalItem),
+            });
+            nextItems[index] = replacementItem;
         });
 
+        if (undoItems.length === 0) {
+            showTransientNotification('error', 'Không đổi được dòng nào trong nhóm đã chọn.');
+            return;
+        }
+
+        const orderedItems = applySequentialOrderLineSortOrder(nextItems);
+
+        setFormData((prev) => ({
+            ...prev,
+            items: orderedItems,
+            cost_total: calculateItemsCostTotal(orderedItems),
+        }));
+        setCategoryGroupUndoState({
+            id: `category-group-undo-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            items: undoItems,
+        });
         setSelectedLineItemIds(new Set());
-        showTransientNotification('success', `Đã đổi nhóm ${replacements.length} sản phẩm và giữ nguyên giá chốt.`);
-    }, [buildOrderItemsFromSearchEntry, showTransientNotification]);
+        showTransientNotification('success', `Đã đổi nhóm ${undoItems.length} sản phẩm và giữ nguyên giá chốt.`);
+    }, [buildOrderItemsFromSearchEntry, formData.items, showTransientNotification]);
 
     const selectedOrderLineItems = useMemo(
         () => formData.items.filter((item) => selectedLineItemIds.has(normalizeCanvasText(item?.line_id))),
@@ -11068,13 +11112,130 @@ const OrderForm = () => {
         () => formData.items.filter((item) => actualProductCategoryGroupReplaceLineIdSet.has(normalizeCanvasText(item?.line_id))),
         [actualProductCategoryGroupReplaceLineIdSet, formData.items]
     );
-    const isAllLineItemsSelected = formData.items.length > 0 && selectedOrderLineItems.length === formData.items.length;
+    const isAllLineItemsSelected = selectableLineItemIds.length > 0
+        && selectableLineItemIds.every((lineId) => selectedLineItemIds.has(lineId));
     const hasAnyLineItemSelected = selectedOrderLineItems.length > 0;
     const lastDeletedLineItemBatch = deletedLineItemBatches[deletedLineItemBatches.length - 1] || null;
     const deletedLineItemRestoreCount = Array.isArray(lastDeletedLineItemBatch?.items)
         ? lastDeletedLineItemBatch.items.length
         : 0;
     const hasDeletedLineItemRestore = deletedLineItemRestoreCount > 0;
+    const categoryGroupUndoItems = Array.isArray(categoryGroupUndoState.items)
+        ? categoryGroupUndoState.items
+        : [];
+    const categoryGroupUndoCount = categoryGroupUndoItems.length;
+    const hasCategoryGroupUndo = categoryGroupUndoCount > 0;
+
+    const restoreCategoryGroupUndoLines = useCallback((lineIds = []) => {
+        const requestedLineIds = new Set(
+            (Array.isArray(lineIds) ? lineIds : [])
+                .map(normalizeCanvasText)
+                .filter(Boolean)
+        );
+        const undoRows = categoryGroupUndoItems.filter((entry) => (
+            requestedLineIds.size === 0 || requestedLineIds.has(normalizeCanvasText(entry?.lineId))
+        ));
+
+        if (undoRows.length === 0) {
+            showTransientNotification('error', 'Không còn dòng đổi nhóm nào để hoàn tác.');
+            return;
+        }
+
+        const restoreByLineId = new Map(
+            undoRows
+                .map((entry) => [normalizeCanvasText(entry?.lineId), cloneOrderLineItemSnapshot(entry?.item || {})])
+                .filter(([lineId, item]) => lineId && item?.line_id)
+        );
+
+        if (restoreByLineId.size === 0) {
+            showTransientNotification('error', 'Không khôi phục được sản phẩm vừa đổi nhóm.');
+            return;
+        }
+
+        setFormData((prev) => {
+            const nextItems = (Array.isArray(prev.items) ? prev.items : []).map((item) => {
+                const lineId = normalizeCanvasText(item?.line_id);
+                if (!restoreByLineId.has(lineId)) {
+                    return item;
+                }
+
+                return cloneOrderLineItemSnapshot(restoreByLineId.get(lineId));
+            });
+            const orderedItems = applySequentialOrderLineSortOrder(nextItems);
+
+            return {
+                ...prev,
+                items: orderedItems,
+                cost_total: calculateItemsCostTotal(orderedItems),
+            };
+        });
+
+        const restoredLineIds = new Set(Array.from(restoreByLineId.keys()));
+        setCategoryGroupUndoState((current) => {
+            const remainingItems = (Array.isArray(current.items) ? current.items : []).filter(
+                (entry) => !restoredLineIds.has(normalizeCanvasText(entry?.lineId))
+            );
+
+            return remainingItems.length > 0
+                ? { ...current, items: remainingItems }
+                : { id: '', items: [] };
+        });
+        setSelectedLineItemIds(restoredLineIds);
+        lineItemSelectionAnchorRef.current = Array.from(restoredLineIds)[0] || '';
+        lineItemSelectionDragRef.current = null;
+        setSelectedOrderLineId(Array.from(restoredLineIds)[0] || '');
+        showTransientNotification('success', `Đã hoàn tác ${restoreByLineId.size} sản phẩm vừa đổi nhóm.`);
+    }, [categoryGroupUndoItems, showTransientNotification]);
+
+    const handleRestoreAllCategoryGroupUndo = useCallback(() => {
+        restoreCategoryGroupUndoLines();
+    }, [restoreCategoryGroupUndoLines]);
+
+    const handleRestoreOneCategoryGroupUndo = useCallback((lineId) => {
+        restoreCategoryGroupUndoLines([lineId]);
+    }, [restoreCategoryGroupUndoLines]);
+
+    const categoryGroupUndoPanel = hasCategoryGroupUndo ? (
+        <div className="mb-3 rounded-[18px] border border-amber-200 bg-amber-50/80 px-3 py-3 shadow-sm lg:rounded-sm lg:px-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                    <div className="flex items-center gap-2 text-[12px] font-black uppercase tracking-[0.12em] text-amber-800">
+                        <span className="material-symbols-outlined text-[17px]">history</span>
+                        Vừa đổi nhóm {categoryGroupUndoCount} sản phẩm
+                    </div>
+                    <div className="mt-1 text-[12px] font-semibold leading-snug text-amber-800/70">
+                        Có thể hoàn tác toàn bộ hoặc chọn từng dòng nếu đổi nhầm.
+                    </div>
+                </div>
+                <button
+                    type="button"
+                    onClick={handleRestoreAllCategoryGroupUndo}
+                    className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-[12px] border border-amber-300 bg-white px-3 text-[12px] font-black text-amber-800 shadow-sm transition-all hover:border-amber-400 hover:bg-amber-100 lg:rounded-sm"
+                >
+                    <span className="material-symbols-outlined text-[16px]">restart_alt</span>
+                    Hoàn tác tất cả
+                </button>
+            </div>
+            <div className="mt-3 flex max-h-32 flex-col gap-1.5 overflow-y-auto pr-1">
+                {categoryGroupUndoItems.map((entry) => (
+                    <button
+                        key={`${categoryGroupUndoState.id}-${entry.lineId}`}
+                        type="button"
+                        onClick={() => handleRestoreOneCategoryGroupUndo(entry.lineId)}
+                        className="flex min-h-9 w-full min-w-0 items-center gap-2 rounded-[12px] border border-amber-200 bg-white/85 px-2.5 py-1.5 text-left text-[12px] font-bold text-primary shadow-sm transition-all hover:border-amber-300 hover:bg-white lg:rounded-sm"
+                    >
+                        <span className="material-symbols-outlined shrink-0 text-[15px] text-amber-700">undo</span>
+                        <span className="shrink-0 rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] font-black text-sky-700">
+                            STT {entry.lineNumber || '?'}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate">
+                            {entry.toName || 'Sản phẩm mới'}{' -> '}{entry.fromName || 'Sản phẩm cũ'}
+                        </span>
+                    </button>
+                ))}
+            </div>
+        </div>
+    ) : null;
 
     const pushDeletedLineItemBatch = useCallback((batch) => {
         const batchItems = Array.isArray(batch?.items)
@@ -11231,15 +11392,17 @@ const OrderForm = () => {
 
     const applyPriceMultiplier = useCallback(({ saleMultiplier, costMultiplier }) => {
         const normalizedSaleMultiplier = Number(saleMultiplier);
-        const normalizedCostMultiplier = Number(costMultiplier);
+        const normalizedCostMultiplier = canViewCost ? Number(costMultiplier) : 1;
 
         if (
             !Number.isFinite(normalizedSaleMultiplier)
             || normalizedSaleMultiplier <= 0
-            || !Number.isFinite(normalizedCostMultiplier)
-            || normalizedCostMultiplier <= 0
+            || (canViewCost && (
+                !Number.isFinite(normalizedCostMultiplier)
+                || normalizedCostMultiplier <= 0
+            ))
         ) {
-            showTransientNotification('error', 'Hệ số giá bán và giá nhập phải lớn hơn 0.');
+            showTransientNotification('error', canViewCost ? 'Hệ số giá bán và giá nhập phải lớn hơn 0.' : 'Hệ số giá bán phải lớn hơn 0.');
             return;
         }
 
@@ -11259,15 +11422,18 @@ const OrderForm = () => {
                 }
 
                 const nextSalePrice = Math.max(0, Math.round((parseMoneyNumber(item.price, 0) || 0) * normalizedSaleMultiplier));
-                const nextCostPrice = resolveRoundedImportCostValue((parseMoneyNumber(item.cost_price, 0) || 0) * normalizedCostMultiplier, 0);
                 const nextItem = {
                     ...item,
                     price: nextSalePrice,
-                    cost_price: nextCostPrice,
                 };
 
-                if (!hasActualOrderProductOverride(item)) {
-                    nextItem.base_cost_price = nextCostPrice;
+                if (canViewCost) {
+                    const nextCostPrice = resolveRoundedImportCostValue((parseMoneyNumber(item.cost_price, 0) || 0) * normalizedCostMultiplier, 0);
+                    nextItem.cost_price = nextCostPrice;
+
+                    if (!hasActualOrderProductOverride(item)) {
+                        nextItem.base_cost_price = nextCostPrice;
+                    }
                 }
 
                 return nextItem;
@@ -11276,7 +11442,7 @@ const OrderForm = () => {
             return {
                 ...prev,
                 items: nextItems,
-                cost_total: calculateItemsCostTotal(nextItems),
+                cost_total: canViewCost ? calculateItemsCostTotal(nextItems) : prev.cost_total,
             };
         });
 
@@ -11284,9 +11450,11 @@ const OrderForm = () => {
         setShowPriceMultiplierModal(false);
         showTransientNotification(
             'success',
-            `Đã nhân hệ số ${affectedCount} dòng: giá bán x${normalizedSaleMultiplier}, giá nhập x${normalizedCostMultiplier}.`
+            canViewCost
+                ? `Đã nhân hệ số ${affectedCount} dòng: giá bán x${normalizedSaleMultiplier}, giá nhập x${normalizedCostMultiplier}.`
+                : `Đã nhân hệ số giá bán cho ${affectedCount} dòng.`
         );
-    }, [formData.items, priceMultiplierTargetItems, showTransientNotification]);
+    }, [canViewCost, formData.items, priceMultiplierTargetItems, showTransientNotification]);
 
     const handleApplyOrderAiPreview = useCallback(async () => {
         if (!orderAiPreview || !Array.isArray(orderAiPreview.items) || orderAiPreview.items.length === 0) {
@@ -14385,18 +14553,21 @@ const OrderForm = () => {
         const effectiveAddressDetail = normalizedAddressDetail || formData.address_detail.trim() || formData.shipping_address.trim();
         const trimmedCustomerName = String(formData.customer_name || '').trim();
         const trimmedCustomerPhone = String(formData.customer_phone || '').trim();
+        const effectiveCustomerPhoneForValidation = canViewCustomerPhone
+            ? trimmedCustomerPhone
+            : (isEdit ? '__hidden_customer_phone__' : '');
 
         if (isMainOrder && !isOfflineOrder && !effectiveAddressDetail) {
             alert('Vui lòng nhập địa chỉ giao hàng.');
             return null;
         }
 
-        if (!isMainOrder && !trimmedCustomerName && !trimmedCustomerPhone) {
+        if (!isMainOrder && !trimmedCustomerName && !effectiveCustomerPhoneForValidation) {
             alert('Vui lòng nhập tên khách hàng hoặc số điện thoại cho đơn nháp.');
             return null;
         }
 
-        if (trimmedCustomerPhone && !validateVietnamesePhone(trimmedCustomerPhone)) {
+        if (canViewCustomerPhone && trimmedCustomerPhone && !validateVietnamesePhone(trimmedCustomerPhone)) {
             alert('Số điện thoại không hợp lệ.');
             return null;
         }
@@ -14406,7 +14577,7 @@ const OrderForm = () => {
                 product_id: Number(item.product_id) || 0,
                 quantity: Math.max(0, Number(item.quantity) || 0),
                 price: Math.max(0, Number(item.price) || 0),
-                cost_price: resolveRoundedImportCostValue(item.cost_price, 0),
+                ...(canViewCost ? { cost_price: resolveRoundedImportCostValue(item.cost_price, 0) } : {}),
                 name: item.snapshot_name || item.name || '',
                 sku: item.snapshot_sku || item.sku || '',
                 notes: item.notes || '',
@@ -14425,7 +14596,7 @@ const OrderForm = () => {
                     sort_order: index + 1,
                     quantity: Math.max(0, Number(item.quantity) || 0),
                     price: Math.max(0, Number(item.price) || 0),
-                    cost_price: resolveRoundedImportCostValue(item.cost_price, 0),
+                    ...(canViewCost ? { cost_price: resolveRoundedImportCostValue(item.cost_price, 0) } : {}),
                     name: resolveSubmittedOrderItemName(item, productId),
                     sku: item.snapshot_sku || item.sku || '',
                     actual_name: hasActualOrderProductOverride(item)
@@ -14459,7 +14630,7 @@ const OrderForm = () => {
             payload: {
                 ...formData,
                 customer_name: trimmedCustomerName,
-                customer_phone: trimmedCustomerPhone,
+                customer_phone: canViewCustomerPhone ? trimmedCustomerPhone : undefined,
                 shipping_fee: parseMoneyNumber(formData.shipping_fee, 0) || 0,
                 manual_discount: calculateManualDiscountValue(
                     submittedDiscount,
@@ -15840,7 +16011,10 @@ const OrderForm = () => {
     ));
     const quoteTotalQuantity = formData.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
     const quoteSubtotal = quotePricingSummary.subtotal;
-    const mobileCustomerSummaryText = [formData.customer_name, formData.customer_phone].filter(Boolean).join(' - ');
+    const mobileCustomerSummaryText = [
+        formData.customer_name,
+        canViewCustomerPhone ? formData.customer_phone : '',
+    ].filter(Boolean).join(' - ');
     const mobileFooterPrimaryActionTitle = isDraftOrderKind(orderKind) ? 'Lưu nháp' : 'Lưu đơn';
     const mobileFooterSecondaryAction = isEdit
         ? (
@@ -16132,7 +16306,7 @@ const OrderForm = () => {
         toggleCrossSellSourceDropdown,
     ]);
 
-    const renderManualQuickSetupControl = ({ mobile = false } = {}) => {
+    const renderManualQuickSetupControl = ({ mobile = false, showLineSelectionToggle = false } = {}) => {
         const isOpen = showProductQuickSetupPanel && productQuickSetupMode === PRODUCT_QUICK_SETUP_MODE_MANUAL;
         const savedCount = manualProductQuickSetupItems.length;
         const statusLabel = isManualProductQuickModeActive
@@ -16141,31 +16315,57 @@ const OrderForm = () => {
                 ? `${savedCount} SP \u0111\u00e3 l\u01b0u`
                 : 'Khai b\u00e1o DS';
         const contextLabel = normalizeCanvasText(manualProductQuickSetupLabel);
+        const lineSelectionTitle = isAllLineItemsSelected ? 'Bỏ chọn tất cả sản phẩm' : 'Chọn tất cả sản phẩm';
+        const lineSelectionIcon = isAllLineItemsSelected
+            ? 'check_box'
+            : (hasAnyLineItemSelected ? 'indeterminate_check_box' : 'check_box_outline_blank');
 
         return (
             <div ref={manualQuickSetupDropdownRef} className={`relative min-w-0 ${mobile ? 'w-full' : 'w-[170px] shrink-0'}`}>
-                <button
-                    type="button"
-                    onClick={toggleManualProductQuickSetupPanel}
-                    className={`inline-flex h-10 w-full min-w-0 items-center justify-between gap-2 border px-3 text-left shadow-sm transition-all ${mobile ? 'rounded-[14px]' : 'rounded-sm'} ${isManualProductQuickModeActive ? 'border-green-200 bg-green-50 text-green-700 hover:border-green-300 hover:bg-white' : 'border-primary/10 bg-primary/5 text-primary/65 hover:border-primary/25 hover:bg-white hover:text-primary'}`}
-                    title="L\u1ecdc nhanh th\u1ee7 c\u00f4ng"
-                >
-                    <span className="flex min-w-0 items-center gap-2">
-                        <span className="material-symbols-outlined shrink-0 text-[17px]">bolt</span>
-                        <span className="min-w-0">
-                            <span className="block truncate text-[12px] font-black leading-none">{'L\u1ecdc nhanh'}</span>
-                            <span className="mt-1 block truncate text-[10px] font-semibold leading-none opacity-60">{statusLabel}</span>
-                        </span>
-                    </span>
-                    <span className="flex shrink-0 items-center gap-1">
-                        {savedCount > 0 && (
-                            <span className={`inline-flex min-w-[18px] items-center justify-center rounded-full px-1.5 text-[10px] font-black leading-[18px] text-white ${isManualProductQuickModeActive ? 'bg-green-600' : 'bg-primary/70'}`}>
-                                {savedCount}
+                <div className="flex min-w-0 items-center gap-2">
+                    <button
+                        type="button"
+                        onClick={toggleManualProductQuickSetupPanel}
+                        className={`inline-flex h-10 min-w-0 flex-1 items-center justify-between gap-2 border px-3 text-left shadow-sm transition-all ${mobile ? 'rounded-[14px]' : 'rounded-sm'} ${isManualProductQuickModeActive ? 'border-green-200 bg-green-50 text-green-700 hover:border-green-300 hover:bg-white' : 'border-primary/10 bg-primary/5 text-primary/65 hover:border-primary/25 hover:bg-white hover:text-primary'}`}
+                        title="L\u1ecdc nhanh th\u1ee7 c\u00f4ng"
+                    >
+                        <span className="flex min-w-0 items-center gap-2">
+                            <span className="material-symbols-outlined shrink-0 text-[17px]">bolt</span>
+                            <span className="min-w-0">
+                                <span className="block truncate text-[12px] font-black leading-none">{'L\u1ecdc nhanh'}</span>
+                                <span className="mt-1 block truncate text-[10px] font-semibold leading-none opacity-60">{statusLabel}</span>
                             </span>
-                        )}
-                        <span className={`material-symbols-outlined text-[16px] transition-transform ${isOpen ? 'rotate-180' : ''}`}>expand_more</span>
-                    </span>
-                </button>
+                        </span>
+                        <span className="flex shrink-0 items-center gap-1">
+                            {savedCount > 0 && (
+                                <span className={`inline-flex min-w-[18px] items-center justify-center rounded-full px-1.5 text-[10px] font-black leading-[18px] text-white ${isManualProductQuickModeActive ? 'bg-green-600' : 'bg-primary/70'}`}>
+                                    {savedCount}
+                                </span>
+                            )}
+                            <span className={`material-symbols-outlined text-[16px] transition-transform ${isOpen ? 'rotate-180' : ''}`}>expand_more</span>
+                        </span>
+                    </button>
+                    {showLineSelectionToggle ? (
+                        <button
+                            type="button"
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                toggleAllLineItemSelection();
+                            }}
+                            className={`inline-flex size-10 shrink-0 items-center justify-center rounded-[12px] border shadow-sm transition-all ${
+                                isAllLineItemsSelected
+                                    ? 'border-sky-300 bg-sky-50 text-sky-700 hover:bg-white'
+                                    : hasAnyLineItemSelected
+                                        ? 'border-amber-300 bg-amber-50 text-amber-700 hover:bg-white'
+                                        : 'border-primary/10 bg-white text-primary/45 hover:border-sky-200 hover:bg-sky-50 hover:text-sky-700'
+                            }`}
+                            title={lineSelectionTitle}
+                            aria-label={lineSelectionTitle}
+                        >
+                            <span className="material-symbols-outlined text-[20px]">{lineSelectionIcon}</span>
+                        </button>
+                    ) : null}
+                </div>
 
                 {isOpen && (
                     <div className={`absolute top-full z-[185] mt-2 w-[420px] max-w-[calc(100vw-48px)] overflow-hidden rounded-sm border border-primary/10 bg-white shadow-[0_18px_45px_rgba(15,23,42,0.18)] ${mobile ? 'left-0' : 'right-0'}`}>
@@ -16304,7 +16504,10 @@ const OrderForm = () => {
                         {sourceControl}
                     </div>
                 )}
-                {renderManualQuickSetupControl({ mobile })}
+                {renderManualQuickSetupControl({
+                    mobile,
+                    showLineSelectionToggle: mobile && selectableLineItemIds.length > 0,
+                })}
             </div>
         );
     };
@@ -18382,6 +18585,8 @@ const OrderForm = () => {
                             </div>
                         ) : null}
 
+                        {categoryGroupUndoPanel}
+
                         <div className="mt-2 -mx-2 space-y-2 lg:hidden">
                             {formData.items.length === 0 ? (
                                 <div className="rounded-[22px] border border-dashed border-primary/15 bg-white px-5 py-10 text-center shadow-sm">
@@ -19267,6 +19472,28 @@ const OrderForm = () => {
                                     >
                                         <span className="material-symbols-outlined text-[18px]">table_rows</span>
                                     </button>
+                                    <div className="hidden items-center gap-1 rounded-full border border-primary/10 bg-primary/[0.03] p-1 shadow-sm lg:inline-flex">
+                                        <button
+                                            type="button"
+                                            onClick={selectAllLineItems}
+                                            disabled={isAllLineItemsSelected || selectableLineItemIds.length === 0}
+                                            className="inline-flex h-8 items-center justify-center gap-1.5 rounded-full px-3 text-[10px] font-black uppercase tracking-[0.1em] text-sky-700 transition-all hover:bg-white hover:shadow-sm disabled:cursor-not-allowed disabled:text-primary/25 disabled:hover:bg-transparent disabled:hover:shadow-none"
+                                            title="Chọn tất cả sản phẩm"
+                                        >
+                                            <span className="material-symbols-outlined text-[14px]">select_all</span>
+                                            Chọn tất cả
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={clearLineItemSelection}
+                                            disabled={!hasAnyLineItemSelected}
+                                            className="inline-flex h-8 items-center justify-center gap-1.5 rounded-full px-3 text-[10px] font-black uppercase tracking-[0.1em] text-primary/60 transition-all hover:bg-white hover:text-primary hover:shadow-sm disabled:cursor-not-allowed disabled:text-primary/25 disabled:hover:bg-transparent disabled:hover:shadow-none"
+                                            title="Bỏ chọn tất cả sản phẩm"
+                                        >
+                                            <span className="material-symbols-outlined text-[14px]">deselect</span>
+                                            Bỏ chọn tất cả
+                                        </button>
+                                    </div>
                                     <button
                                         type="button"
                                         onClick={handleOpenPriceMultiplierModal}
@@ -19646,16 +19873,20 @@ const OrderForm = () => {
                                             <span className="text-amber-900/60">Doanh thu báo cáo</span>
                                             <span className="text-amber-900">{new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(reportRevenueTotal)}đ</span>
                                         </div>
-                                        <div className="mt-1 flex items-center justify-between gap-3 text-[12px] font-bold">
-                                            <span className="text-amber-900/60">Giá vốn báo cáo</span>
-                                            <span className="text-amber-900">{new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(reportCostTotal)}đ</span>
-                                        </div>
-                                        <div className="mt-1 flex items-center justify-between gap-3 text-[12px] font-bold">
-                                            <span className="text-amber-900/60">Lãi / lỗ báo cáo</span>
-                                            <span className={reportProfitTotal >= 0 ? 'text-emerald-700' : 'text-brick'}>
-                                                {new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(reportProfitTotal)}đ
-                                            </span>
-                                        </div>
+                                        {canViewCost && (
+                                            <>
+                                                <div className="mt-1 flex items-center justify-between gap-3 text-[12px] font-bold">
+                                                    <span className="text-amber-900/60">Giá vốn báo cáo</span>
+                                                    <span className="text-amber-900">{new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(reportCostTotal)}đ</span>
+                                                </div>
+                                                <div className="mt-1 flex items-center justify-between gap-3 text-[12px] font-bold">
+                                                    <span className="text-amber-900/60">Lãi / lỗ báo cáo</span>
+                                                    <span className={reportProfitTotal >= 0 ? 'text-emerald-700' : 'text-brick'}>
+                                                        {new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(reportProfitTotal)}đ
+                                                    </span>
+                                                </div>
+                                            </>
+                                        )}
                                     </div>
                                 </div>
                             )}
@@ -19687,27 +19918,29 @@ const OrderForm = () => {
                                 />
                             </Field>
 
-                            <Field label="Số điện thoại" labelStyle={adminCustomerLabelStyle}>
-                                <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 lg:block">
-                                    <input
-                                        type="text"
-                                        name="customer_phone"
-                                        value={formData.customer_phone}
-                                        onChange={handleInputChange}
-                                        className={`${adminInputClassName} ${formData.customer_phone && !validateVietnamesePhone(formData.customer_phone) ? 'border-brick' : ''}`}
-                                        placeholder="Nhập số điện thoại"
-                                    />
-                                    <button
-                                        type="button"
-                                        onClick={(event) => handleCopyCellValue(mobileCustomerSummaryText, 'thông tin khách', event, 'customer-summary')}
-                                        disabled={!mobileCustomerSummaryText}
-                                        className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-sm border border-primary/10 bg-white px-4 text-[14px] font-semibold leading-none text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03] disabled:cursor-not-allowed disabled:opacity-40 lg:hidden"
-                                    >
-                                        <span className="material-symbols-outlined text-[18px]">content_copy</span>
-                                        Sao chép
-                                    </button>
-                                </div>
-                            </Field>
+                            {canViewCustomerPhone && (
+                                <Field label="Số điện thoại" labelStyle={adminCustomerLabelStyle}>
+                                    <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 lg:block">
+                                        <input
+                                            type="text"
+                                            name="customer_phone"
+                                            value={formData.customer_phone}
+                                            onChange={handleInputChange}
+                                            className={`${adminInputClassName} ${formData.customer_phone && !validateVietnamesePhone(formData.customer_phone) ? 'border-brick' : ''}`}
+                                            placeholder="Nhập số điện thoại"
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={(event) => handleCopyCellValue(mobileCustomerSummaryText, 'thông tin khách', event, 'customer-summary')}
+                                            disabled={!mobileCustomerSummaryText}
+                                            className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-sm border border-primary/10 bg-white px-4 text-[14px] font-semibold leading-none text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03] disabled:cursor-not-allowed disabled:opacity-40 lg:hidden"
+                                        >
+                                            <span className="material-symbols-outlined text-[18px]">content_copy</span>
+                                            Sao chép
+                                        </button>
+                                    </div>
+                                </Field>
+                            )}
 
                             <div className="hidden lg:block">
                                 {renderManualShippingAddressField()}
@@ -19999,6 +20232,7 @@ const OrderForm = () => {
                 onConfirmGroupReplacement={handleConfirmOrderAiGroupReplacement}
                 groupConfirmLabel="Đổi nhóm khi nhặt hàng"
                 preserveCurrentLinePrice={orderAiReplaceActiveTab === ACTUAL_PRODUCT_PICKER_TAB_WAREHOUSE}
+                canViewCost={canViewCost}
                 emptyMessage={orderAiReplaceActiveTab === ACTUAL_PRODUCT_PICKER_TAB_WAREHOUSE
                     ? 'Dòng này chưa có nhóm mã thay thế. Có thể gõ STT dòng khác để tra tiếp.'
                     : (orderAiReplaceSearchTerm.trim().length >= 2
@@ -20035,6 +20269,7 @@ const OrderForm = () => {
                 onToggleGroupLine={handleToggleActualProductPickerGroupLine}
                 onConfirmGroupReplacement={handleConfirmActualProductGroupReplacement}
                 groupConfirmLabel="Gán thực gửi theo nhóm"
+                canViewCost={canViewCost}
                 emptyMessage={actualProductPickerActiveTab === ACTUAL_PRODUCT_PICKER_TAB_WAREHOUSE
                     ? 'Dòng này chưa có nhóm mã thay thế. Kho có thể gõ STT dòng khác để tra tiếp.'
                     : (actualProductPickerSearchTerm.trim().length >= 2
@@ -20231,6 +20466,7 @@ const OrderForm = () => {
                 selectedItems={priceMultiplierTargetItems}
                 onApply={applyPriceMultiplier}
                 currencyFormatter={formatQuoteMoney}
+                canViewCost={canViewCost}
             />
         </div>
     );

@@ -89,6 +89,11 @@ class EnsureAdminPermission
             return AccessControlService::USER_CHANGE_PASSWORD_PERMISSION;
         }
 
+        $featurePermission = $this->resolveFeaturePermission($request, $path);
+        if ($featurePermission !== null) {
+            return $featurePermission;
+        }
+
         $module = $this->resolveModule($path);
         if ($module === null) {
             return null;
@@ -99,6 +104,35 @@ class EnsureAdminPermission
         }
 
         return "{$module}.{$this->resolveAction($request, $path)}";
+    }
+
+    private function resolveFeaturePermission(Request $request, string $path): ?string
+    {
+        if (preg_match('#^product-replacements/lookup(/|$)#', $path)) {
+            return AccessControlService::INVENTORY_REPLACEMENT_LOOKUP_PERMISSION;
+        }
+
+        if (preg_match('#^product-replacements(/|$)#', $path)) {
+            $action = $this->resolveAction($request, $path);
+
+            return AccessControlService::INVENTORY_REPLACEMENT_PERMISSIONS[$action] ?? "inventory.{$action}";
+        }
+
+        if (preg_match('#^inventory/products/\d+/import-star$#', $path)) {
+            return AccessControlService::INVENTORY_SHELF_LOCATION_PERMISSIONS['update'];
+        }
+
+        if (preg_match('#^(warehouse-shelves|warehouse-shelf-locations)(/|$)#', $path)) {
+            $action = $this->resolveAction($request, $path);
+
+            return AccessControlService::INVENTORY_SHELF_LOCATION_PERMISSIONS[$action] ?? "inventory.{$action}";
+        }
+
+        if ($path === 'warehouses' && strtoupper($request->method()) === 'GET' && $request->boolean('active_only')) {
+            return AccessControlService::INVENTORY_SHELF_LOCATION_PERMISSIONS['view'];
+        }
+
+        return null;
     }
 
     private function isNonAdminPath(string $path): bool
@@ -126,19 +160,19 @@ class EnsureAdminPermission
             '#^categories(/|$)#' => 'categories',
             '#^attributes(/|$)#' => 'attributes',
             '#^menus(/|$)#' => 'menus',
-            '#^(banners|site-settings|site-domains|quote-templates|shipping-settings|carrier-mappings|order-statuses)(/|$)#' => 'settings',
+            '#^(banners|site-settings|site-domains|quote-templates|shipping-settings|carrier-mappings|order-statuses|stores|storefront-themes|public-category-trees)(/|$)#' => 'settings',
             '#^orders(/|$)#' => 'orders',
             '#^shipments(/|$)#' => 'orders',
             '#^customers(/|$)#' => 'customers',
-            '#^(leads|lead-statuses|lead-staffs|lead-tag-rules)(/|$)#' => 'leads',
-            '#^(inventory|stock-movements|stock-transfers)(/|$)#' => 'inventory',
+            '#^(leads|telesales|quick-replies|quick-reply-topics|lead-statuses|lead-potentials|lead-staffs|lead-tag-rules)(/|$)#' => 'leads',
+            '#^(inventory|stock-movements|stock-transfers|product-replacements|warehouse-shelves|warehouse-shelf-locations)(/|$)#' => 'inventory',
             '#^warehouses(/|$)#' => 'warehouses',
             '#^blog(/|$)#' => 'blog',
             '#^reports(/|$)#' => 'reports',
             '#^finance(/|$)#' => 'reports',
             '#^payroll(/|$)#' => 'payroll',
             '#^coupons(/|$)#' => 'settings',
-            '#^admin/reviews(/|$)#' => 'products',
+            '#^admin/(reviews|product-faqs)(/|$)#' => 'products',
             '#^ai/(generate|read|rewrite)(/|$)#' => 'products',
             '#^media/upload$#' => 'blog',
             '#^invoices(/|$)#' => 'orders',

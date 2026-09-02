@@ -3,7 +3,13 @@ import { Link, Outlet, useNavigate, Navigate, useLocation } from 'react-router-d
 import { useAuth } from '../context/AuthContext';
 import { INVENTORY_NAV_ITEMS, buildInventoryPath } from '../config/adminInventoryNavigation';
 import useUserSettingsBootstrap from '../hooks/useUserSettingsBootstrap';
-import { normalizeAdminPermissions } from '../utils/adminPermissions';
+import {
+    ADMIN_INVENTORY_REPLACEMENT_LOOKUP_PERMISSION,
+    ADMIN_INVENTORY_REPLACEMENT_PERMISSIONS,
+    ADMIN_INVENTORY_SHELF_LOCATION_PERMISSIONS,
+    hasAdminPermission,
+    normalizeAdminPermissions,
+} from '../utils/adminPermissions';
 import LeadRealtimeNotifier from '../components/admin/LeadRealtimeNotifier';
 import { describeApiConnectionError, isRetryableRequestError, reviewApi } from '../services/api';
 
@@ -11,6 +17,11 @@ const REVIEW_UNREAD_POLL_DELAY_MS = 60000;
 const REVIEW_UNREAD_ERROR_DELAY_MS = 10000;
 const REVIEW_UNREAD_MAX_ERROR_DELAY_MS = 120000;
 
+const INVENTORY_FEATURE_PERMISSION_BY_KEY = {
+    shelfLocations: ADMIN_INVENTORY_SHELF_LOCATION_PERMISSIONS.view,
+    replacements: ADMIN_INVENTORY_REPLACEMENT_PERMISSIONS.view,
+    replacementLookup: ADMIN_INVENTORY_REPLACEMENT_LOOKUP_PERMISSION,
+};
 
 const SidebarText = ({ isExpanded, className = '', children }) => (
     <span className={`overflow-hidden whitespace-nowrap transition-all duration-300 ease-out ${isExpanded ? 'max-w-[16rem] opacity-100 translate-x-0' : 'max-w-0 opacity-0 -translate-x-2'} ${className}`}>
@@ -286,8 +297,24 @@ const AdminLayout = () => {
         if (user.is_admin) return true;
         return normalizedPermissions.includes(permId);
     };
+    const canAccessPermission = (permission) => {
+        if (!permission) return true;
+        if (String(permission).includes('.')) {
+            return hasAdminPermission(user, permission);
+        }
 
-    const canAccessLeadBoard = canAccess('orders') || canAccess('customers') || canAccess('leads');
+        return canAccess(permission);
+    };
+    const canAccessInventoryItem = (item) => (
+        canAccess('inventory')
+        || Boolean(INVENTORY_FEATURE_PERMISSION_BY_KEY[item.key] && hasAdminPermission(user, INVENTORY_FEATURE_PERMISSION_BY_KEY[item.key]))
+    );
+    const visibleInventoryNavItems = INVENTORY_NAV_ITEMS.filter(canAccessInventoryItem);
+
+    const canAccessLeadBoard = canAccess('leads');
+    const canAccessReports = canAccess('reports');
+    const canAccessPayroll = canAccess('payroll');
+    const canAccessInventoryMenu = visibleInventoryNavItems.length > 0;
     const isLeadRoute = location.pathname === '/admin/leads' || location.pathname === '/admin/pending-orders';
     const isTelesalesRoute = location.pathname === '/admin/telesales';
     const isQuickRepliesRoute = location.pathname === '/admin/quick-replies';
@@ -313,16 +340,17 @@ const AdminLayout = () => {
         if (path.startsWith('/admin/leads')) return 'leads';
         if (path.startsWith('/admin/orders')) return 'orders';
         if (path.startsWith('/admin/customers')) return 'customers';
+        if (path.startsWith('/admin/inventory/vi-tri-ke')) return ADMIN_INVENTORY_SHELF_LOCATION_PERMISSIONS.view;
+        if (path.startsWith('/admin/inventory/ma-thay-the')) return ADMIN_INVENTORY_REPLACEMENT_PERMISSIONS.view;
+        if (path.startsWith('/admin/inventory/tra-ma-kho')) return ADMIN_INVENTORY_REPLACEMENT_LOOKUP_PERMISSION;
         if (path.startsWith('/admin/inventory')) return 'inventory';
         if (path.startsWith('/admin/reports')) return 'reports';
-        if (path.startsWith('/admin/finance/daily-profit')) return 'reports';
-        if (path.startsWith('/admin/finance/monthly-profit')) return 'reports';
-        if (path.startsWith('/admin/finance/profit-centers')) return 'reports';
-        if (path.startsWith('/admin/finance/revenue-reconciliation')) return 'reports';
+        if (path.startsWith('/admin/finance')) return 'reports';
         if (path.startsWith('/admin/payroll')) return 'payroll';
         if (path.startsWith('/admin/warehouses')) return 'warehouses';
         if (path.startsWith('/admin/attributes')) return 'attributes';
         if (path.startsWith('/admin/ai-training')) return 'orders';
+        if (path.startsWith('/admin/order-status-settings')) return 'settings';
         if (path.startsWith('/admin/carrier-mappings')) return 'settings';
         if (path.startsWith('/admin/shipping-settings')) return 'settings';
         if (path.startsWith('/admin/settings')) return 'settings';
@@ -334,7 +362,7 @@ const AdminLayout = () => {
 
     if (isQuickRepliesSidebarMode) {
         const permNeeded = getCurrentPermId();
-        if (permNeeded && !canAccess(permNeeded)) {
+        if (permNeeded && !canAccessPermission(permNeeded)) {
             return (
                 <div className="flex h-screen items-center justify-center bg-background-light">
                     <div className="max-w-sm rounded-sm border border-brick/40 bg-white p-8 text-center shadow-xl">
@@ -438,17 +466,19 @@ const AdminLayout = () => {
                         className={`custom-scrollbar-thin flex-grow space-y-2 overflow-y-auto transition-all duration-300 ease-out ${sidebarNavPaddingClass}`}
                         onClickCapture={handleSidebarNavClickCapture}
                     >
-                        <Link
-                            to="/admin/accounts"
-                            aria-label="Danh sách cửa hàng"
-                            title={collapsedTitle('Danh sách cửa hàng')}
-                            className={`group flex items-center rounded-sm p-3 transition-all duration-300 hover:bg-white/10 ${navItemLayoutClass}`}
-                        >
-                            <span className="material-symbols-outlined w-6 shrink-0 text-center text-stone transition-colors group-hover:text-gold">storefront</span>
-                            <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
-                                Danh sách cửa hàng
-                            </SidebarText>
-                        </Link>
+                        {canAccess('accounts') && (
+                            <Link
+                                to="/admin/accounts"
+                                aria-label="Danh sách cửa hàng"
+                                title={collapsedTitle('Danh sách cửa hàng')}
+                                className={`group flex items-center rounded-sm p-3 transition-all duration-300 hover:bg-white/10 ${navItemLayoutClass}`}
+                            >
+                                <span className="material-symbols-outlined w-6 shrink-0 text-center text-stone transition-colors group-hover:text-gold">storefront</span>
+                                <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
+                                    Danh sách cửa hàng
+                                </SidebarText>
+                            </Link>
+                        )}
 
                         {canAccess('dashboard') && (
                             <Link
@@ -532,7 +562,7 @@ const AdminLayout = () => {
                                                 </SidebarText>
                                             </Link>
                                         )}
-                                        {canAccess('orders') && (
+                                        {canAccess('settings') && (
                                             <Link
                                                 to="/admin/order-status-settings"
                                                 title="Trạng thái đơn hàng"
@@ -544,7 +574,7 @@ const AdminLayout = () => {
                                                 </SidebarText>
                                             </Link>
                                         )}
-                                        {canAccess('orders') && (
+                                        {canAccess('settings') && (
                                             <Link
                                                 to="/admin/shipping-settings"
                                                 title="Cài đặt vận chuyển"
@@ -754,7 +784,7 @@ const AdminLayout = () => {
                     <div className={`px-3 transition-all duration-300 ease-out ${isSidebarExpanded ? 'pb-2 pt-4' : 'py-1'}`}>
                         <SidebarSectionLabel isExpanded={isSidebarExpanded}>Kho & Vận chuyển</SidebarSectionLabel>
                     </div>
-                    {canAccess('inventory') && (
+                    {canAccessInventoryMenu && (
                         <div className="space-y-1">
                             <button
                                 onClick={() => setIsInventoryOpen(!isInventoryOpen)}
@@ -774,7 +804,7 @@ const AdminLayout = () => {
 
                             {isInventoryOpen && isSidebarExpanded && (
                                 <div className="animate-in space-y-1 pl-4 slide-in-from-top-2 duration-200">
-                                    {INVENTORY_NAV_ITEMS.map((item) => {
+                                    {visibleInventoryNavItems.map((item) => {
                                         const targetPath = buildInventoryPath(item.key);
                                         const isActive = location.pathname === targetPath;
                                         return (
@@ -799,57 +829,63 @@ const AdminLayout = () => {
 
 
                     <div className={`px-3 transition-all duration-300 ease-out ${isSidebarExpanded ? 'pb-2 pt-4' : 'py-1'}`}>
-                        <SidebarSectionLabel isExpanded={isSidebarExpanded}>Báo cáo & Phân tích</SidebarSectionLabel>
+                        {(canAccessReports || canAccessPayroll) && (
+                            <SidebarSectionLabel isExpanded={isSidebarExpanded}>Báo cáo & Phân tích</SidebarSectionLabel>
+                        )}
                     </div>
-                    <Link
-                        to="/admin/finance/daily-profit"
-                        aria-label="Báo cáo lãi lỗ ngày"
-                        title={collapsedTitle('Báo cáo lãi lỗ ngày')}
-                        className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname === '/admin/finance/daily-profit' ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
-                    >
-                        <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/finance/daily-profit' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>query_stats</span>
-                        <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
-                            Báo cáo lãi lỗ ngày
-                        </SidebarText>
-                    </Link>
+                    {canAccessReports && (
+                        <>
+                            <Link
+                                to="/admin/finance/daily-profit"
+                                aria-label="Báo cáo lãi lỗ ngày"
+                                title={collapsedTitle('Báo cáo lãi lỗ ngày')}
+                                className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname === '/admin/finance/daily-profit' ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
+                            >
+                                <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/finance/daily-profit' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>query_stats</span>
+                                <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
+                                    Báo cáo lãi lỗ ngày
+                                </SidebarText>
+                            </Link>
 
-                    <Link
-                        to="/admin/finance/monthly-profit"
-                        aria-label="Báo cáo lãi lỗ tháng"
-                        title={collapsedTitle('Báo cáo lãi lỗ tháng')}
-                        className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname === '/admin/finance/monthly-profit' ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
-                    >
-                        <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/finance/monthly-profit' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>calendar_month</span>
-                        <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
-                            Báo cáo lãi lỗ tháng
-                        </SidebarText>
-                    </Link>
+                            <Link
+                                to="/admin/finance/monthly-profit"
+                                aria-label="Báo cáo lãi lỗ tháng"
+                                title={collapsedTitle('Báo cáo lãi lỗ tháng')}
+                                className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname === '/admin/finance/monthly-profit' ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
+                            >
+                                <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/finance/monthly-profit' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>calendar_month</span>
+                                <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
+                                    Báo cáo lãi lỗ tháng
+                                </SidebarText>
+                            </Link>
 
-                    <Link
-                        to="/admin/finance/profit-centers"
-                        aria-label="Quản lý lãi lỗ"
-                        title={collapsedTitle('Quản lý lãi lỗ')}
-                        className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname === '/admin/finance/profit-centers' ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
-                    >
-                        <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/finance/profit-centers' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>account_tree</span>
-                        <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
-                            Quản lý lãi lỗ
-                        </SidebarText>
-                    </Link>
+                            <Link
+                                to="/admin/finance/profit-centers"
+                                aria-label="Quản lý lãi lỗ"
+                                title={collapsedTitle('Quản lý lãi lỗ')}
+                                className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname === '/admin/finance/profit-centers' ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
+                            >
+                                <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/finance/profit-centers' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>account_tree</span>
+                                <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
+                                    Quản lý lãi lỗ
+                                </SidebarText>
+                            </Link>
 
-                    <Link
-                        to="/admin/finance/revenue-reconciliation"
-                        aria-label="Đối soát doanh thu"
-                        title={collapsedTitle('Đối soát doanh thu')}
-                        className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname === '/admin/finance/revenue-reconciliation' ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
-                    >
-                        <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/finance/revenue-reconciliation' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>difference</span>
-                        <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
-                            Đối soát doanh thu
-                        </SidebarText>
-                    </Link>
+                            <Link
+                                to="/admin/finance/revenue-reconciliation"
+                                aria-label="Đối soát doanh thu"
+                                title={collapsedTitle('Đối soát doanh thu')}
+                                className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname === '/admin/finance/revenue-reconciliation' ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
+                            >
+                                <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/finance/revenue-reconciliation' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>difference</span>
+                                <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
+                                    Đối soát doanh thu
+                                </SidebarText>
+                            </Link>
+                        </>
+                    )}
 
-                    {canAccess('payroll') && (
+                    {canAccessPayroll && (
                         <Link
                             to="/admin/payroll"
                             aria-label="Quản lí nhân sự"
@@ -863,77 +899,81 @@ const AdminLayout = () => {
                         </Link>
                     )}
 
-                    <Link
-                        to="/admin/reports/web-analytics"
-                        aria-label="Phân tích web"
-                        title={collapsedTitle('Phân tích web')}
-                        className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname === '/admin/reports/web-analytics' ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
-                    >
-                        <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/reports/web-analytics' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>monitoring</span>
-                        <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
-                            Phân tích web
-                        </SidebarText>
-                    </Link>
+                    {canAccessReports && (
+                        <>
+                            <Link
+                                to="/admin/reports/web-analytics"
+                                aria-label="Phân tích web"
+                                title={collapsedTitle('Phân tích web')}
+                                className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname === '/admin/reports/web-analytics' ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
+                            >
+                                <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/reports/web-analytics' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>monitoring</span>
+                                <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
+                                    Phân tích web
+                                </SidebarText>
+                            </Link>
 
-                    <Link
-                        to="/admin/reports"
-                        aria-label="Hàng đi hàng ngày"
-                        title={collapsedTitle('Hàng đi hàng ngày')}
-                        className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname === '/admin/reports' ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
-                    >
-                        <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/reports' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>table_chart</span>
-                        <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
-                            Hàng đi hàng ngày
-                        </SidebarText>
-                    </Link>
+                            <Link
+                                to="/admin/reports"
+                                aria-label="Hàng đi hàng ngày"
+                                title={collapsedTitle('Hàng đi hàng ngày')}
+                                className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname === '/admin/reports' ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
+                            >
+                                <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/reports' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>table_chart</span>
+                                <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
+                                    Hàng đi hàng ngày
+                                </SidebarText>
+                            </Link>
 
-                    <Link
-                        to="/admin/finance/fixed-costs"
-                        aria-label="Chi phí cố định"
-                        title={collapsedTitle('Chi phí cố định')}
-                        className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname === '/admin/finance/fixed-costs' ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
-                    >
-                        <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/finance/fixed-costs' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>account_balance_wallet</span>
-                        <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
-                            Chi phí cố định
-                        </SidebarText>
-                    </Link>
+                            <Link
+                                to="/admin/finance/fixed-costs"
+                                aria-label="Chi phí cố định"
+                                title={collapsedTitle('Chi phí cố định')}
+                                className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname === '/admin/finance/fixed-costs' ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
+                            >
+                                <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/finance/fixed-costs' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>account_balance_wallet</span>
+                                <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
+                                    Chi phí cố định
+                                </SidebarText>
+                            </Link>
 
-                    <Link
-                        to="/admin/finance/funds"
-                        aria-label="Sổ cái (Dòng tiền)"
-                        title={collapsedTitle('Sổ cái (Dòng tiền)')}
-                        className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname === '/admin/finance/funds' ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
-                    >
-                        <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/finance/funds' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>savings</span>
-                        <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
-                            Sổ cái (Dòng tiền)
-                        </SidebarText>
-                    </Link>
+                            <Link
+                                to="/admin/finance/funds"
+                                aria-label="Sổ cái (Dòng tiền)"
+                                title={collapsedTitle('Sổ cái (Dòng tiền)')}
+                                className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname === '/admin/finance/funds' ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
+                            >
+                                <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/finance/funds' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>savings</span>
+                                <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
+                                    Sổ cái (Dòng tiền)
+                                </SidebarText>
+                            </Link>
 
-                    <Link
-                        to="/admin/finance/debts"
-                        aria-label="Sổ nợ"
-                        title={collapsedTitle('Sổ nợ')}
-                        className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname === '/admin/finance/debts' ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
-                    >
-                        <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/finance/debts' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>assignment_ind</span>
-                        <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
-                            Sổ nợ
-                        </SidebarText>
-                    </Link>
+                            <Link
+                                to="/admin/finance/debts"
+                                aria-label="Sổ nợ"
+                                title={collapsedTitle('Sổ nợ')}
+                                className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname === '/admin/finance/debts' ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
+                            >
+                                <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/finance/debts' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>assignment_ind</span>
+                                <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
+                                    Sổ nợ
+                                </SidebarText>
+                            </Link>
 
-                    <Link
-                        to="/admin/finance/assets"
-                        aria-label="Tổng tài sản"
-                        title={collapsedTitle('Tổng tài sản')}
-                        className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname === '/admin/finance/assets' ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
-                    >
-                        <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/finance/assets' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>monitoring</span>
-                        <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
-                            Tổng tài sản
-                        </SidebarText>
-                    </Link>
+                            <Link
+                                to="/admin/finance/assets"
+                                aria-label="Tổng tài sản"
+                                title={collapsedTitle('Tổng tài sản')}
+                                className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname === '/admin/finance/assets' ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
+                            >
+                                <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/finance/assets' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>monitoring</span>
+                                <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
+                                    Tổng tài sản
+                                </SidebarText>
+                            </Link>
+                        </>
+                    )}
                 </nav>
 
                 <div className={`mt-auto border-t border-white/10 p-4 transition-all duration-300 ease-out ${isSidebarExpanded ? '' : 'px-3'}`}>
@@ -975,7 +1015,7 @@ const AdminLayout = () => {
                 <div className={`relative flex-grow min-h-0 ${isOrderForm ? 'h-full overflow-auto p-0' : location.pathname === '/admin/leads' || location.pathname === '/admin/telesales' || location.pathname === '/admin/quick-replies' ? 'overflow-auto p-0' : isFundRoute ? 'overflow-auto p-0 sm:p-4 md:p-6 lg:p-8' : isInventoryRoute ? 'overflow-auto p-4 md:p-5' : 'overflow-auto p-8'}`}>
                     {(() => {
                         const permNeeded = getCurrentPermId();
-                        if (permNeeded && !canAccess(permNeeded)) {
+                        if (permNeeded && !canAccessPermission(permNeeded)) {
                             return (
                                 <div className="flex items-center justify-center h-full">
                                     <div className="text-center p-8 bg-white border border-brick/40 shadow-xl max-w-sm rounded-lg">

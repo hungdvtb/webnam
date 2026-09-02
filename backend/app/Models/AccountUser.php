@@ -14,6 +14,7 @@ class AccountUser extends Pivot
         'account_id',
         'user_id',
         'role',
+        'permission_label',
         'status',
         'permissions',
         'data_permissions',

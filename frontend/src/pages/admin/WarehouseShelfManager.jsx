@@ -2,6 +2,11 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom';
 import { categoryApi, inventoryApi, orderApi, productApi, warehouseApi, warehouseShelfApi } from '../../services/api';
 import { ACTIVE_PRODUCT_TYPE_OPTIONS, PRODUCT_TYPE_LABELS } from '../../config/productTypes';
+import { useAuth } from '../../context/AuthContext';
+import {
+    ADMIN_INVENTORY_SHELF_LOCATION_PERMISSIONS,
+    hasAdminPermission,
+} from '../../utils/adminPermissions';
 
 const panelClass = 'rounded-sm border border-primary/10 bg-white shadow-sm';
 const inputClass = 'h-10 rounded-sm border border-primary/15 bg-white px-3 text-[13px] text-primary outline-none transition placeholder:text-primary/35 focus:border-primary';
@@ -1176,7 +1181,11 @@ const ShelfFormModal = ({
 const WarehouseShelfManager = () => {
     const location = useLocation();
     const navigate = useNavigate();
+    const { user } = useAuth();
     const sequenceRouteAutoOpenedRef = useRef(false);
+    const canCreateShelfLocations = hasAdminPermission(user, ADMIN_INVENTORY_SHELF_LOCATION_PERMISSIONS.create);
+    const canUpdateShelfLocations = hasAdminPermission(user, ADMIN_INVENTORY_SHELF_LOCATION_PERMISSIONS.update);
+    const canDeleteShelfLocations = hasAdminPermission(user, ADMIN_INVENTORY_SHELF_LOCATION_PERMISSIONS.delete_soft);
     const [warehouses, setWarehouses] = useState([]);
     const [categories, setCategories] = useState([]);
     const [shelves, setShelves] = useState([]);
@@ -2277,6 +2286,11 @@ const WarehouseShelfManager = () => {
     ]);
 
     const openCreateShelf = () => {
+        if (!canCreateShelfLocations) {
+            setPageError('Tài khoản của bạn chưa có quyền thêm kệ.');
+            return;
+        }
+
         setEditingShelf(null);
         setShelfForm({
             ...emptyShelfForm,
@@ -2289,6 +2303,11 @@ const WarehouseShelfManager = () => {
     };
 
     const openEditShelf = (shelf) => {
+        if (!canUpdateShelfLocations) {
+            setPageError('Tài khoản của bạn chưa có quyền sửa kệ.');
+            return;
+        }
+
         setEditingShelf(shelf);
         setShelfForm({
             warehouse_id: shelf.warehouse_id ? String(shelf.warehouse_id) : '',
@@ -2315,6 +2334,12 @@ const WarehouseShelfManager = () => {
 
     const submitShelfForm = async (event) => {
         event?.preventDefault?.();
+        const canSaveShelf = editingShelf ? canUpdateShelfLocations : canCreateShelfLocations;
+        if (!canSaveShelf) {
+            setFormError('Tài khoản của bạn chưa có quyền lưu kệ.');
+            return;
+        }
+
         setFormSaving(true);
         setFormError('');
         try {
@@ -2346,6 +2371,11 @@ const WarehouseShelfManager = () => {
 
     const deleteShelf = async (shelf) => {
         if (!window.confirm(`Xóa ${buildShelfTitle(shelf)}?`)) return;
+        if (!canDeleteShelfLocations) {
+            alert('Tài khoản của bạn chưa có quyền xóa kệ.');
+            return;
+        }
+
 
         try {
             await warehouseShelfApi.destroy(shelf.id);
@@ -2369,6 +2399,11 @@ const WarehouseShelfManager = () => {
 
     const saveAllFloors = async () => {
         if (!selectedShelf) return;
+        if (!canUpdateShelfLocations) {
+            setLastResult({ type: 'error', message: 'Tài khoản của bạn chưa có quyền lưu vị trí kệ.' });
+            return;
+        }
+
         const floors = Object.entries(floorDrafts).reduce((payload, [floorNumber, value]) => {
             const parsedInput = parseFloorQuickInput(value);
             if (parsedInput.count > 0) {
@@ -2418,6 +2453,11 @@ const WarehouseShelfManager = () => {
 
     const removeLocation = async (location) => {
         if (!window.confirm(`Xóa vị trí của mã ${location.product_sku || ''}?`)) return;
+        if (!canDeleteShelfLocations) {
+            alert('Tài khoản của bạn chưa có quyền xóa vị trí sản phẩm.');
+            return;
+        }
+
 
         try {
             await warehouseShelfApi.removeLocation(location.id);
@@ -2463,10 +2503,12 @@ const WarehouseShelfManager = () => {
                         ) : null}
                     </div>
 
-                    <button type="button" onClick={openCreateShelf} className={primaryButton}>
-                        <span className="material-symbols-outlined text-[18px]">add</span>
-                        Thêm kệ
-                    </button>
+                    {canCreateShelfLocations && (
+                        <button type="button" onClick={openCreateShelf} className={primaryButton}>
+                            <span className="material-symbols-outlined text-[18px]">add</span>
+                            Thêm kệ
+                        </button>
+                    )}
                 </div>
             </div>
 
@@ -2619,18 +2661,24 @@ const WarehouseShelfManager = () => {
                                     </div>
 
                                     <div className="flex flex-wrap items-center gap-2">
-                                        <button type="button" onClick={() => openEditShelf(selectedShelf)} className={ghostButton}>
-                                            <span className="material-symbols-outlined text-[18px]">edit</span>
-                                            Sửa kệ
-                                        </button>
-                                        <button type="button" onClick={saveAllFloors} disabled={savingFloor === 'all'} className={primaryButton}>
-                                            <span className={`material-symbols-outlined text-[18px] ${savingFloor === 'all' ? 'animate-spin' : ''}`}>{savingFloor === 'all' ? 'progress_activity' : 'done_all'}</span>
-                                            Lưu tất cả
-                                        </button>
-                                        <button type="button" onClick={() => deleteShelf(selectedShelf)} className="inline-flex h-9 items-center justify-center gap-2 rounded-sm border border-brick/20 bg-white px-4 text-[12px] font-bold text-brick transition hover:bg-brick hover:text-white">
-                                            <span className="material-symbols-outlined text-[18px]">delete</span>
-                                            Xóa
-                                        </button>
+                                        {canUpdateShelfLocations && (
+                                            <button type="button" onClick={() => openEditShelf(selectedShelf)} className={ghostButton}>
+                                                <span className="material-symbols-outlined text-[18px]">edit</span>
+                                                Sửa kệ
+                                            </button>
+                                        )}
+                                        {canUpdateShelfLocations && (
+                                            <button type="button" onClick={saveAllFloors} disabled={savingFloor === 'all'} className={primaryButton}>
+                                                <span className={`material-symbols-outlined text-[18px] ${savingFloor === 'all' ? 'animate-spin' : ''}`}>{savingFloor === 'all' ? 'progress_activity' : 'done_all'}</span>
+                                                Lưu tất cả
+                                            </button>
+                                        )}
+                                        {canDeleteShelfLocations && (
+                                            <button type="button" onClick={() => deleteShelf(selectedShelf)} className="inline-flex h-9 items-center justify-center gap-2 rounded-sm border border-brick/20 bg-white px-4 text-[12px] font-bold text-brick transition hover:bg-brick hover:text-white">
+                                                <span className="material-symbols-outlined text-[18px]">delete</span>
+                                                Xóa
+                                            </button>
+                                        )}
                                     </div>
                                 </div>
 
@@ -2992,9 +3040,11 @@ const WarehouseShelfManager = () => {
                                                                                                 </div>
                                                                                             </td>
                                                                                             <td className="px-3 py-2 text-right align-top">
-                                                                                                <button type="button" onClick={() => removeLocation(item)} className={dangerIconButton} title="Xóa khỏi tầng">
-                                                                                                    <span className="material-symbols-outlined text-[17px]">delete</span>
-                                                                                                </button>
+                                                                                                {canDeleteShelfLocations && (
+                                                                                                    <button type="button" onClick={() => removeLocation(item)} className={dangerIconButton} title="Xóa khỏi tầng">
+                                                                                                        <span className="material-symbols-outlined text-[17px]">delete</span>
+                                                                                                    </button>
+                                                                                                )}
                                                                                             </td>
                                                                                         </tr>
                                                                                     );

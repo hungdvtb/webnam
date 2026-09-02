@@ -57,7 +57,7 @@ class User extends Authenticatable
     {
         return $this->belongsToMany(Account::class)
             ->using(AccountUser::class)
-            ->withPivot('role', 'status', 'permissions', 'data_permissions')
+            ->withPivot('role', 'permission_label', 'status', 'permissions', 'data_permissions')
             ->withTimestamps();
     }
 

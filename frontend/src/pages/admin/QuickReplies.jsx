@@ -483,6 +483,31 @@ const openZaloWebWindowBesideSidebar = (metrics) => {
     return zaloWindow;
 };
 
+const dockSidebarWindowToRight = (sidebarWindow, metrics, focusSidebar = true) => {
+    if (!sidebarWindow || sidebarWindow.closed) {
+        return false;
+    }
+
+    const screenRef = window.screen || {};
+    const left = Number(screenRef.availLeft || 0);
+    const top = Number(screenRef.availTop || 0);
+    const availableWidth = Number(screenRef.availWidth || window.outerWidth || 1440);
+    const availableHeight = Number(screenRef.availHeight || window.outerHeight || 900);
+    const sidebarWidth = Math.max(Number(metrics?.width) || 420, 320);
+
+    try {
+        sidebarWindow.resizeTo(sidebarWidth, availableHeight);
+        sidebarWindow.moveTo(Math.max(left + availableWidth - sidebarWidth, left), top);
+        if (focusSidebar) {
+            sidebarWindow.focus();
+        }
+    } catch {
+        // Chrome can restrict popup positioning, but the panel is still usable.
+    }
+
+    return true;
+};
+
 const isLocalWindowControlHost = () => {
     if (typeof window === 'undefined') {
         return false;
@@ -2238,7 +2263,7 @@ function QuickReplies() {
                 sidebarReady = await waitForSidebarWindowReady(sidebarWindow, sidebarUrl);
             }
 
-            if (sidebarWindow && !sidebarReady) {
+            if (sidebarWindow && !sidebarReady && !useLocalWindowBridge) {
                 try {
                     sidebarWindow.close();
                 } catch {
@@ -2312,12 +2337,18 @@ function QuickReplies() {
                     return;
                 } catch (bridgeErr) {
                     if (isLocalBridgeNetworkError(bridgeErr)) {
-                        if (panelTarget === 'web' && sidebarWindow && !sidebarWindow.closed) {
-                            const zaloWebWindow = openZaloWebWindowBesideSidebar(metrics);
-                            if (zaloWebWindow) {
-                                setMessage('Không thấy backend local, mình đã mở Zalo Web bên trái và giữ panel trả lời nhanh bên phải bằng Chrome.');
-                                return;
+                        if (sidebarWindow && !sidebarWindow.closed) {
+                            try {
+                                sidebarWindow.location.href = sidebarUrl.toString();
+                            } catch {
+                                // The popup may already be navigating to the sidebar.
                             }
+                            dockSidebarWindowToRight(sidebarWindow, metrics, true);
+                            [180, 620, 1400].forEach((delay) => {
+                                window.setTimeout(() => dockSidebarWindowToRight(sidebarWindow, metrics, false), delay);
+                            });
+                            setMessage('Đã mở panel PC bên phải. Không thấy backend local nên chưa tự kéo được Zalo PC; kéo Zalo app sang trái hoặc bật backend local để tự kéo.');
+                            return;
                         }
 
                         throw new Error(localBridgeUnavailableMessage(targetAppName));

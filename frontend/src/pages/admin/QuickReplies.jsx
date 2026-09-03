@@ -227,6 +227,28 @@ const buildSendDraftPayload = (draft) => ({
         })
         .filter((content) => normalizeText(content.body) || content.images.length > 0),
 });
+
+const sendPayloadClipboardText = (payload) => (Array.isArray(payload?.contents) ? payload.contents : [])
+    .map((content) => normalizeText(content?.body || content?.content))
+    .filter(Boolean)
+    .join('\n\n');
+
+const sendPayloadImageCount = (payload) => (Array.isArray(payload?.contents) ? payload.contents : [])
+    .reduce((total, content) => total + (Array.isArray(content?.images) ? content.images.length : 0), 0);
+
+const focusZaloWebPopup = () => {
+    const zaloWindow = window.open(ZALO_WEB_URL, ZALO_WEB_POPUP_WINDOW_NAME);
+    if (zaloWindow) {
+        try {
+            zaloWindow.focus();
+        } catch {
+            // Chrome may ignore focus, but opening/reusing the tab is still useful.
+        }
+    }
+
+    return zaloWindow;
+};
+
 const flattenReplyImages = (reply) => {
     const contents = Array.isArray(reply?.contents) ? reply.contents : [];
     if (contents.length > 0) {
@@ -2037,12 +2059,40 @@ function QuickReplies() {
             return;
         }
 
+        const preparedPayload = Array.isArray(payload?.contents)
+            ? payload
+            : buildSendDraftPayload(createSendDraftFromReply(reply));
+        const useBrowserClipboardForWeb = shouldUseBrowserOnlyZaloWebDock(zaloTarget);
+
         setCopyingId(replyId);
         setError('');
-        setMessage('Đang gửi sang chat Zalo đang mở...');
+        setMessage(useBrowserClipboardForWeb ? 'Đang chuẩn bị nội dung cho Zalo Web...' : 'Đang gửi sang chat Zalo đang mở...');
 
         try {
-            const response = await quickReplyApi.sendToZalo(replyId, { ...payload, zalo_target: zaloTarget });
+            if (useBrowserClipboardForWeb) {
+                const textToCopy = sendPayloadClipboardText(preparedPayload);
+                const imageCount = sendPayloadImageCount(preparedPayload);
+                focusZaloWebPopup();
+
+                if (!textToCopy) {
+                    throw new Error(imageCount > 0
+                        ? 'Mẫu này chỉ có ảnh. Zalo Web không cho web chính tự gửi ảnh trực tiếp; hãy dùng Zalo PC/local backend hoặc copy ảnh rồi dán thủ công.'
+                        : 'Mẫu này chưa có nội dung để gửi.');
+                }
+
+                await copyTextFallback(textToCopy);
+                await recordUse(reply);
+                setCopiedState({ id: replyId, mode: 'sent' });
+                setZaloPasteFlow(null);
+                setSendDraft(null);
+                setMessage(imageCount > 0
+                    ? `Đã copy nội dung sang clipboard và mở Zalo Web. Bấm Ctrl+V rồi Enter để gửi chữ; mẫu có ${imageCount} ảnh nên gửi ảnh thủ công hoặc dùng Zalo PC/local backend để gửi tự động.`
+                    : 'Đã copy nội dung sang clipboard và mở Zalo Web. Bấm Ctrl+V rồi Enter để gửi.'
+                );
+                return;
+            }
+
+            const response = await quickReplyApi.sendToZalo(replyId, { ...preparedPayload, zalo_target: zaloTarget });
             if (response?.data?.reply) {
                 updateReplyInList(response.data.reply);
                 await loadBootstrap();

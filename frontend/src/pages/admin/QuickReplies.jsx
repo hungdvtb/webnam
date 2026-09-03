@@ -61,6 +61,7 @@ const sidebarTitleForTarget = (value) => `${SIDEBAR_BASE_TITLE} ${normalizeZaloT
 const sidebarWindowNameForTarget = (value) => `quick-reply-zalo-sidebar-${normalizeZaloTarget(value)}`;
 const sidebarBrowserKeywordsForTarget = (value) => [sidebarTitleForTarget(value)];
 const ZALO_WEB_URL = 'https://chat.zalo.me/';
+const ZALO_WEB_POPUP_WINDOW_NAME = 'quick-reply-zalo-web-target';
 
 const readInitialZaloTarget = () => {
     if (typeof window === 'undefined') {
@@ -427,6 +428,60 @@ const sidebarWindowMetrics = () => {
     };
 };
 
+const isLocalBridgeNetworkError = (error) => {
+    if (error?.response) {
+        return false;
+    }
+
+    const code = String(error?.code || '').toUpperCase();
+    const message = String(error?.message || '').toLowerCase();
+
+    return ['ERR_NETWORK', 'ECONNABORTED', 'ETIMEDOUT'].includes(code)
+        || message.includes('network error')
+        || message.includes('failed to fetch')
+        || message.includes('timeout')
+        || message.includes('connection refused');
+};
+
+const localBridgeUnavailableMessage = (targetAppName) => (
+    `Không thấy backend local tại 127.0.0.1:8003, nên web chính chưa kéo được ${targetAppName}. Bật backend local trên máy này rồi bấm Panel phải lại.`
+);
+
+const openZaloWebWindowBesideSidebar = (metrics) => {
+    const screenRef = window.screen || {};
+    const left = Number(screenRef.availLeft || 0);
+    const top = Number(screenRef.availTop || 0);
+    const availableWidth = Number(screenRef.availWidth || window.outerWidth || 1440);
+    const availableHeight = Number(screenRef.availHeight || window.outerHeight || 900);
+    const sidebarWidth = Math.max(Number(metrics?.width) || 420, 320);
+    const zaloWidth = Math.max(availableWidth - sidebarWidth, 620);
+    const features = [
+        'popup=yes',
+        'toolbar=yes',
+        'location=yes',
+        'menubar=no',
+        'status=no',
+        `width=${zaloWidth}`,
+        `height=${availableHeight}`,
+        `left=${left}`,
+        `top=${top}`,
+        'resizable=yes',
+        'scrollbars=yes',
+    ].join(',');
+    const zaloWindow = window.open(ZALO_WEB_URL, ZALO_WEB_POPUP_WINDOW_NAME, features);
+
+    if (zaloWindow) {
+        try {
+            zaloWindow.resizeTo(zaloWidth, availableHeight);
+            zaloWindow.moveTo(left, top);
+            zaloWindow.focus();
+        } catch {
+            // Browser window positioning can be restricted by Chrome settings.
+        }
+    }
+
+    return zaloWindow;
+};
 
 const isLocalWindowControlHost = () => {
     if (typeof window === 'undefined') {
@@ -437,7 +492,8 @@ const isLocalWindowControlHost = () => {
     return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
 };
 
-const shouldUseLocalWindowBridge = (target) => ['pc', 'web'].includes(normalizeZaloTarget(target)) && !isLocalWindowControlHost();
+const shouldUseLocalWindowBridge = (target) => normalizeZaloTarget(target) === 'pc' && !isLocalWindowControlHost();
+const shouldUseBrowserOnlyZaloWebDock = (target) => normalizeZaloTarget(target) === 'web' && !isLocalWindowControlHost();
 
 
 const isWindowsBackendOnlyMessage = (message) => String(message || '').includes('backend đang chạy trên Windows');
@@ -2134,6 +2190,7 @@ function QuickReplies() {
         const targetLabel = targetOption.label;
         const targetAppName = panelTarget === 'web' ? 'Zalo Web Chrome' : 'Zalo Desktop';
         const useLocalWindowBridge = shouldUseLocalWindowBridge(panelTarget);
+        const useBrowserOnlyZaloWebDock = shouldUseBrowserOnlyZaloWebDock(panelTarget);
         const metrics = sidebarWindowMetrics();
         const sidebarUrl = new URL('/admin/quick-replies', window.location.origin);
         sidebarUrl.searchParams.set('mode', 'zalo-sidebar');
@@ -2164,6 +2221,10 @@ function QuickReplies() {
                 'scrollbars=yes',
             ].join(',');
             let sidebarWindow = window.open(sidebarUrl.toString(), sidebarWindowNameForTarget(panelTarget), popupFeatures);
+            let browserOnlyZaloWebWindow = null;
+            if (useBrowserOnlyZaloWebDock) {
+                browserOnlyZaloWebWindow = openZaloWebWindowBesideSidebar(metrics);
+            }
             let sidebarReady = false;
             if (sidebarWindow) {
                 sidebarWindowsRef.current[panelTarget] = sidebarWindow;
@@ -2187,10 +2248,6 @@ function QuickReplies() {
                     sidebarWindowsRef.current[panelTarget] = null;
                 }
                 sidebarWindow = null;
-
-                if (useLocalWindowBridge) {
-                    throw new Error('Panel trả lời nhanh chưa tải xong. Mình đã thử nạp lại cửa sổ panel, bạn bấm Panel phải lần nữa nếu vẫn thấy trắng.');
-                }
             }
 
             const splitPayload = {
@@ -2204,21 +2261,73 @@ function QuickReplies() {
                 gap: 0,
             };
 
-            if (useLocalWindowBridge) {
-                if (!sidebarWindow) {
+            if (useBrowserOnlyZaloWebDock) {
+                if (!sidebarWindow || sidebarWindow.closed) {
                     throw new Error('Chrome đang chặn popup panel trả lời nhanh. Bật cho phép popup cho trang này rồi bấm Panel phải lại.');
                 }
 
+                if (!browserOnlyZaloWebWindow || browserOnlyZaloWebWindow.closed) {
+                    throw new Error('Chrome đang chặn popup Zalo Web. Bật cho phép popup cho trang quản trị rồi bấm Panel phải lại.');
+                }
+
+                const dockBrowserOnlyWebWindows = (focusSidebar = false) => {
+                    const screenRef = window.screen || {};
+                    const left = Number(screenRef.availLeft || 0);
+                    const top = Number(screenRef.availTop || 0);
+                    const availableWidth = Number(screenRef.availWidth || window.outerWidth || 1440);
+                    const availableHeight = Number(screenRef.availHeight || window.outerHeight || 900);
+                    const sidebarWidth = Math.max(Number(metrics?.width) || 420, 320);
+                    const zaloWidth = Math.max(availableWidth - sidebarWidth, 620);
+
+                    try {
+                        browserOnlyZaloWebWindow.resizeTo(zaloWidth, availableHeight);
+                        browserOnlyZaloWebWindow.moveTo(left, top);
+                    } catch {
+                        // Chrome can ignore resize for some popup policies.
+                    }
+
+                    try {
+                        sidebarWindow.resizeTo(sidebarWidth, availableHeight);
+                        sidebarWindow.moveTo(Math.max(left + availableWidth - sidebarWidth, left), top);
+                        if (focusSidebar) {
+                            sidebarWindow.focus();
+                        }
+                    } catch {
+                        // The panel was opened by this page, but Chrome may still restrict positioning.
+                    }
+                };
+
+                dockBrowserOnlyWebWindows(true);
+                [160, 520, 1100, 2100].forEach((delay) => {
+                    window.setTimeout(() => dockBrowserOnlyWebWindows(false), delay);
+                });
+                setMessage('Đã mở Zalo Web bên trái, panel trả lời nhanh bên phải bằng Chrome.');
+                return;
+            }
+
+            if (useLocalWindowBridge) {
                 try {
                     const bridgeResponse = await quickReplyApi.localWindowBridgeSplitZalo(splitPayload);
                     setMessage(bridgeResponse?.data?.message || `Đã mở panel ${targetLabel} bên phải.`);
                     return;
                 } catch (bridgeErr) {
+                    if (isLocalBridgeNetworkError(bridgeErr)) {
+                        if (panelTarget === 'web' && sidebarWindow && !sidebarWindow.closed) {
+                            const zaloWebWindow = openZaloWebWindowBesideSidebar(metrics);
+                            if (zaloWebWindow) {
+                                setMessage('Không thấy backend local, mình đã mở Zalo Web bên trái và giữ panel trả lời nhanh bên phải bằng Chrome.');
+                                return;
+                            }
+                        }
+
+                        throw new Error(localBridgeUnavailableMessage(targetAppName));
+                    }
+
                     const bridgeMessage = await apiErrorMessage(
                         bridgeErr,
                         `Không gọi được local bridge để kéo ${targetAppName}.`
                     );
-                    throw new Error(`${bridgeMessage} Nếu đang dùng web chính, hãy bật backend local trên máy này rồi bấm Panel phải lại.`);
+                    throw new Error(bridgeMessage);
                 }
             }
 

@@ -553,6 +553,47 @@ class QuickReplyController extends Controller
         }
     }
 
+    public function localWindowBridgePasteZalo(Request $request)
+    {
+        $headers = $this->localWindowBridgeCorsHeaders($request);
+
+        if (!$this->isLocalWindowBridgeRequestAllowed($request)) {
+            return response()->json([
+                'message' => 'Local bridge trả lời nhanh chỉ nhận lệnh từ chính máy đang chạy backend.',
+            ], 403)->withHeaders($headers);
+        }
+
+        if (PHP_OS_FAMILY !== 'Windows') {
+            return response()->json([
+                'message' => 'Local bridge chỉ dán được sang Zalo khi backend local đang chạy trên Windows.',
+            ], 422)->withHeaders($headers);
+        }
+
+        try {
+            $zaloTarget = $this->zaloTarget($request);
+            $paste = $request->boolean('paste', true);
+            $enter = $request->boolean('enter', false);
+            $delay = min(max((int) $request->input('before_enter_delay_ms', $enter ? 250 : 0), 0), 5000);
+            $result = $this->runZaloMirrorHelper([
+                'action' => 'paste',
+                'zalo_target' => $zaloTarget,
+                'window_keywords' => $this->zaloWindowKeywords($zaloTarget),
+                'paste' => $paste,
+                'enter' => $enter,
+                'before_enter_delay_ms' => $delay,
+            ]);
+
+            return response()->json([
+                'message' => $enter ? 'Đã dán và gửi sang Zalo qua local bridge.' : 'Đã dán sang Zalo qua local bridge.',
+                'result' => $result,
+            ])->withHeaders($headers);
+        } catch (RuntimeException $exception) {
+            return response()->json([
+                'message' => $exception->getMessage(),
+            ], 422)->withHeaders($headers);
+        }
+    }
+
     public function zaloMirrorScreenshot(Request $request)
     {
         if (PHP_OS_FAMILY !== 'Windows') {
@@ -3459,20 +3500,24 @@ def find_zalo_window(keywords, target="pc"):
         if not IsWindowVisible(hwnd):
             return True
         title = window_text(hwnd)
-        if not title:
-            return True
+        process_name = window_process_name(window_process_id(hwnd))
+        class_name = window_class_name(hwnd)
         lowered = title.lower()
-        if any(needle in lowered for needle in needles):
-            item = (hwnd, title)
-            if target_web:
-                if looks_like_browser(title) and not looks_like_quick_reply_window(title):
-                    matches.append(item)
-                else:
-                    fallback.append(item)
-            elif looks_like_browser(title):
-                fallback.append(item)
-            else:
+        title_matches = bool(title and any(needle in lowered for needle in needles))
+        pc_process_matches = (not target_web) and looks_like_zalo_pc_window(title, process_name, class_name)
+        if not title_matches and not pc_process_matches:
+            return True
+
+        item = (hwnd, display_window_title(title, process_name, "Zalo"))
+        if target_web:
+            if looks_like_browser(title) and not looks_like_quick_reply_window(title):
                 matches.append(item)
+            else:
+                fallback.append(item)
+        elif title and looks_like_browser(title):
+            fallback.append(item)
+        else:
+            matches.append(item)
         return True
 
     EnumWindows(callback, 0)
@@ -3487,7 +3532,7 @@ def find_zalo_window(keywords, target="pc"):
                 chrome = [item for item in web_fallback if "google chrome" in item[1].lower()]
                 return (chrome or web_fallback)[0]
             raise RuntimeError("Đang chỉ thấy cửa sổ trình duyệt/panel có chữ Zalo, chưa thấy Zalo Desktop hoặc Zalo Web Chrome. Hãy mở đúng khung chat Zalo rồi thử lại.")
-        raise RuntimeError("Không tìm thấy cửa sổ Zalo. Hãy mở Zalo Desktop hoặc Zalo Web Chrome và mở đúng khung chat khách trước.")
+        raise RuntimeError(no_zalo_window_message("Zalo"))
 
     if target_web:
         chrome = [item for item in matches if "google chrome" in item[1].lower()]
@@ -3592,6 +3637,20 @@ def click_window(hwnd, x_ratio, y_ratio, double=False):
     return {"x": x, "y": y}
 
 
+def click_chat_input(hwnd, target="pc"):
+    rect, width, height = window_rect(hwnd)
+    y_ratios = [0.955, 0.965] if wants_web_target(target) else [0.965]
+
+    for y_ratio in y_ratios:
+        x = rect.left + int(width * 0.50)
+        y = rect.top + int(height * y_ratio)
+        if SetCursorPos(x, y):
+            mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+            time.sleep(0.04)
+            mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+            time.sleep(0.12)
+
+
 def alloc_clipboard_payload(payload):
     handle = GlobalAlloc(GMEM_MOVEABLE, len(payload))
     if not handle:
@@ -3649,6 +3708,7 @@ def press_enter():
 
 def type_into_window(hwnd, text, enter=False):
     focus_window(hwnd)
+    click_chat_input(hwnd, "pc")
     if text:
         set_clipboard_text(text)
         ctrl_v()
@@ -3656,6 +3716,18 @@ def type_into_window(hwnd, text, enter=False):
     if enter:
         press_enter()
     return {"typed": bool(text), "enter": bool(enter)}
+
+
+def paste_current_clipboard(hwnd, target="pc", paste=True, enter=False, before_enter_delay_ms=0):
+    focus_window(hwnd)
+    click_chat_input(hwnd, target)
+    if paste:
+        ctrl_v()
+        time.sleep(0.18)
+    if enter:
+        time.sleep(max(int(before_enter_delay_ms or 0), 0) / 1000)
+        press_enter()
+    return {"pasted": bool(paste), "enter": bool(enter)}
 
 
 def load_payload(path):
@@ -3671,7 +3743,8 @@ def main():
         raise RuntimeError("Usage: zalo_mirror_helper.py <payload.json>")
 
     payload = load_payload(sys.argv[1])
-    hwnd, title = find_zalo_window(payload.get("window_keywords") or ["Zalo"], payload.get("zalo_target") or "pc")
+    target = payload.get("zalo_target") or "pc"
+    hwnd, title = find_zalo_window(payload.get("window_keywords") or ["Zalo"], target)
     action = payload.get("action")
 
     if action == "screenshot":
@@ -3680,6 +3753,14 @@ def main():
         result = click_window(hwnd, payload.get("x_ratio", 0.5), payload.get("y_ratio", 0.5), bool(payload.get("double", False)))
     elif action == "type":
         result = type_into_window(hwnd, str(payload.get("text") or ""), bool(payload.get("enter", False)))
+    elif action == "paste":
+        result = paste_current_clipboard(
+            hwnd,
+            target,
+            bool(payload.get("paste", True)),
+            bool(payload.get("enter", False)),
+            int(payload.get("before_enter_delay_ms", 0) or 0),
+        )
     else:
         raise RuntimeError("Unknown Zalo mirror action.")
 

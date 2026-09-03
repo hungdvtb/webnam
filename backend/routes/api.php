@@ -66,6 +66,8 @@ Route::post('/analytics/events', [SiteAnalyticsController::class, 'store']);
 Route::post('/shipments/carriers/viettel-post/webhook', [\App\Http\Controllers\Api\ShipmentController::class, 'processViettelPostWebhook']);
 Route::options('/quick-replies/local-window-bridge/split-zalo', [\App\Http\Controllers\Api\QuickReplyController::class, 'localWindowBridgeOptions']);
 Route::post('/quick-replies/local-window-bridge/split-zalo', [\App\Http\Controllers\Api\QuickReplyController::class, 'localWindowBridgeSplitZalo']);
+Route::options('/quick-replies/local-window-bridge/paste-zalo', [\App\Http\Controllers\Api\QuickReplyController::class, 'localWindowBridgeOptions']);
+Route::post('/quick-replies/local-window-bridge/paste-zalo', [\App\Http\Controllers\Api\QuickReplyController::class, 'localWindowBridgePasteZalo']);
 
 
 // Protected routes

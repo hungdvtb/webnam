@@ -236,6 +236,20 @@ const sendPayloadClipboardText = (payload) => (Array.isArray(payload?.contents) 
 const sendPayloadImageCount = (payload) => (Array.isArray(payload?.contents) ? payload.contents : [])
     .reduce((total, content) => total + (Array.isArray(content?.images) ? content.images.length : 0), 0);
 
+const sendPayloadClipboardContents = (payload) => (Array.isArray(payload?.contents) ? payload.contents : [])
+    .map((content) => {
+        const body = normalizeText(content?.body || content?.content);
+        const images = (Array.isArray(content?.images) ? content.images : [])
+            .map((image) => ({
+                image,
+                src: imageSource(image, 'large'),
+            }))
+            .filter((item) => item.src);
+
+        return { body, images };
+    })
+    .filter((content) => content.body || content.images.length > 0);
+
 const focusZaloWebPopup = () => {
     let zaloWindow = null;
 
@@ -2086,24 +2100,131 @@ function QuickReplies() {
 
         try {
             if (useBrowserClipboardForWeb) {
+                const contents = sendPayloadClipboardContents(preparedPayload);
                 const textToCopy = sendPayloadClipboardText(preparedPayload);
                 const imageCount = sendPayloadImageCount(preparedPayload);
 
-                if (!textToCopy) {
-                    throw new Error(imageCount > 0
-                        ? 'Mẫu này chỉ có ảnh. Zalo Web không cho web chính tự gửi ảnh trực tiếp; hãy dùng Zalo PC/local backend hoặc copy ảnh rồi dán thủ công.'
+                if (contents.length === 0) {
+                    throw new Error('Mẫu này chưa có nội dung để gửi.');
+                }
+
+                let sentSteps = 0;
+                let sentText = 0;
+                let sentImages = 0;
+                let manualImages = 0;
+
+                const fallbackToCopyOnly = async () => {
+                    if (sentSteps > 0) {
+                        throw new Error('Backend local bị ngắt khi đang gửi Zalo Web. Có thể đã gửi một phần, kiểm tra lại khung chat trước khi gửi lại.');
+                    }
+
+                    if (!textToCopy) {
+                        throw new Error(imageCount > 0
+                            ? 'Mẫu này chỉ có ảnh. Chưa thấy backend local nên Zalo Web không tự gửi ảnh được; hãy bật backend local hoặc dùng Zalo PC.'
+                            : 'Mẫu này chưa có nội dung để gửi.');
+                    }
+
+                    await copyTextFallback(textToCopy);
+                    focusZaloWebPopup();
+                    await recordUse(reply);
+                    setCopiedState({ id: replyId, mode: 'sent' });
+                    setZaloPasteFlow(null);
+                    setSendDraft(null);
+                    setMessage(imageCount > 0
+                        ? `Chưa thấy backend local nên mới copy chữ vào clipboard. Bật backend local để tự gửi; mẫu có ${imageCount} ảnh chưa gửi.`
+                        : 'Chưa thấy backend local nên mới copy vào clipboard. Bật backend local để tự gửi sang Zalo Web.'
+                    );
+                };
+
+                const pasteToZaloWeb = async (data = {}) => {
+                    try {
+                        return await quickReplyApi.localWindowBridgePasteZalo({
+                            zalo_target: 'web',
+                            ...data,
+                        });
+                    } catch (bridgeErr) {
+                        if (!isLocalBridgeNetworkError(bridgeErr)) {
+                            throw bridgeErr;
+                        }
+
+                        await fallbackToCopyOnly();
+                        return null;
+                    }
+                };
+
+                for (const content of contents) {
+                    let pastedInStep = false;
+                    let pastedImagesInStep = 0;
+
+                    if (content.body) {
+                        await copyTextFallback(content.body);
+                        const pasteResponse = await pasteToZaloWeb({
+                            paste: true,
+                            enter: false,
+                        });
+                        if (!pasteResponse) {
+                            return;
+                        }
+                        pastedInStep = true;
+                        sentText += 1;
+                        await sleep(260);
+                    }
+
+                    for (const item of content.images) {
+                        let copyResult = null;
+                        try {
+                            copyResult = await writeImageSourceToClipboard(item.src);
+                        } catch (imageErr) {
+                            console.warn('Cannot copy image to clipboard for Zalo Web.', imageErr, item.image);
+                            manualImages += 1;
+                            continue;
+                        }
+
+                        if (copyResult !== 'image') {
+                            manualImages += 1;
+                            continue;
+                        }
+
+                        const pasteResponse = await pasteToZaloWeb({
+                            paste: true,
+                            enter: false,
+                        });
+                        if (!pasteResponse) {
+                            return;
+                        }
+                        pastedInStep = true;
+                        pastedImagesInStep += 1;
+                        sentImages += 1;
+                        await sleep(650);
+                    }
+
+                    if (pastedInStep) {
+                        const sendResponse = await pasteToZaloWeb({
+                            paste: false,
+                            enter: true,
+                            before_enter_delay_ms: pastedImagesInStep > 0 ? 1500 : 280,
+                        });
+                        if (!sendResponse) {
+                            return;
+                        }
+                        sentSteps += 1;
+                        await sleep(760);
+                    }
+                }
+
+                if (sentSteps === 0) {
+                    throw new Error(manualImages > 0
+                        ? 'Không copy được ảnh sang clipboard để gửi Zalo Web. Hãy dùng Zalo PC hoặc gửi ảnh thủ công.'
                         : 'Mẫu này chưa có nội dung để gửi.');
                 }
 
-                await copyTextFallback(textToCopy);
-                focusZaloWebPopup();
                 await recordUse(reply);
                 setCopiedState({ id: replyId, mode: 'sent' });
                 setZaloPasteFlow(null);
                 setSendDraft(null);
-                setMessage(imageCount > 0
-                    ? `Đã copy nội dung sang clipboard và mở Zalo Web. Bấm Ctrl+V rồi Enter để gửi chữ; mẫu có ${imageCount} ảnh nên gửi ảnh thủ công hoặc dùng Zalo PC/local backend để gửi tự động.`
-                    : 'Đã copy nội dung sang clipboard và mở Zalo Web. Bấm Ctrl+V rồi Enter để gửi.'
+                setMessage(manualImages > 0
+                    ? `Đã gửi ${sentSteps} tin sang Zalo Web. Đã gửi ${sentText} chữ, ${sentImages} ảnh; còn ${manualImages} ảnh trình duyệt không copy được.`
+                    : `Đã gửi ${sentSteps} tin sang Zalo Web.`
                 );
                 return;
             }

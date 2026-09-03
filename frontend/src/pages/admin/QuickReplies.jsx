@@ -237,12 +237,28 @@ const sendPayloadImageCount = (payload) => (Array.isArray(payload?.contents) ? p
     .reduce((total, content) => total + (Array.isArray(content?.images) ? content.images.length : 0), 0);
 
 const focusZaloWebPopup = () => {
-    const zaloWindow = window.open(ZALO_WEB_URL, ZALO_WEB_POPUP_WINDOW_NAME);
+    let zaloWindow = null;
+
+    try {
+        zaloWindow = window.open('', ZALO_WEB_POPUP_WINDOW_NAME);
+    } catch {
+        zaloWindow = null;
+    }
+
     if (zaloWindow) {
+        try {
+            const currentHref = String(zaloWindow.location?.href || '');
+            if (!currentHref || currentHref === 'about:blank') {
+                zaloWindow.location.href = ZALO_WEB_URL;
+            }
+        } catch {
+            // Existing Zalo Web windows are cross-origin; keep their current chat untouched.
+        }
+
         try {
             zaloWindow.focus();
         } catch {
-            // Chrome may ignore focus, but opening/reusing the tab is still useful.
+            // Chrome may ignore focus, but opening/reusing the window is still useful.
         }
     }
 
@@ -2072,7 +2088,6 @@ function QuickReplies() {
             if (useBrowserClipboardForWeb) {
                 const textToCopy = sendPayloadClipboardText(preparedPayload);
                 const imageCount = sendPayloadImageCount(preparedPayload);
-                focusZaloWebPopup();
 
                 if (!textToCopy) {
                     throw new Error(imageCount > 0
@@ -2081,6 +2096,7 @@ function QuickReplies() {
                 }
 
                 await copyTextFallback(textToCopy);
+                focusZaloWebPopup();
                 await recordUse(reply);
                 setCopiedState({ id: replyId, mode: 'sent' });
                 setZaloPasteFlow(null);

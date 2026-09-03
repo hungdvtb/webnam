@@ -1995,6 +1995,7 @@ import ctypes
 import json
 import os
 import struct
+import subprocess
 import sys
 import time
 from ctypes import wintypes
@@ -2075,6 +2076,30 @@ GetWindowTextW.restype = ctypes.c_int
 GetWindowTextLengthW = user32.GetWindowTextLengthW
 GetWindowTextLengthW.argtypes = [wintypes.HWND]
 GetWindowTextLengthW.restype = ctypes.c_int
+
+GetClassNameW = user32.GetClassNameW
+GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+GetClassNameW.restype = ctypes.c_int
+
+GetWindowThreadProcessId = user32.GetWindowThreadProcessId
+GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+GetWindowThreadProcessId.restype = wintypes.DWORD
+
+OpenProcess = kernel32.OpenProcess
+OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+OpenProcess.restype = wintypes.HANDLE
+
+CloseHandle = kernel32.CloseHandle
+CloseHandle.argtypes = [wintypes.HANDLE]
+CloseHandle.restype = wintypes.BOOL
+
+QueryFullProcessImageNameW = kernel32.QueryFullProcessImageNameW
+QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+QueryFullProcessImageNameW.restype = wintypes.BOOL
+
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+ZALO_PC_PROCESS_NAMES = {"zalo.exe"}
+IGNORED_ZALO_PC_PROCESS_NAMES = {"zalocall.exe", "zalocap.exe"}
 
 ShowWindow = user32.ShowWindow
 ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
@@ -2170,6 +2195,77 @@ def window_text(hwnd):
     return buffer.value
 
 
+def window_class_name(hwnd):
+    buffer = ctypes.create_unicode_buffer(256)
+    if not GetClassNameW(hwnd, buffer, len(buffer)):
+        return ""
+    return buffer.value
+
+
+def window_process_id(hwnd):
+    if not hwnd:
+        return 0
+    process_id = wintypes.DWORD()
+    GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
+    return int(process_id.value or 0)
+
+
+def window_process_name(pid):
+    if not pid:
+        return ""
+    handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    if not handle:
+        return ""
+    try:
+        buffer = ctypes.create_unicode_buffer(4096)
+        size = wintypes.DWORD(len(buffer))
+        if QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+            return os.path.basename(buffer.value).lower()
+    except Exception:
+        return ""
+    finally:
+        CloseHandle(handle)
+    return ""
+
+
+def zalo_process_running():
+    try:
+        output = subprocess.check_output(["tasklist", "/FI", "IMAGENAME eq Zalo.exe", "/NH"], stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="ignore")
+        return "zalo.exe" in output.lower()
+    except Exception:
+        return False
+
+
+def looks_like_zalo_pc_process(process_name):
+    lowered = str(process_name or "").strip().lower()
+    return lowered in ZALO_PC_PROCESS_NAMES and lowered not in IGNORED_ZALO_PC_PROCESS_NAMES
+
+
+def looks_like_zalo_pc_window(title, process_name, class_name):
+    if title and looks_like_browser(title):
+        return False
+    if looks_like_zalo_pc_process(process_name):
+        return True
+    lowered_class = str(class_name or "").lower()
+    return "zalo" in lowered_class and not (title and looks_like_browser(title))
+
+
+def display_window_title(title, process_name, fallback="Zalo"):
+    value = str(title or "").strip()
+    if value:
+        return value
+    process = str(process_name or "").strip()
+    if process:
+        return process[:-4] if process.lower().endswith(".exe") else process
+    return fallback
+
+
+def no_zalo_window_message(label):
+    if zalo_process_running():
+        return f"Đang thấy process Zalo.exe nhưng chưa thấy cửa sổ {label}. Hãy mở Zalo PC lên đúng khung chat; nếu backend local chạy ngầm bằng service/Task Scheduler thì hãy chạy backend local trong phiên Windows đang dùng Zalo."
+    return f"Không tìm thấy cửa sổ {label}. Hãy mở {label} rồi thử lại."
+
+
 def window_process_id(hwnd):
     if not hwnd:
         return 0
@@ -2214,7 +2310,7 @@ def effective_zalo_target(requested_target, title):
 
 
 def find_zalo_window(keywords, target="pc"):
-    needles = [str(keyword).lower() for keyword in keywords if str(keyword).strip()]
+    needles = [str(keyword).strip().lower() for keyword in keywords if str(keyword).strip()]
     target_web = wants_web_target(target)
     if not needles:
         needles = ["zalo"] if not target_web else ["zalo - google chrome", "my z.com - google chrome", "chat.zalo.me", "web.zalo.me"]
@@ -2227,20 +2323,24 @@ def find_zalo_window(keywords, target="pc"):
         if not IsWindowVisible(hwnd):
             return True
         title = window_text(hwnd)
-        if not title:
-            return True
+        process_name = window_process_name(window_process_id(hwnd))
+        class_name = window_class_name(hwnd)
         lowered = title.lower()
-        if any(needle in lowered for needle in needles):
-            item = (hwnd, title)
-            if target_web:
-                if looks_like_browser(title) and not looks_like_quick_reply_window(title):
-                    matches.append(item)
-                else:
-                    fallback.append(item)
-            elif looks_like_browser(title):
-                fallback.append(item)
-            else:
+        title_matches = bool(title and any(needle in lowered for needle in needles))
+        pc_process_matches = (not target_web) and looks_like_zalo_pc_window(title, process_name, class_name)
+        if not title_matches and not pc_process_matches:
+            return True
+
+        item = (hwnd, display_window_title(title, process_name, "Zalo"))
+        if target_web:
+            if looks_like_browser(title) and not looks_like_quick_reply_window(title):
                 matches.append(item)
+            else:
+                fallback.append(item)
+        elif title and looks_like_browser(title):
+            fallback.append(item)
+        else:
+            matches.append(item)
         return True
 
     EnumWindows(callback, 0)
@@ -2256,7 +2356,7 @@ def find_zalo_window(keywords, target="pc"):
                 chrome = [item for item in web_fallback if "google chrome" in item[1].lower()]
                 return (chrome or web_fallback)[0]
             raise RuntimeError("Đang chỉ thấy cửa sổ trình duyệt/panel có chữ Zalo, chưa thấy Zalo Desktop hoặc Zalo Web Chrome. Hãy mở đúng khung chat Zalo rồi thử lại.")
-        raise RuntimeError("Không tìm thấy cửa sổ Zalo. Hãy mở Zalo Desktop hoặc Zalo Web Chrome và mở đúng khung chat khách trước.")
+        raise RuntimeError(no_zalo_window_message("Zalo"))
 
     if target_web:
         chrome = [item for item in matches if "google chrome" in item[1].lower()]
@@ -2539,6 +2639,30 @@ GetWindowTextLengthW = user32.GetWindowTextLengthW
 GetWindowTextLengthW.argtypes = [wintypes.HWND]
 GetWindowTextLengthW.restype = ctypes.c_int
 
+GetClassNameW = user32.GetClassNameW
+GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+GetClassNameW.restype = ctypes.c_int
+
+GetWindowThreadProcessId = user32.GetWindowThreadProcessId
+GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+GetWindowThreadProcessId.restype = wintypes.DWORD
+
+OpenProcess = kernel32.OpenProcess
+OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+OpenProcess.restype = wintypes.HANDLE
+
+CloseHandle = kernel32.CloseHandle
+CloseHandle.argtypes = [wintypes.HANDLE]
+CloseHandle.restype = wintypes.BOOL
+
+QueryFullProcessImageNameW = kernel32.QueryFullProcessImageNameW
+QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+QueryFullProcessImageNameW.restype = wintypes.BOOL
+
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+ZALO_PC_PROCESS_NAMES = {"zalo.exe"}
+IGNORED_ZALO_PC_PROCESS_NAMES = {"zalocall.exe", "zalocap.exe"}
+
 GetForegroundWindow = user32.GetForegroundWindow
 GetForegroundWindow.argtypes = []
 GetForegroundWindow.restype = wintypes.HWND
@@ -2585,6 +2709,77 @@ def window_text(hwnd):
     return buffer.value
 
 
+def window_class_name(hwnd):
+    buffer = ctypes.create_unicode_buffer(256)
+    if not GetClassNameW(hwnd, buffer, len(buffer)):
+        return ""
+    return buffer.value
+
+
+def window_process_id(hwnd):
+    if not hwnd:
+        return 0
+    process_id = wintypes.DWORD()
+    GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
+    return int(process_id.value or 0)
+
+
+def window_process_name(pid):
+    if not pid:
+        return ""
+    handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    if not handle:
+        return ""
+    try:
+        buffer = ctypes.create_unicode_buffer(4096)
+        size = wintypes.DWORD(len(buffer))
+        if QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+            return os.path.basename(buffer.value).lower()
+    except Exception:
+        return ""
+    finally:
+        CloseHandle(handle)
+    return ""
+
+
+def zalo_process_running():
+    try:
+        output = subprocess.check_output(["tasklist", "/FI", "IMAGENAME eq Zalo.exe", "/NH"], stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="ignore")
+        return "zalo.exe" in output.lower()
+    except Exception:
+        return False
+
+
+def looks_like_zalo_pc_process(process_name):
+    lowered = str(process_name or "").strip().lower()
+    return lowered in ZALO_PC_PROCESS_NAMES and lowered not in IGNORED_ZALO_PC_PROCESS_NAMES
+
+
+def looks_like_zalo_pc_window(title, process_name, class_name):
+    if title and looks_like_browser(title):
+        return False
+    if looks_like_zalo_pc_process(process_name):
+        return True
+    lowered_class = str(class_name or "").lower()
+    return "zalo" in lowered_class and not (title and looks_like_browser(title))
+
+
+def display_window_title(title, process_name, fallback="Zalo"):
+    value = str(title or "").strip()
+    if value:
+        return value
+    process = str(process_name or "").strip()
+    if process:
+        return process[:-4] if process.lower().endswith(".exe") else process
+    return fallback
+
+
+def no_zalo_window_message(label):
+    if zalo_process_running():
+        return f"Đang thấy process Zalo.exe nhưng chưa thấy cửa sổ {label}. Hãy mở Zalo PC lên đúng khung chat; nếu backend local chạy ngầm bằng service/Task Scheduler thì hãy chạy backend local trong phiên Windows đang dùng Zalo."
+    return f"Không tìm thấy cửa sổ {label}. Hãy mở {label} rồi thử lại."
+
+
 
 def window_matches(title, keywords):
     lowered = title.lower()
@@ -2615,8 +2810,10 @@ def list_windows():
         if not IsWindowVisible(hwnd):
             return True
         title = window_text(hwnd)
-        if title and not should_ignore_window_title(title):
-            windows.append((hwnd, title))
+        process_name = window_process_name(window_process_id(hwnd))
+        class_name = window_class_name(hwnd)
+        if (title and not should_ignore_window_title(title)) or looks_like_zalo_pc_window(title, process_name, class_name):
+            windows.append((hwnd, title, process_name, class_name))
         return True
 
     EnumWindows(callback, 0)
@@ -2653,17 +2850,18 @@ def find_zalo_window(keywords, target, label):
     matches = []
     fallback = []
 
-    for hwnd, title in list_windows():
-        score = window_match_score(title, keywords)
-        if score[0] <= 0:
+    for hwnd, title, process_name, class_name in list_windows():
+        score = window_match_score(title, keywords) if title else (0, 0)
+        pc_process_matches = (not target_web) and looks_like_zalo_pc_window(title, process_name, class_name)
+        if score[0] <= 0 and not pc_process_matches:
             continue
-        item = (score, hwnd, title)
+        item = (score if score[0] > 0 else (1, 1), hwnd, display_window_title(title, process_name, label))
         if target_web:
             if looks_like_zalo_web_window(title):
                 matches.append(item)
             else:
                 fallback.append(item)
-        elif looks_like_browser(title):
+        elif title and looks_like_browser(title):
             fallback.append(item)
         else:
             matches.append(item)
@@ -2683,7 +2881,7 @@ def find_zalo_window(keywords, target, label):
 
         if fallback:
             raise RuntimeError("Đang chỉ thấy cửa sổ trình duyệt/panel có chữ Zalo, chưa thấy Zalo Desktop hoặc Zalo Web Chrome. Hãy mở đúng khung chat Zalo rồi thử lại.")
-        raise RuntimeError(f"Không tìm thấy cửa sổ {label}. Hãy mở {label} rồi thử lại.")
+        raise RuntimeError(no_zalo_window_message(label))
 
     matches.sort(key=lambda item: item[0], reverse=True)
     if target_web:
@@ -2699,7 +2897,7 @@ def find_zalo_window(keywords, target, label):
 def find_window(keywords, label, exclude=None):
     exclude = set(exclude or [])
     matches = []
-    for hwnd, title in list_windows():
+    for hwnd, title, _process_name, _class_name in list_windows():
         if hwnd in exclude:
             continue
         score = window_match_score(title, keywords)
@@ -2938,6 +3136,7 @@ import ctypes
 import json
 import os
 import struct
+import subprocess
 import sys
 import time
 from ctypes import wintypes
@@ -3009,6 +3208,30 @@ GetWindowTextW.restype = ctypes.c_int
 GetWindowTextLengthW = user32.GetWindowTextLengthW
 GetWindowTextLengthW.argtypes = [wintypes.HWND]
 GetWindowTextLengthW.restype = ctypes.c_int
+
+GetClassNameW = user32.GetClassNameW
+GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+GetClassNameW.restype = ctypes.c_int
+
+GetWindowThreadProcessId = user32.GetWindowThreadProcessId
+GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+GetWindowThreadProcessId.restype = wintypes.DWORD
+
+OpenProcess = kernel32.OpenProcess
+OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+OpenProcess.restype = wintypes.HANDLE
+
+CloseHandle = kernel32.CloseHandle
+CloseHandle.argtypes = [wintypes.HANDLE]
+CloseHandle.restype = wintypes.BOOL
+
+QueryFullProcessImageNameW = kernel32.QueryFullProcessImageNameW
+QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+QueryFullProcessImageNameW.restype = wintypes.BOOL
+
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+ZALO_PC_PROCESS_NAMES = {"zalo.exe"}
+IGNORED_ZALO_PC_PROCESS_NAMES = {"zalocall.exe", "zalocap.exe"}
 
 GetWindowRect = user32.GetWindowRect
 GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(RECT)]
@@ -3118,6 +3341,77 @@ def window_text(hwnd):
     buffer = ctypes.create_unicode_buffer(length + 1)
     GetWindowTextW(hwnd, buffer, length + 1)
     return buffer.value
+
+
+def window_class_name(hwnd):
+    buffer = ctypes.create_unicode_buffer(256)
+    if not GetClassNameW(hwnd, buffer, len(buffer)):
+        return ""
+    return buffer.value
+
+
+def window_process_id(hwnd):
+    if not hwnd:
+        return 0
+    process_id = wintypes.DWORD()
+    GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
+    return int(process_id.value or 0)
+
+
+def window_process_name(pid):
+    if not pid:
+        return ""
+    handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    if not handle:
+        return ""
+    try:
+        buffer = ctypes.create_unicode_buffer(4096)
+        size = wintypes.DWORD(len(buffer))
+        if QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+            return os.path.basename(buffer.value).lower()
+    except Exception:
+        return ""
+    finally:
+        CloseHandle(handle)
+    return ""
+
+
+def zalo_process_running():
+    try:
+        output = subprocess.check_output(["tasklist", "/FI", "IMAGENAME eq Zalo.exe", "/NH"], stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="ignore")
+        return "zalo.exe" in output.lower()
+    except Exception:
+        return False
+
+
+def looks_like_zalo_pc_process(process_name):
+    lowered = str(process_name or "").strip().lower()
+    return lowered in ZALO_PC_PROCESS_NAMES and lowered not in IGNORED_ZALO_PC_PROCESS_NAMES
+
+
+def looks_like_zalo_pc_window(title, process_name, class_name):
+    if title and looks_like_browser(title):
+        return False
+    if looks_like_zalo_pc_process(process_name):
+        return True
+    lowered_class = str(class_name or "").lower()
+    return "zalo" in lowered_class and not (title and looks_like_browser(title))
+
+
+def display_window_title(title, process_name, fallback="Zalo"):
+    value = str(title or "").strip()
+    if value:
+        return value
+    process = str(process_name or "").strip()
+    if process:
+        return process[:-4] if process.lower().endswith(".exe") else process
+    return fallback
+
+
+def no_zalo_window_message(label):
+    if zalo_process_running():
+        return f"Đang thấy process Zalo.exe nhưng chưa thấy cửa sổ {label}. Hãy mở Zalo PC lên đúng khung chat; nếu backend local chạy ngầm bằng service/Task Scheduler thì hãy chạy backend local trong phiên Windows đang dùng Zalo."
+    return f"Không tìm thấy cửa sổ {label}. Hãy mở {label} rồi thử lại."
 
 
 
@@ -3410,6 +3704,7 @@ import ctypes
 import json
 import os
 import struct
+import subprocess
 import sys
 from ctypes import wintypes
 

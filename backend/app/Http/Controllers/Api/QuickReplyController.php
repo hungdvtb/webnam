@@ -516,6 +516,43 @@ class QuickReplyController extends Controller
         }
     }
 
+    public function localWindowBridgeOptions(Request $request)
+    {
+        return response('', 204)->withHeaders($this->localWindowBridgeCorsHeaders($request));
+    }
+
+    public function localWindowBridgeSplitZalo(Request $request)
+    {
+        $headers = $this->localWindowBridgeCorsHeaders($request);
+
+        if (!$this->isLocalWindowBridgeRequestAllowed($request)) {
+            return response()->json([
+                'message' => 'Local bridge trả lời nhanh chỉ nhận lệnh từ chính máy đang chạy backend.',
+            ], 403)->withHeaders($headers);
+        }
+
+        if (PHP_OS_FAMILY !== 'Windows') {
+            return response()->json([
+                'message' => 'Local bridge chỉ kéo được Zalo khi backend local đang chạy trên Windows.',
+            ], 422)->withHeaders($headers);
+        }
+
+        try {
+            $result = $this->splitQuickRepliesAndZaloWindows($request);
+
+            return response()->json([
+                'message' => $request->input('mode') === 'sidebar'
+                    ? 'Đã đặt Zalo bên trái, panel trả lời nhanh bên phải qua local bridge.'
+                    : 'Đã chia màn hình qua local bridge.',
+                'result' => $result,
+            ])->withHeaders($headers);
+        } catch (RuntimeException $exception) {
+            return response()->json([
+                'message' => $exception->getMessage(),
+            ], 422)->withHeaders($headers);
+        }
+    }
+
     public function zaloMirrorScreenshot(Request $request)
     {
         if (PHP_OS_FAMILY !== 'Windows') {
@@ -1813,7 +1850,7 @@ class QuickReplyController extends Controller
         $host = strtolower((string) ($parts['host'] ?? ''));
         $path = (string) ($parts['path'] ?? '');
 
-        if (!in_array($host, ['localhost', '127.0.0.1', '::1'], true)) {
+        if (!in_array($host, ['localhost', '127.0.0.1', '::1', 'admin.gomdaithanh.com'], true)) {
             return '';
         }
 
@@ -1822,6 +1859,71 @@ class QuickReplyController extends Controller
         }
 
         return $url;
+    }
+
+    private function localWindowBridgeCorsHeaders(Request $request): array
+    {
+        $headers = [
+            'Access-Control-Allow-Methods' => 'POST, OPTIONS',
+            'Access-Control-Allow-Headers' => 'Accept, Content-Type, X-Requested-With, X-Quick-Reply-Local-Bridge',
+            'Access-Control-Max-Age' => '600',
+            'Access-Control-Allow-Private-Network' => 'true',
+        ];
+
+        $origin = trim((string) $request->headers->get('Origin', ''));
+        if ($origin !== '' && $this->isLocalWindowBridgeOriginAllowed($origin)) {
+            $headers['Access-Control-Allow-Origin'] = $origin;
+            $headers['Vary'] = 'Origin';
+        }
+
+        return $headers;
+    }
+
+    private function isLocalWindowBridgeRequestAllowed(Request $request): bool
+    {
+        $bridgeHeader = trim((string) $request->headers->get('X-Quick-Reply-Local-Bridge', ''));
+        if ($bridgeHeader !== '1') {
+            return false;
+        }
+
+        $origin = trim((string) $request->headers->get('Origin', ''));
+        if ($origin !== '' && !$this->isLocalWindowBridgeOriginAllowed($origin)) {
+            return false;
+        }
+
+        if (!$this->isLoopbackAddress($request->getHost())) {
+            return false;
+        }
+
+        return collect([(string) $request->server('REMOTE_ADDR'), (string) $request->ip()])
+            ->contains(fn (string $address) => $this->isLoopbackAddress($address));
+    }
+
+    private function isLocalWindowBridgeOriginAllowed(string $origin): bool
+    {
+        $configured = trim((string) env('QUICK_REPLY_LOCAL_BRIDGE_ALLOWED_ORIGINS', ''));
+        $origins = $configured !== ''
+            ? preg_split('/[,;|]+/', $configured)
+            : [
+                'http://localhost:3003',
+                'http://127.0.0.1:3003',
+                'https://admin.gomdaithanh.com',
+                'http://admin.gomdaithanh.com',
+            ];
+
+        return collect($origins ?: [])
+            ->map(fn ($allowedOrigin) => rtrim(trim((string) $allowedOrigin), '/'))
+            ->filter()
+            ->contains(rtrim($origin, '/'));
+    }
+
+    private function isLoopbackAddress(string $address): bool
+    {
+        $normalized = Str::lower(trim($address, "[] \t\n\r\0\x0B"));
+
+        return $normalized === 'localhost'
+            || $normalized === '::1'
+            || preg_match('/^127(?:\.\d{1,3}){3}$/', $normalized) === 1;
     }
 
     private function setWindowsClipboardFileDropList(array $paths): void

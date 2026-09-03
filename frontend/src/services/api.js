@@ -26,6 +26,16 @@ const RETRYABLE_NETWORK_MESSAGE_FRAGMENTS = [
     'timeout',
 ];
 const IDEMPOTENT_HTTP_METHODS = new Set(['get', 'head', 'options']);
+const LOCAL_QUICK_REPLY_BRIDGE_BASE_URLS = String(
+    import.meta.env.VITE_QUICK_REPLY_LOCAL_BRIDGE_URLS
+    || 'http://127.0.0.1:8003/api,http://localhost:8003/api'
+)
+    .split(',')
+    .map((url) => trimTrailingSlash(url))
+    .filter(Boolean);
+const LOCAL_QUICK_REPLY_BRIDGE_TIMEOUT_MS = Number(
+    import.meta.env.VITE_QUICK_REPLY_LOCAL_BRIDGE_TIMEOUT_MS || 6500
+);
 
 const normalizeHostname = (value) => String(value || '').trim().replace(/^\[|\]$/g, '').toLowerCase();
 const isLoopbackHostname = (value) => LOOPBACK_HOST_PATTERN.test(normalizeHostname(value));
@@ -81,6 +91,34 @@ const api = axios.create({
 const sleep = (ms) => new Promise((resolve) => {
     setTimeout(resolve, ms);
 });
+
+const postLocalQuickReplyBridge = async (path, data = {}) => {
+    let lastError = null;
+
+    for (const baseURL of LOCAL_QUICK_REPLY_BRIDGE_BASE_URLS) {
+        try {
+            return await axios.post(`${baseURL}${path}`, data, {
+                timeout: Number.isFinite(LOCAL_QUICK_REPLY_BRIDGE_TIMEOUT_MS)
+                    ? LOCAL_QUICK_REPLY_BRIDGE_TIMEOUT_MS
+                    : 6500,
+                withCredentials: false,
+                headers: {
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json',
+                    'X-Quick-Reply-Local-Bridge': '1',
+                },
+            });
+        } catch (error) {
+            lastError = error;
+
+            if (error?.response && ![404, 405].includes(Number(error.response.status))) {
+                throw error;
+            }
+        }
+    }
+
+    throw lastError || new Error('Không kết nối được local bridge trả lời nhanh.');
+};
 
 const normalizeRequestMethod = (method) => String(method || 'get').trim().toLowerCase();
 
@@ -821,6 +859,7 @@ export const quickReplyApi = {
     store: (data) => api.post('/quick-replies', data),
     importPancake: (data) => api.post('/quick-replies/import-pancake', data, multipartConfig(data)),
     splitZalo: (data = {}) => api.post('/quick-replies/split-zalo', data),
+    localWindowBridgeSplitZalo: (data = {}) => postLocalQuickReplyBridge('/quick-replies/local-window-bridge/split-zalo', data),
     getZaloMirrorScreenshot: (params = {}) => api.get('/quick-replies/zalo-mirror/screenshot', { params, responseType: 'blob' }),
     clickZaloMirror: (data = {}) => api.post('/quick-replies/zalo-mirror/click', data),
     typeZaloMirror: (data = {}) => api.post('/quick-replies/zalo-mirror/type', data),

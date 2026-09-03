@@ -12,7 +12,7 @@ class ForceCorsHeaders
 {
     private const ALLOWED_METHODS = 'GET, POST, PUT, PATCH, DELETE, OPTIONS';
 
-    private const DEFAULT_ALLOWED_HEADERS = 'Authorization, Content-Type, X-Requested-With, X-XSRF-TOKEN, X-CSRF-TOKEN, X-Account-Id, X-Site-Code, X-Public-Host, Accept, Origin';
+    private const DEFAULT_ALLOWED_HEADERS = 'Authorization, Content-Type, X-Requested-With, X-XSRF-TOKEN, X-CSRF-TOKEN, X-Account-Id, X-Site-Code, X-Public-Host, X-Quick-Reply-Local-Bridge, Accept, Origin';
 
     public function handle(Request $request, Closure $next): Response
     {
@@ -78,6 +78,9 @@ class ForceCorsHeaders
         $response->headers->set('Access-Control-Allow-Credentials', 'true');
         $response->headers->set('Access-Control-Allow-Methods', self::ALLOWED_METHODS);
         $response->headers->set('Access-Control-Allow-Headers', $requestHeaders !== '' ? $requestHeaders : self::DEFAULT_ALLOWED_HEADERS);
+        if ($request->headers->get('Access-Control-Request-Private-Network') === 'true' || $request->is('api/quick-replies/local-window-bridge/*')) {
+            $response->headers->set('Access-Control-Allow-Private-Network', 'true');
+        }
         $response->headers->set('Access-Control-Max-Age', '3600');
         $response->headers->set('Access-Control-Expose-Headers', 'Server-Timing, X-Webgom-Timing');
         $response->headers->set('Vary', trim($response->headers->get('Vary') . ', Origin', ', '));

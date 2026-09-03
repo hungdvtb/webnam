@@ -954,6 +954,74 @@ const persistWarehousePickingHistoryFromRows = (rows = []) => {
     });
 };
 
+const mergeWarehousePickingHistoryPairsIntoRows = (rows = [], pairs = [], { persist = false } = {}) => {
+    const normalizedRows = Array.isArray(rows) ? rows : [];
+    const usedAt = Date.now();
+    const existingHistoryBySourceKey = new Map();
+    const pairGroupsBySourceKey = new Map();
+
+    normalizedRows.forEach((row) => {
+        const sourceKey = getWarehousePickingHistorySourceKey(row?.original);
+        if (!sourceKey) return;
+
+        existingHistoryBySourceKey.set(sourceKey, mergeWarehousePickingCandidates(
+            existingHistoryBySourceKey.get(sourceKey) || [],
+            row?.history_candidates || [],
+            getWarehousePickingHistoryCandidates(row?.original)
+        ));
+    });
+
+    (Array.isArray(pairs) ? pairs : []).forEach((pair) => {
+        const source = pair?.source || pair?.row?.original || null;
+        const candidate = normalizeWarehousePickingHistoryCandidate({
+            ...(pair?.candidate || pair?.replacementCandidate || {}),
+            last_used_at: usedAt,
+        });
+        const sourceKey = getWarehousePickingHistorySourceKey(source);
+        const sourceCandidateKey = getWarehousePickingCandidateKey(source);
+
+        if (!sourceKey || !candidate?.key || candidate.key === sourceCandidateKey) return;
+
+        if (!pairGroupsBySourceKey.has(sourceKey)) {
+            pairGroupsBySourceKey.set(sourceKey, { source, candidates: [] });
+        }
+        pairGroupsBySourceKey.get(sourceKey).candidates.push(candidate);
+    });
+
+    if (pairGroupsBySourceKey.size === 0) return normalizedRows;
+
+    const historyBySourceKey = new Map();
+    pairGroupsBySourceKey.forEach(({ source, candidates }, sourceKey) => {
+        const nextHistory = persist
+            ? persistWarehousePickingHistoryCandidates(source, candidates)
+            : mergeWarehousePickingCandidates(
+                candidates.map((candidate) => ({
+                    ...candidate,
+                    is_history_candidate: true,
+                    last_used_at: usedAt,
+                })),
+                existingHistoryBySourceKey.get(sourceKey) || []
+            ).slice(0, WAREHOUSE_PICKING_HISTORY_LIMIT).map((candidate) => ({
+                ...candidate,
+                is_history_candidate: true,
+            }));
+
+        historyBySourceKey.set(sourceKey, nextHistory);
+    });
+
+    return normalizedRows.map((row) => {
+        const sourceKey = getWarehousePickingHistorySourceKey(row?.original);
+        const historyCandidates = historyBySourceKey.get(sourceKey);
+        if (!historyCandidates) return row;
+
+        return {
+            ...row,
+            history_candidates: historyCandidates,
+            candidates: mergeWarehousePickingCandidates(row?.candidates || [], historyCandidates),
+        };
+    });
+};
+
 const buildWarehousePickingOriginalCandidate = (item) => normalizeWarehousePickingCandidate({
     identity_key: getWarehousePickingSourceIdentityKey(item) || undefined,
     product_id: Number(item?.product_id) || 0,
@@ -1031,6 +1099,7 @@ const EMPTY_WAREHOUSE_PICKING_DECLARATION_PROMPT = {
     source: null,
     candidate: null,
     askKey: '',
+    pairs: [],
     submitting: false,
 };
 const WAREHOUSE_PICKING_REPLACEMENT_HISTORY_KEY = '__warehousePickingReplacementOpen';
@@ -2883,14 +2952,21 @@ const WarehousePickingReplacementDeclarationPrompt = ({
     open,
     source,
     candidate,
+    pairs = [],
     submitting,
     onConfirm,
     onDismiss,
 }) => {
     if (!open || typeof document === 'undefined') return null;
 
-    const sourceLabel = getWarehousePickingCandidateLabel(source);
-    const candidateLabel = getWarehousePickingCandidateLabel(candidate);
+    const promptPairs = (Array.isArray(pairs) && pairs.length > 0
+        ? pairs
+        : [{ source, candidate }]
+    ).filter((pair) => pair?.source && pair?.candidate);
+    const pairCount = promptPairs.length;
+    const firstPair = promptPairs[0] || { source, candidate };
+    const sourceLabel = getWarehousePickingCandidateLabel(firstPair.source || source);
+    const candidateLabel = getWarehousePickingCandidateLabel(firstPair.candidate || candidate);
 
     return createPortal(
         <div className="fixed inset-0 z-[100020] flex items-end justify-center bg-slate-950/35 px-3 py-3 backdrop-blur-[1px] sm:items-center sm:p-4">
@@ -2901,21 +2977,50 @@ const WarehousePickingReplacementDeclarationPrompt = ({
                     </div>
                     <div className="min-w-0">
                         <div className="text-[10px] font-black uppercase tracking-[0.16em] text-emerald-700/60">Mã thay thế</div>
-                        <h3 className="mt-1 text-[16px] font-black text-primary">Thêm mã này vào khai báo?</h3>
+                        <h3 className="mt-1 text-[16px] font-black text-primary">
+                            {pairCount > 1 ? `Thêm ${formatNumber(pairCount)} mã vừa đổi nhóm?` : 'Thêm mã này vào khai báo?'}
+                        </h3>
                         <p className="mt-1 text-[12px] font-semibold leading-relaxed text-primary/50">
-                            Mã kho vừa chọn chưa nằm trong nhóm thay thế của sản phẩm gốc. Thêm vào để lần sau hiện sẵn trong tab Sản phẩm.
+                            {pairCount > 1
+                                ? 'Các mã kho vừa đổi nhóm chưa nằm trong nhóm thay thế của sản phẩm gốc. Thêm vào để lần sau hiện sẵn trong tab Sản phẩm.'
+                                : 'Mã kho vừa chọn chưa nằm trong nhóm thay thế của sản phẩm gốc. Thêm vào để lần sau hiện sẵn trong tab Sản phẩm.'}
                         </p>
                     </div>
                 </div>
                 <div className="space-y-2 px-4 py-4">
-                    <div className="rounded-sm border border-primary/10 bg-primary/[0.02] p-3">
-                        <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/35">Sản phẩm gốc</div>
-                        <div className="mt-1 truncate text-[13px] font-black text-primary" title={sourceLabel}>{sourceLabel}</div>
-                    </div>
-                    <div className="rounded-sm border border-emerald-200 bg-emerald-50 p-3">
-                        <div className="text-[10px] font-black uppercase tracking-[0.14em] text-emerald-700/55">Sản phẩm vừa chọn</div>
-                        <div className="mt-1 truncate text-[13px] font-black text-emerald-800" title={candidateLabel}>{candidateLabel}</div>
-                    </div>
+                    {pairCount > 1 ? (
+                        <div className="max-h-72 overflow-y-auto rounded-sm border border-primary/10 bg-white">
+                            {promptPairs.map((pair, index) => {
+                                const pairSourceLabel = getWarehousePickingCandidateLabel(pair.source);
+                                const pairCandidateLabel = getWarehousePickingCandidateLabel(pair.candidate);
+
+                                return (
+                                    <div key={pair.askKey || `${pairSourceLabel}-${pairCandidateLabel}-${index}`} className="grid grid-cols-[minmax(0,1fr)_24px_minmax(0,1fr)] items-center gap-2 border-b border-primary/10 px-3 py-2.5 last:border-b-0">
+                                        <div className="min-w-0">
+                                            <div className="text-[10px] font-black uppercase tracking-[0.12em] text-primary/35">Gốc</div>
+                                            <div className="mt-0.5 truncate text-[12px] font-black text-primary" title={pairSourceLabel}>{pairSourceLabel}</div>
+                                        </div>
+                                        <span className="material-symbols-outlined text-center text-[16px] text-emerald-600">arrow_forward</span>
+                                        <div className="min-w-0">
+                                            <div className="text-[10px] font-black uppercase tracking-[0.12em] text-emerald-700/50">Mới</div>
+                                            <div className="mt-0.5 truncate text-[12px] font-black text-emerald-800" title={pairCandidateLabel}>{pairCandidateLabel}</div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    ) : (
+                        <>
+                            <div className="rounded-sm border border-primary/10 bg-primary/[0.02] p-3">
+                                <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/35">Sản phẩm gốc</div>
+                                <div className="mt-1 truncate text-[13px] font-black text-primary" title={sourceLabel}>{sourceLabel}</div>
+                            </div>
+                            <div className="rounded-sm border border-emerald-200 bg-emerald-50 p-3">
+                                <div className="text-[10px] font-black uppercase tracking-[0.14em] text-emerald-700/55">Sản phẩm vừa chọn</div>
+                                <div className="mt-1 truncate text-[13px] font-black text-emerald-800" title={candidateLabel}>{candidateLabel}</div>
+                            </div>
+                        </>
+                    )}
                 </div>
                 <div className="flex items-center justify-end gap-2 border-t border-primary/10 px-4 py-3">
                     <button
@@ -2939,7 +3044,9 @@ const WarehousePickingReplacementDeclarationPrompt = ({
                         <span className={`material-symbols-outlined text-[18px] ${submitting ? 'animate-refresh-spin' : ''}`}>
                             {submitting ? 'progress_activity' : 'add_link'}
                         </span>
-                        {submitting ? 'Đang thêm...' : 'Thêm vào mã thay thế'}
+                        {submitting
+                            ? 'Đang thêm...'
+                            : (pairCount > 1 ? `Thêm ${formatNumber(pairCount)} mã vào mã thay thế` : 'Thêm vào mã thay thế')}
                     </button>
                 </div>
             </div>
@@ -7157,9 +7264,10 @@ const OrderList = () => {
     const dismissWarehousePickingDeclarationPrompt = useCallback(() => {
         setWarehousePickingDeclarationPrompt((current) => {
             if (current.submitting) return current;
-            if (current.askKey) {
-                warehousePickingDeclarationDismissedRef.current.add(current.askKey);
-            }
+            const askKeys = Array.isArray(current.pairs) && current.pairs.length > 0
+                ? current.pairs.map((pair) => pair?.askKey).filter(Boolean)
+                : [current.askKey].filter(Boolean);
+            askKeys.forEach((askKey) => warehousePickingDeclarationDismissedRef.current.add(askKey));
 
             return EMPTY_WAREHOUSE_PICKING_DECLARATION_PROMPT;
         });
@@ -7250,12 +7358,20 @@ const OrderList = () => {
             selectedCandidate,
             warehousePickingDeclarationDismissedRef.current
         )) {
+            const askKey = getWarehousePickingDeclarationAskKey(rowForPrompt, selectedCandidate);
             setWarehousePickingDeclarationPrompt({
                 open: true,
                 rowId,
                 source: rowForPrompt.original,
                 candidate: selectedCandidate,
-                askKey: getWarehousePickingDeclarationAskKey(rowForPrompt, selectedCandidate),
+                askKey,
+                pairs: [{
+                    rowId,
+                    lineNumber: rowForPrompt.line_number,
+                    source: rowForPrompt.original,
+                    candidate: selectedCandidate,
+                    askKey,
+                }],
                 submitting: false,
             });
         }
@@ -7265,9 +7381,28 @@ const OrderList = () => {
         const prompt = warehousePickingDeclarationPrompt;
         if (!prompt.open || prompt.submitting) return;
 
-        const sourceSku = String(prompt.source?.sku || '').trim();
-        const candidateSku = String(prompt.candidate?.sku || '').trim();
-        if (!sourceSku || !candidateSku) {
+        const promptPairs = (Array.isArray(prompt.pairs) && prompt.pairs.length > 0
+            ? prompt.pairs
+            : [{
+                rowId: prompt.rowId,
+                source: prompt.source,
+                candidate: prompt.candidate,
+                askKey: prompt.askKey,
+            }]
+        ).filter((pair) => pair?.source && pair?.candidate);
+        const validPairs = promptPairs
+            .map((pair) => ({
+                ...pair,
+                sourceSku: String(pair.source?.sku || '').trim(),
+                candidateSku: String(pair.candidate?.sku || '').trim(),
+            }))
+            .filter((pair) => (
+                pair.sourceSku
+                && pair.candidateSku
+                && normalizeWarehouseReplacementText(pair.sourceSku) !== normalizeWarehouseReplacementText(pair.candidateSku)
+            ));
+
+        if (validPairs.length === 0) {
             setNotification({ type: 'error', message: 'Thiếu mã sản phẩm nên chưa thêm được vào mã thay thế.' });
             dismissWarehousePickingDeclarationPrompt();
             return;
@@ -7278,18 +7413,50 @@ const OrderList = () => {
         ));
 
         try {
-            const response = await productReplacementApi.create({
-                skus: [sourceSku, candidateSku],
-                name: `Thay thế ${sourceSku}`,
-                notes: 'Tự thêm từ đổi khi nhặt hàng',
-            });
+            const savedPairs = [];
+            let failedCount = 0;
 
-            markWarehousePickingCandidatesAsDeclared(response.data?.data || {}, prompt.source, prompt.candidate);
-            if (prompt.askKey) {
-                warehousePickingDeclarationDismissedRef.current.add(prompt.askKey);
+            for (const pair of validPairs) {
+                try {
+                    const response = await productReplacementApi.create({
+                        skus: [pair.sourceSku, pair.candidateSku],
+                        name: `Thay thế ${pair.sourceSku}`,
+                        notes: 'Tự thêm từ đổi khi nhặt hàng',
+                    });
+                    savedPairs.push({
+                        ...pair,
+                        groupPayload: response.data?.data || {},
+                    });
+                } catch (error) {
+                    failedCount += 1;
+                    console.error('Create replacement from warehouse picking error', error);
+                }
             }
+
+            if (savedPairs.length === 0) {
+                setWarehousePickingDeclarationPrompt((current) => (
+                    current.askKey === prompt.askKey ? { ...current, submitting: false } : current
+                ));
+                setNotification({ type: 'error', message: 'Không thể thêm vào bảng mã thay thế.' });
+                return;
+            }
+
+            savedPairs.forEach((pair) => {
+                markWarehousePickingCandidatesAsDeclared(pair.groupPayload, pair.source, pair.candidate);
+                if (pair.askKey) {
+                    warehousePickingDeclarationDismissedRef.current.add(pair.askKey);
+                }
+            });
+            setWarehousePickingReplacementRows((currentRows) => (
+                mergeWarehousePickingHistoryPairsIntoRows(currentRows, savedPairs, { persist: true })
+            ));
             setWarehousePickingDeclarationPrompt(EMPTY_WAREHOUSE_PICKING_DECLARATION_PROMPT);
-            setNotification({ type: 'success', message: 'Đã thêm mã này vào bảng mã thay thế.' });
+            setNotification({
+                type: failedCount > 0 ? 'warning' : 'success',
+                message: failedCount > 0
+                    ? `Đã thêm ${formatNumber(savedPairs.length)} mã thay thế, ${formatNumber(failedCount)} mã chưa thêm được.`
+                    : `Đã thêm ${formatNumber(savedPairs.length)} mã vào bảng mã thay thế.`,
+            });
         } catch (error) {
             console.error('Create replacement from warehouse picking error', error);
             setWarehousePickingDeclarationPrompt((current) => (
@@ -7391,7 +7558,7 @@ const OrderList = () => {
         const currentRowById = new Map(
             warehousePickingReplacementRows.map((row) => [row.row_id, row])
         );
-        const undoRows = rowsToApply
+        const appliedPairs = rowsToApply
             .map((previewRow) => {
                 const currentRow = currentRowById.get(previewRow.rowId);
                 const replacementCandidate = normalizeWarehousePickingCandidate(previewRow.replacementCandidate, {
@@ -7399,21 +7566,33 @@ const OrderList = () => {
                 });
                 const currentCandidate = getWarehousePickingSelectedCandidate(currentRow);
 
-                if (!currentRow || !replacementCandidate?.key || replacementCandidate.key === currentCandidate?.key) {
+                if (!currentRow || !replacementCandidate?.key) {
                     return null;
                 }
 
                 return {
-                    batchId: `warehouse-category-group-undo-${Date.now()}`,
                     rowId: currentRow.row_id,
                     lineNumber: currentRow.line_number,
                     orderNumber: currentRow.order_number,
-                    fromName: getWarehousePickingCandidateLabel(currentCandidate || currentRow.original),
-                    toName: getWarehousePickingCandidateLabel(replacementCandidate),
-                    row: cloneWarehousePickingReplacementRowSnapshot(currentRow),
+                    row: currentRow,
+                    source: currentRow.original,
+                    candidate: replacementCandidate,
+                    currentCandidate,
+                    isChanged: replacementCandidate.key !== currentCandidate?.key,
                 };
             })
             .filter(Boolean);
+        const undoRows = appliedPairs
+            .filter((pair) => pair.isChanged)
+            .map((pair) => ({
+                batchId: `warehouse-category-group-undo-${Date.now()}`,
+                rowId: pair.rowId,
+                lineNumber: pair.lineNumber,
+                orderNumber: pair.orderNumber,
+                fromName: getWarehousePickingCandidateLabel(pair.currentCandidate || pair.row.original),
+                toName: getWarehousePickingCandidateLabel(pair.candidate),
+                row: cloneWarehousePickingReplacementRowSnapshot(pair.row),
+            }));
 
         if (undoRows.length === 0) {
             setNotification({ type: 'error', message: 'Các dòng tìm được chưa tạo thay đổi mới trong bảng.' });
@@ -7421,14 +7600,55 @@ const OrderList = () => {
         }
 
         const nextRows = applyWarehousePickingCategoryGroupPreviewRows(warehousePickingReplacementRows, rowsToApply);
-        setWarehousePickingReplacementRows(nextRows);
+        const nextRowsWithHistory = mergeWarehousePickingHistoryPairsIntoRows(nextRows, appliedPairs);
+        const nextRowById = new Map(nextRowsWithHistory.map((row) => [row.row_id, row]));
+        const declarationPairs = Array.from(new Map(
+            appliedPairs
+                .map((pair) => {
+                    const rowForPrompt = nextRowById.get(pair.rowId) || pair.row;
+                    if (!shouldAskToDeclareWarehousePickingCandidate(
+                        rowForPrompt,
+                        pair.candidate,
+                        warehousePickingDeclarationDismissedRef.current
+                    )) {
+                        return null;
+                    }
+
+                    const askKey = getWarehousePickingDeclarationAskKey(rowForPrompt, pair.candidate);
+
+                    return [askKey, {
+                        rowId: pair.rowId,
+                        lineNumber: pair.lineNumber,
+                        orderNumber: pair.orderNumber,
+                        source: rowForPrompt.original,
+                        candidate: pair.candidate,
+                        askKey,
+                    }];
+                })
+                .filter((entry) => entry?.[0])
+        ).values());
+
+        setWarehousePickingReplacementRows(nextRowsWithHistory);
         setWarehousePickingCategoryGroupUndo({
             id: `warehouse-category-group-undo-${Date.now()}-${Math.random().toString(36).slice(2)}`,
             rows: undoRows,
         });
+        if (declarationPairs.length > 0) {
+            setWarehousePickingDeclarationPrompt({
+                open: true,
+                rowId: declarationPairs[0].rowId,
+                source: declarationPairs[0].source,
+                candidate: declarationPairs[0].candidate,
+                askKey: declarationPairs[0].askKey,
+                pairs: declarationPairs,
+                submitting: false,
+            });
+        }
         setNotification({
             type: 'success',
-            message: `Đã áp dụng đổi nhóm ${formatNumber(undoRows.length)} dòng trong bảng. Kiểm tra rồi bấm Áp dụng vào đơn.`,
+            message: declarationPairs.length > 0
+                ? `Đã áp dụng đổi nhóm ${formatNumber(undoRows.length)} dòng. Có ${formatNumber(declarationPairs.length)} mã chưa khai báo, hãy chọn có lưu vào mã thay thế không.`
+                : `Đã áp dụng đổi nhóm ${formatNumber(undoRows.length)} dòng trong bảng. Kiểm tra rồi bấm Áp dụng vào đơn.`,
         });
     }, [
         warehousePickingReplacementRows,
@@ -10041,6 +10261,7 @@ const OrderList = () => {
                 open={warehousePickingDeclarationPrompt.open}
                 source={warehousePickingDeclarationPrompt.source}
                 candidate={warehousePickingDeclarationPrompt.candidate}
+                pairs={warehousePickingDeclarationPrompt.pairs}
                 submitting={warehousePickingDeclarationPrompt.submitting}
                 onConfirm={handleConfirmWarehousePickingDeclaration}
                 onDismiss={dismissWarehousePickingDeclarationPrompt}

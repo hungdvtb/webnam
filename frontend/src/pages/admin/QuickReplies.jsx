@@ -2140,6 +2140,27 @@ function QuickReplies() {
         });
     };
 
+    const handleSendDraftTextareaKeyDown = (event, contentIndex) => {
+        if (event.key !== 'Enter' || !event.altKey || event.nativeEvent?.isComposing) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        const textarea = event.currentTarget;
+        const selectionStart = textarea.selectionStart ?? textarea.value.length;
+        const selectionEnd = textarea.selectionEnd ?? selectionStart;
+        const nextBody = `${textarea.value.slice(0, selectionStart)}\n${textarea.value.slice(selectionEnd)}`;
+        const nextCursor = selectionStart + 1;
+
+        updateSendDraftContent(contentIndex, { body: nextBody });
+        window.requestAnimationFrame(() => {
+            textarea.selectionStart = nextCursor;
+            textarea.selectionEnd = nextCursor;
+        });
+    };
+
     const toggleSendDraftImage = (contentIndex, imageIndex) => {
         setSendDraft((current) => {
             if (!current) {
@@ -3486,6 +3507,7 @@ function QuickReplies() {
                                                 onFocus={() => setFocusedSendContentKey(contentKey)}
                                                 onBlur={() => setFocusedSendContentKey((current) => (current === contentKey ? null : current))}
                                                 onChange={(event) => updateSendDraftContent(contentIndex, { body: event.target.value })}
+                                                onKeyDown={(event) => handleSendDraftTextareaKeyDown(event, contentIndex)}
                                                 disabled={!content.selected || Boolean(copyingId)}
                                                 placeholder="Nội dung tin nhắn"
                                                 className={`mt-2 w-full resize-none overflow-hidden rounded-sm border border-slate-200 bg-white px-3 py-2 text-[13px] leading-5 text-slate-900 shadow-sm outline-none transition-all duration-150 focus:border-sky-500 focus:ring-2 focus:ring-sky-500/10 disabled:bg-slate-100 ${isContentExpanded ? 'min-h-[140px]' : 'min-h-[86px]'}`}

@@ -81,6 +81,7 @@ const activityIconMap = {
     schedule: 'event',
     status: 'published_with_changes',
     import: 'upload_file',
+    profile: 'manage_accounts',
     note: 'sticky_note_2',
 };
 
@@ -448,6 +449,19 @@ const TelesalesCrm = () => {
     const [toast, setToast] = useState('');
     const [pendingReturnRestore, setPendingReturnRestore] = useState(initialViewState.restoreContext);
     const [restoredLeadId, setRestoredLeadId] = useState(initialViewState.restoreContext?.leadId || null);
+    const [selectedLeadIds, setSelectedLeadIds] = useState([]);
+    const [actionMenuOpen, setActionMenuOpen] = useState(false);
+    const [leadEditOpen, setLeadEditOpen] = useState(false);
+    const [leadEditForm, setLeadEditForm] = useState({
+        customer_name: '',
+        phone: '',
+        zalo_same_as_phone: true,
+        zalo_phone: '',
+    });
+    const [leadEditError, setLeadEditError] = useState('');
+    const [leadEditSaving, setLeadEditSaving] = useState(false);
+    const [bulkDeleting, setBulkDeleting] = useState(false);
+
 
     const [statsOpen, setStatsOpen] = useState(false);
     const [statsMode, setStatsMode] = useState('day');
@@ -510,7 +524,17 @@ const TelesalesCrm = () => {
     );
     const currentStart = pagination.total > 0 ? ((pagination.current_page - 1) * pagination.per_page) + 1 : 0;
     const currentEnd = pagination.total > 0 ? Math.min(pagination.current_page * pagination.per_page, pagination.total) : 0;
-    const visibleColumnCount = Math.max(1, columnOptions.filter((column) => visibleColumns[column.key]).length);
+    const visibleColumnCount = columnOptions.filter((column) => visibleColumns[column.key]).length;
+    const tableColumnCount = visibleColumnCount + 1;
+    const selectedLeadIdSet = useMemo(() => new Set(selectedLeadIds.map((id) => String(id))), [selectedLeadIds]);
+    const selectedLeads = useMemo(
+        () => leads.filter((lead) => selectedLeadIdSet.has(String(lead.id))),
+        [leads, selectedLeadIdSet]
+    );
+    const allVisibleLeadsSelected = leads.length > 0 && leads.every((lead) => selectedLeadIdSet.has(String(lead.id)));
+    const hasVisibleLeadSelection = leads.some((lead) => selectedLeadIdSet.has(String(lead.id)));
+    const canEditSelectedLead = selectedLeadIds.length === 1 && selectedLeads.length === 1;
+
     const dateRangeLabel = useMemo(() => {
         if (dateFrom && dateTo) return `${formatShortDateLabel(dateFrom)} - ${formatShortDateLabel(dateTo)}`;
         if (dateFrom) return `Từ ${formatShortDateLabel(dateFrom)}`;
@@ -628,6 +652,9 @@ const TelesalesCrm = () => {
             delete next[normalizedLeadId];
             return next;
         });
+        setSelectedLeadIds((prev) => prev.filter((id) => String(id) !== normalizedLeadId));
+        setLeadEditOpen(false);
+        setLeadEditError('');
     }, []);
 
     const refreshLeadHistory = useCallback(async (leadId) => {
@@ -668,6 +695,14 @@ const TelesalesCrm = () => {
 
         return () => controller.abort();
     }, [fetchLeads, page]);
+
+    useEffect(() => {
+        const visibleIds = new Set(leads.map((lead) => String(lead.id)));
+        setSelectedLeadIds((prev) => {
+            const next = prev.filter((id) => visibleIds.has(String(id)));
+            return next.length === prev.length ? prev : next;
+        });
+    }, [leads]);
 
     useEffect(() => {
         if (!pendingReturnRestore || loading) return undefined;
@@ -766,6 +801,156 @@ const TelesalesCrm = () => {
     const handleQueueChange = (nextQueue) => {
         setQueue(nextQueue);
         setPage(1);
+    };
+
+    const toggleSelectLead = useCallback((leadId, checked) => {
+        const normalizedLeadId = String(leadId || '');
+        if (!normalizedLeadId) return;
+
+        setSelectedLeadIds((prev) => {
+            const exists = prev.some((id) => String(id) === normalizedLeadId);
+            if (checked) return exists ? prev : [...prev, normalizedLeadId];
+            return prev.filter((id) => String(id) !== normalizedLeadId);
+        });
+    }, []);
+
+    const toggleSelectAllLeads = useCallback(() => {
+        if (leads.length === 0) return;
+
+        setSelectedLeadIds(allVisibleLeadsSelected
+            ? []
+            : leads.map((lead) => String(lead.id))
+        );
+    }, [allVisibleLeadsSelected, leads]);
+
+    const openEditSelectedLead = () => {
+        const lead = selectedLeads[0];
+        setActionMenuOpen(false);
+
+        if (!canEditSelectedLead || !lead) {
+            setErrorMessage('Tích chọn đúng 1 khách để sửa thông tin.');
+            return;
+        }
+
+        const zaloSameAsPhone = normalizePhoneDigits(lead.zalo_phone || lead.phone) === normalizePhoneDigits(lead.phone);
+        setLeadEditForm({
+            customer_name: lead.customer_name || '',
+            phone: lead.phone || '',
+            zalo_same_as_phone: zaloSameAsPhone,
+            zalo_phone: lead.zalo_phone || lead.phone || '',
+        });
+        setLeadEditError('');
+        setErrorMessage('');
+        setToast('');
+        setLeadEditOpen(true);
+    };
+
+    const closeLeadEdit = () => {
+        if (leadEditSaving) return;
+        setLeadEditOpen(false);
+        setLeadEditError('');
+    };
+
+    const handleLeadEditSameAsPhoneChange = (checked) => {
+        setLeadEditForm((prev) => ({
+            ...prev,
+            zalo_same_as_phone: checked,
+            zalo_phone: checked ? prev.phone : prev.zalo_phone,
+        }));
+    };
+
+    const handleLeadEditSubmit = async (event) => {
+        event.preventDefault();
+
+        const lead = selectedLeads[0];
+        if (!canEditSelectedLead || !lead) {
+            setLeadEditError('Tích chọn đúng 1 khách để sửa thông tin.');
+            return;
+        }
+
+        const customerName = leadEditForm.customer_name.trim();
+        const phone = leadEditForm.phone.trim();
+        const zaloPhone = leadEditForm.zalo_same_as_phone ? phone : leadEditForm.zalo_phone.trim();
+
+        if (!phone) {
+            setLeadEditError('Nhập SĐT khách trước khi lưu.');
+            return;
+        }
+
+        if (!leadEditForm.zalo_same_as_phone && !zaloPhone) {
+            setLeadEditError('Nhập SĐT Zalo hoặc tích SĐT là Zalo.');
+            return;
+        }
+
+        setLeadEditSaving(true);
+        setLeadEditError('');
+        setErrorMessage('');
+        setToast('');
+
+        try {
+            const response = await telesalesApi.update(lead.id, {
+                customer_name: customerName || null,
+                phone,
+                zalo_phone: zaloPhone,
+                activity_type: 'profile',
+            });
+            const nextLead = response.data?.lead;
+
+            if (nextLead) {
+                setLeads((prev) => prev.map((item) => Number(item.id) === Number(nextLead.id) ? nextLead : item));
+                setSelectedLeadIds([String(nextLead.id)]);
+            }
+
+            setStats((prev) => ({ ...emptyStats, ...(response.data?.stats || prev) }));
+            setLeadEditOpen(false);
+            setToast('Đã cập nhật thông tin khách.');
+
+            if (historyOpenIds[lead.id]) {
+                await refreshLeadHistory(lead.id);
+            }
+
+            await fetchLeads(page);
+        } catch (error) {
+            if (isNotFoundRequest(error)) {
+                forgetLeadFromCurrentView(lead.id);
+                setToast('Khách này không còn tồn tại hoặc không thuộc gian hàng hiện tại.');
+                return;
+            }
+
+            setLeadEditError(resolveApiMessage(error, 'Không lưu được thông tin khách.'));
+        } finally {
+            setLeadEditSaving(false);
+        }
+    };
+
+    const handleDeleteSelectedLeads = async () => {
+        const targetIds = selectedLeadIds.map((id) => String(id)).filter(Boolean);
+        if (targetIds.length === 0) return;
+
+        const firstLead = selectedLeads[0];
+        const targetLabel = targetIds.length === 1
+            ? (firstLead?.customer_name || firstLead?.phone || 'khách này')
+            : `${formatNumber(targetIds.length)} khách đã chọn`;
+
+        setActionMenuOpen(false);
+        if (!window.confirm(`Xóa ${targetLabel} khỏi CRM telesales?`)) return;
+
+        setBulkDeleting(true);
+        setErrorMessage('');
+        setToast('');
+
+        try {
+            const response = await telesalesApi.bulkDelete(targetIds);
+            const deletedCount = Number(response.data?.count ?? targetIds.length) || targetIds.length;
+            setStats((prev) => ({ ...emptyStats, ...(response.data?.stats || prev) }));
+            setSelectedLeadIds([]);
+            await fetchLeads(page);
+            setToast(`Đã xóa ${formatNumber(deletedCount)} khách khỏi CRM.`);
+        } catch (error) {
+            setErrorMessage(resolveApiMessage(error, 'Không xóa được khách đã chọn.'));
+        } finally {
+            setBulkDeleting(false);
+        }
     };
 
     const handleInlineLeadUpdate = async (lead, payload, options = 'Đã cập nhật khách.') => {
@@ -1877,6 +2062,96 @@ const TelesalesCrm = () => {
         );
     };
 
+    const renderLeadEditModal = () => {
+        if (!leadEditOpen) return null;
+
+        const editingLead = selectedLeads[0];
+
+        return (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4">
+                <form onSubmit={handleLeadEditSubmit} className="w-full max-w-lg overflow-hidden rounded-sm bg-white shadow-2xl">
+                    <div className="flex items-center justify-between gap-3 border-b border-slate-200 p-4">
+                        <div className="min-w-0">
+                            <h2 className="text-xl font-black text-slate-950">Sửa thông tin khách</h2>
+                            <p className="mt-1 truncate text-[13px] font-medium text-slate-500">
+                                {editingLead?.lead_number || editingLead?.customer_name || editingLead?.phone || 'Khách đang chọn'}
+                            </p>
+                        </div>
+                        <button type="button" onClick={closeLeadEdit} disabled={leadEditSaving} className={iconButtonClassName} title="Đóng">
+                            <span className="material-symbols-outlined text-[19px]">close</span>
+                        </button>
+                    </div>
+
+                    <div className="space-y-3 p-4">
+                        <label className="block">
+                            <span className="mb-1 block text-[12px] font-bold text-slate-500">Tên khách</span>
+                            <input
+                                value={leadEditForm.customer_name}
+                                onChange={(event) => setLeadEditForm((prev) => ({ ...prev, customer_name: event.target.value }))}
+                                disabled={leadEditSaving}
+                                className={inputClassName}
+                                placeholder="Tên khách"
+                            />
+                        </label>
+
+                        <label className="block">
+                            <span className="mb-1 block text-[12px] font-bold text-slate-500">SĐT khách</span>
+                            <input
+                                value={leadEditForm.phone}
+                                onChange={(event) => {
+                                    const nextPhone = event.target.value;
+                                    setLeadEditForm((prev) => ({
+                                        ...prev,
+                                        phone: nextPhone,
+                                        zalo_phone: prev.zalo_same_as_phone ? nextPhone : prev.zalo_phone,
+                                    }));
+                                }}
+                                disabled={leadEditSaving}
+                                className={inputClassName}
+                                placeholder="09xx xxx xxx"
+                            />
+                        </label>
+
+                        <label className="flex h-10 items-center gap-2 rounded-sm border border-slate-200 bg-slate-50 px-3 text-[13px] font-semibold text-slate-700">
+                            <input
+                                type="checkbox"
+                                checked={leadEditForm.zalo_same_as_phone}
+                                onChange={(event) => handleLeadEditSameAsPhoneChange(event.target.checked)}
+                                disabled={leadEditSaving}
+                                className="size-4 accent-teal-700"
+                            />
+                            SĐT khách cũng là Zalo
+                        </label>
+
+                        <label className="block">
+                            <span className="mb-1 block text-[12px] font-bold text-slate-500">SĐT Zalo</span>
+                            <input
+                                value={leadEditForm.zalo_same_as_phone ? leadEditForm.phone : leadEditForm.zalo_phone}
+                                onChange={(event) => setLeadEditForm((prev) => ({ ...prev, zalo_phone: event.target.value }))}
+                                disabled={leadEditSaving || leadEditForm.zalo_same_as_phone}
+                                className={inputClassName}
+                                placeholder="Nhập nếu khác SĐT khách"
+                            />
+                        </label>
+
+                        {leadEditError ? (
+                            <div className="rounded-sm border border-red-200 bg-red-50 px-3 py-2 text-[13px] font-semibold text-red-700">
+                                {leadEditError}
+                            </div>
+                        ) : null}
+                    </div>
+
+                    <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 p-4">
+                        <button type="button" onClick={closeLeadEdit} disabled={leadEditSaving} className={secondaryButtonClassName}>Đóng</button>
+                        <button type="submit" disabled={leadEditSaving} className={primaryButtonClassName}>
+                            <span className="material-symbols-outlined text-[18px]">save</span>
+                            {leadEditSaving ? 'Đang lưu...' : 'Lưu sửa'}
+                        </button>
+                    </div>
+                </form>
+            </div>
+        );
+    };
     const renderHistoryRow = (lead) => {
         const detail = historyDetails[lead.id];
         const notes = Array.isArray(detail?.notes_timeline) ? detail.notes_timeline : [];
@@ -1884,7 +2159,7 @@ const TelesalesCrm = () => {
 
         return (
             <tr className="bg-slate-50">
-                <td colSpan={visibleColumnCount} className="border border-slate-200 px-4 py-3">
+                <td colSpan={tableColumnCount} className="border border-slate-200 px-4 py-3">
                     <div className="mx-auto max-w-4xl rounded-sm border border-slate-200 bg-white p-3 shadow-sm">
                         {historyLoadingIds[lead.id] ? (
                             <div className="py-6 text-center text-[13px] font-semibold text-slate-500">Đang tải lịch sử...</div>
@@ -1986,11 +2261,58 @@ const TelesalesCrm = () => {
 
                 <div className="min-w-0 overflow-hidden rounded-sm border border-slate-200 bg-white shadow-sm">
                     <div className="border-b border-slate-200 p-3">
-                        <div className="grid grid-cols-1 gap-2 xl:grid-cols-[136px_minmax(150px,1fr)_150px_156px_128px_132px_160px_180px_180px_152px] xl:items-center">
+                        <div className="grid grid-cols-1 gap-2 xl:grid-cols-[136px_124px_minmax(150px,1fr)_150px_156px_128px_132px_160px_180px_180px_152px] xl:items-center">
                             <button type="button" onClick={() => setImportOpen(true)} className={primaryButtonClassName}>
                                 <span className="material-symbols-outlined text-[18px]">add</span>
                                 Nhập khách
                             </button>
+
+                            <div className="relative">
+                                <button type="button" onClick={() => setActionMenuOpen((open) => !open)} className={`${secondaryButtonClassName} w-full justify-between px-3`}>
+                                    <span className="inline-flex items-center gap-2">
+                                        <span className="material-symbols-outlined text-[18px]">more_horiz</span>
+                                        Thao tác
+                                    </span>
+                                    {selectedLeadIds.length > 0 ? (
+                                        <span className="ml-1 inline-flex min-w-5 items-center justify-center rounded-full bg-teal-50 px-1.5 text-[11px] font-black text-teal-700">
+                                            {formatNumber(selectedLeadIds.length)}
+                                        </span>
+                                    ) : null}
+                                </button>
+
+                                {actionMenuOpen ? (
+                                    <div className="absolute left-0 top-12 z-30 w-[240px] rounded-sm border border-slate-200 bg-white p-2 shadow-xl">
+                                        <div className="px-2 pb-2 text-[12px] font-semibold text-slate-500">
+                                            {selectedLeadIds.length > 0
+                                                ? `Đã chọn ${formatNumber(selectedLeadIds.length)} khách`
+                                                : 'Tích ô nhỏ ở bảng để chọn khách'}
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={openEditSelectedLead}
+                                            disabled={!canEditSelectedLead || leadEditSaving || bulkDeleting}
+                                            className="flex h-9 w-full items-center gap-2 rounded-sm px-2 text-left text-[13px] font-bold text-slate-700 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-white"
+                                        >
+                                            <span className="material-symbols-outlined text-[18px]">edit</span>
+                                            Sửa khách
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={handleDeleteSelectedLeads}
+                                            disabled={selectedLeadIds.length === 0 || bulkDeleting}
+                                            className="flex h-9 w-full items-center gap-2 rounded-sm px-2 text-left text-[13px] font-bold text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-white"
+                                        >
+                                            <span className="material-symbols-outlined text-[18px]">delete</span>
+                                            {bulkDeleting ? 'Đang xóa...' : 'Xóa khách'}
+                                        </button>
+                                        {selectedLeadIds.length > 1 ? (
+                                            <div className="mt-2 rounded-sm bg-slate-50 px-2 py-1.5 text-[11px] font-semibold leading-5 text-slate-500">
+                                                Sửa từng khách một; xóa có thể áp dụng cho nhiều khách đã chọn.
+                                            </div>
+                                        ) : null}
+                                    </div>
+                                ) : null}
+                            </div>
 
                             <div className="relative min-w-0">
                                 <span className="material-symbols-outlined pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-slate-400">search</span>
@@ -2163,9 +2485,22 @@ const TelesalesCrm = () => {
                     </div>
 
                     <div ref={tableScrollRef} className="max-h-[calc(100vh-330px)] min-h-[480px] overflow-auto">
-                        <table className="min-w-[1580px] table-fixed border-collapse">
+                        <table className="min-w-[1632px] table-fixed border-collapse">
                             <thead className="sticky top-0 z-20">
                                 <tr className="bg-slate-50 text-left text-[12px] font-bold text-slate-500">
+                                    <th className="w-[52px] border border-slate-200 px-2 py-3 text-center">
+                                        <label className="inline-flex size-8 items-center justify-center rounded-sm border border-slate-200 bg-white shadow-sm" title="Chọn tất cả khách đang hiển thị">
+                                            <input
+                                                type="checkbox"
+                                                checked={allVisibleLeadsSelected}
+                                                disabled={leads.length === 0}
+                                                onChange={toggleSelectAllLeads}
+                                                aria-label="Chọn tất cả khách đang hiển thị"
+                                                aria-checked={hasVisibleLeadSelection && !allVisibleLeadsSelected ? 'mixed' : allVisibleLeadsSelected}
+                                                className="size-4 accent-teal-700 disabled:cursor-not-allowed"
+                                            />
+                                        </label>
+                                    </th>
                                     {visibleColumns.customer ? <th className="w-[190px] border border-slate-200 px-3 py-3">Khách hàng</th> : null}
                                     {visibleColumns.phone ? <th className="w-[210px] border border-slate-200 px-3 py-3">SĐT / Zalo</th> : null}
                                     {visibleColumns.staff ? <th className="w-[140px] border border-slate-200 px-3 py-3">Sale phụ trách</th> : null}
@@ -2179,13 +2514,13 @@ const TelesalesCrm = () => {
                             <tbody>
                                 {loading && leads.length === 0 ? (
                                     <tr>
-                                        <td colSpan={visibleColumnCount} className="border border-slate-200 px-4 py-16 text-center text-[13px] font-semibold text-slate-500">
+                                        <td colSpan={tableColumnCount} className="border border-slate-200 px-4 py-16 text-center text-[13px] font-semibold text-slate-500">
                                             Đang tải danh sách khách...
                                         </td>
                                     </tr>
                                 ) : leads.length === 0 ? (
                                     <tr>
-                                        <td colSpan={visibleColumnCount} className="border border-slate-200 px-4 py-16 text-center text-[13px] font-semibold text-slate-500">
+                                        <td colSpan={tableColumnCount} className="border border-slate-200 px-4 py-16 text-center text-[13px] font-semibold text-slate-500">
                                             Chưa có khách phù hợp với bộ lọc hiện tại.
                                         </td>
                                     </tr>
@@ -2211,10 +2546,23 @@ const TelesalesCrm = () => {
                                     const currentStatusColor = taskStatusDisplay?.color || currentStatusOption?.color || '#64748b';
                                     const currentTaskDue = workTask?.due_label || '';
                                     const rowWasRestored = String(restoredLeadId || '') === String(lead.id);
+                                    const rowSelected = selectedLeadIdSet.has(String(lead.id));
 
                                     return (
                                         <React.Fragment key={lead.id}>
-                                            <tr id={`telesales-lead-${lead.id}`} data-telesales-lead-row={lead.id} className={`border-b border-slate-200 text-[13px] transition ${rowWasRestored ? 'bg-teal-50' : 'bg-white hover:bg-teal-50/40'}`}>
+                                            <tr id={`telesales-lead-${lead.id}`} data-telesales-lead-row={lead.id} className={`border-b border-slate-200 text-[13px] transition ${rowWasRestored || rowSelected ? 'bg-teal-50' : 'bg-white hover:bg-teal-50/40'}`}>
+                                                <td className="border border-slate-200 px-2 py-3 text-center align-middle">
+                                                    <label className="inline-flex size-8 items-center justify-center rounded-sm border border-slate-200 bg-white shadow-sm hover:border-teal-300" title="Chọn khách này">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={rowSelected}
+                                                            onChange={(event) => toggleSelectLead(lead.id, event.target.checked)}
+                                                            className="size-4 accent-teal-700"
+                                                            aria-label={`Chọn ${lead.customer_name || lead.phone || lead.id}`}
+                                                        />
+                                                    </label>
+                                                </td>
+
                                                 {visibleColumns.customer ? <td className="border border-slate-200 px-3 py-3 align-middle">
                                                     <div className="min-w-0">
                                                         <div className="truncate font-black text-slate-950">{lead.customer_name || 'Khách chưa có tên'}</div>
@@ -2428,6 +2776,7 @@ const TelesalesCrm = () => {
             </div>
 
             {renderImportModal()}
+            {renderLeadEditModal()}
             {renderStatsPanel()}
             {renderStatusManager()}
         </div>

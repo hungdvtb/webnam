@@ -16,6 +16,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 use Illuminate\Support\Collection;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 class TelesalesLeadController extends Controller
 {
@@ -33,6 +34,7 @@ class TelesalesLeadController extends Controller
         ['value' => 'zalo', 'label' => 'Nhắn Zalo'],
         ['value' => 'schedule', 'label' => 'Đặt lịch'],
         ['value' => 'status', 'label' => 'Đổi trạng thái'],
+        ['value' => 'profile', 'label' => 'Sửa thông tin'],
         ['value' => 'import', 'label' => 'Nhập khách'],
     ];
 
@@ -351,7 +353,15 @@ class TelesalesLeadController extends Controller
         }
 
         if (array_key_exists('phone', $validated)) {
-            $lead->phone = $this->normalizePhone($validated['phone']);
+            $normalizedPhone = $this->normalizePhone($validated['phone']);
+            if ($normalizedPhone === '') {
+                throw ValidationException::withMessages([
+                    'phone' => 'SĐT khách không hợp lệ.',
+                ]);
+            }
+
+            $this->ensurePhoneIsAvailable($accountId, $lead, $normalizedPhone);
+            $lead->phone = $normalizedPhone;
         }
 
         if (array_key_exists('zalo_phone', $validated)) {
@@ -449,6 +459,51 @@ class TelesalesLeadController extends Controller
         ]);
     }
 
+    public function destroy(Request $request, int $id)
+    {
+        $lead = $this->scopedLeadQuery($request, true)->findOrFail($id);
+
+        if ($lead->trashed()) {
+            return response()->json(['message' => 'Khách này đã được xóa khỏi CRM.'], 422);
+        }
+
+        $lead->delete();
+
+        return response()->json([
+            'message' => 'Đã xóa khách khỏi CRM telesales.',
+            'stats' => $this->stats($request),
+        ]);
+    }
+
+    public function bulkDestroy(Request $request)
+    {
+        $ids = collect($request->input('ids', []))
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($ids->isEmpty()) {
+            return response()->json(['message' => 'Chưa chọn khách để xóa.'], 400);
+        }
+
+        $leads = $this->scopedLeadQuery($request)
+            ->whereIn('id', $ids)
+            ->get();
+        $deletedCount = 0;
+
+        foreach ($leads as $lead) {
+            $lead->delete();
+            $deletedCount++;
+        }
+
+        return response()->json([
+            'message' => 'Đã xóa khách khỏi CRM telesales.',
+            'count' => $deletedCount,
+            'stats' => $this->stats($request),
+        ]);
+    }
+
     public function deleteLatestNote(Request $request, int $id)
     {
         $lead = $this->scopedLeadQuery($request)
@@ -537,10 +592,16 @@ class TelesalesLeadController extends Controller
         return (int) $request->header('X-Account-Id');
     }
 
-    private function scopedLeadQuery(Request $request): Builder
+    private function scopedLeadQuery(Request $request, bool $withTrashed = false): Builder
     {
-        return Lead::withoutGlobalScopes()
+        $query = Lead::withoutGlobalScopes()
             ->where('account_id', $this->accountId($request));
+
+        if (!$withTrashed) {
+            $query->whereNull((new Lead())->getQualifiedDeletedAtColumn());
+        }
+
+        return $query;
     }
 
     private function staffQuery(int $accountId): Builder
@@ -790,10 +851,12 @@ class TelesalesLeadController extends Controller
             ->orderBy('due_date')
             ->orderBy('id');
     }
+
     private function ensureFollowUpTasksForAccount(int $accountId): void
     {
         Lead::withoutGlobalScopes()
             ->where('account_id', $accountId)
+            ->whereNull((new Lead())->getQualifiedDeletedAtColumn())
             ->with('statusConfig')
             ->orderBy('id')
             ->chunkById(200, function (Collection $leads) {
@@ -1161,11 +1224,33 @@ class TelesalesLeadController extends Controller
         return $digits;
     }
 
+    private function ensurePhoneIsAvailable(int $accountId, Lead $currentLead, string $normalizedPhone): void
+    {
+        if ($normalizedPhone === '') {
+            return;
+        }
+
+        $duplicateLead = Lead::withoutGlobalScopes()
+            ->where('account_id', $accountId)
+            ->where('id', '!=', $currentLead->id)
+            ->whereNotNull('phone')
+            ->whereNull((new Lead())->getQualifiedDeletedAtColumn())
+            ->get(['id', 'phone'])
+            ->first(fn (Lead $lead) => $this->normalizePhone($lead->phone) === $normalizedPhone);
+
+        if ($duplicateLead) {
+            throw ValidationException::withMessages([
+                'phone' => 'Số điện thoại này đã tồn tại trong CRM.',
+            ]);
+        }
+    }
+
     private function existingLeadMapByPhone(int $accountId): Collection
     {
         return Lead::withoutGlobalScopes()
             ->where('account_id', $accountId)
             ->whereNotNull('phone')
+            ->whereNull((new Lead())->getQualifiedDeletedAtColumn())
             ->with(['statusConfig', 'assignedStaff', 'latestNote'])
             ->get()
             ->mapWithKeys(function (Lead $lead) {
@@ -1564,6 +1649,7 @@ class TelesalesLeadController extends Controller
             'zalo' => 'Đã nhắn Zalo cho khách.',
             'schedule' => 'Đã cập nhật lịch chăm sóc.',
             'status' => 'Đã cập nhật trạng thái khách.',
+            'profile' => 'Đã sửa thông tin khách.',
             default => 'Đã cập nhật thông tin khách.',
         };
     }

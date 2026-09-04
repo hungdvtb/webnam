@@ -301,8 +301,10 @@ Route::middleware(['auth:sanctum', 'admin-permission'])->group(function () {
     Route::get('/telesales/bootstrap', [\App\Http\Controllers\Api\TelesalesLeadController::class, 'bootstrap']);
     Route::get('/telesales/leads', [\App\Http\Controllers\Api\TelesalesLeadController::class, 'index']);
     Route::post('/telesales/leads/import', [\App\Http\Controllers\Api\TelesalesLeadController::class, 'import']);
+    Route::post('/telesales/leads/bulk-delete', [\App\Http\Controllers\Api\TelesalesLeadController::class, 'bulkDestroy']);
     Route::get('/telesales/leads/{id}', [\App\Http\Controllers\Api\TelesalesLeadController::class, 'show'])->whereNumber('id');
     Route::put('/telesales/leads/{id}', [\App\Http\Controllers\Api\TelesalesLeadController::class, 'update'])->whereNumber('id');
+    Route::delete('/telesales/leads/{id}', [\App\Http\Controllers\Api\TelesalesLeadController::class, 'destroy'])->whereNumber('id');
     Route::post('/telesales/leads/{id}/tasks/{taskId}/complete', [\App\Http\Controllers\Api\TelesalesLeadController::class, 'completeTask'])->whereNumber('id')->whereNumber('taskId');
     Route::delete('/telesales/leads/{id}/latest-note', [\App\Http\Controllers\Api\TelesalesLeadController::class, 'deleteLatestNote'])->whereNumber('id');
     Route::delete('/telesales/leads/{id}/notes/{noteId}', [\App\Http\Controllers\Api\TelesalesLeadController::class, 'deleteNote'])->whereNumber('id')->whereNumber('noteId');

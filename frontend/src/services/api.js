@@ -849,6 +849,8 @@ export const telesalesApi = {
     getOne: (id) => api.get(`/telesales/leads/${id}`),
     importLeads: (data) => api.post('/telesales/leads/import', data),
     update: (id, data) => api.put(`/telesales/leads/${id}`, data),
+    destroy: (id) => api.delete(`/telesales/leads/${id}`),
+    bulkDelete: (ids) => api.post('/telesales/leads/bulk-delete', { ids }),
     completeTask: (id, taskId, data = {}) => api.post(`/telesales/leads/${id}/tasks/${taskId}/complete`, data),
     deleteLatestNote: (id) => api.delete(`/telesales/leads/${id}/latest-note`),
     deleteNote: (id, noteId) => api.delete(`/telesales/leads/${id}/notes/${noteId}`),

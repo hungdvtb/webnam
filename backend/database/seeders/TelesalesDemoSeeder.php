@@ -23,6 +23,11 @@ class TelesalesDemoSeeder extends Seeder
 
     public function run(): void
     {
+        if (!app()->environment(['local', 'testing'])) {
+            $this->command?->error('Refused: CRM telesales demo seeding is only available in local/testing.');
+            return;
+        }
+
         $targetAccountId = (int) env('TELESALES_DEMO_ACCOUNT_ID', 0);
         $count = max(1, min((int) env('TELESALES_DEMO_COUNT', self::DEFAULT_PER_ACCOUNT_COUNT), 500));
         $clearAll = filter_var(env('TELESALES_DEMO_CLEAR_ALL', false), FILTER_VALIDATE_BOOLEAN);

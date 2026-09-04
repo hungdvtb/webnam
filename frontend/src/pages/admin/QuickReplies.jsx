@@ -200,27 +200,13 @@ const createSendDraftFromReply = (reply) => ({
 });
 
 const SEND_DRAFT_COLLAPSED_ROWS = 4;
-const SEND_DRAFT_ESTIMATED_CHARS_PER_ROW = 40;
 
-const sendDraftEstimatedRows = (body) => {
-    const text = String(body || '').trimEnd();
-    if (!text) {
-        return 1;
-    }
-
-    return text.split(/\r\n|\r|\n/).reduce((total, line) => (
-        total + Math.max(1, Math.ceil(line.length / SEND_DRAFT_ESTIMATED_CHARS_PER_ROW))
-    ), 0);
-};
-
-const sendDraftNeedsHoverExpand = (body) => sendDraftEstimatedRows(body) > SEND_DRAFT_COLLAPSED_ROWS;
-
-const sendDraftTextareaRows = (body, expanded = false) => {
+const sendDraftTextareaRows = (expandedRows = SEND_DRAFT_COLLAPSED_ROWS, expanded = false) => {
     if (!expanded) {
         return SEND_DRAFT_COLLAPSED_ROWS;
     }
 
-    return Math.max(SEND_DRAFT_COLLAPSED_ROWS, Math.min(32, sendDraftEstimatedRows(body) + 1));
+    return Math.max(SEND_DRAFT_COLLAPSED_ROWS, Math.min(32, Number(expandedRows) || SEND_DRAFT_COLLAPSED_ROWS));
 };
 const buildSendDraftPayload = (draft) => ({
     contents: (Array.isArray(draft?.contents) ? draft.contents : [])
@@ -656,6 +642,7 @@ function QuickReplies() {
     const [sendDraft, setSendDraft] = useState(null);
     const [hoveredSendContentKey, setHoveredSendContentKey] = useState(null);
     const [focusedSendContentKey, setFocusedSendContentKey] = useState(null);
+    const [sendDraftContentRows, setSendDraftContentRows] = useState(() => new Map());
     const [selectedReplyIds, setSelectedReplyIds] = useState(() => new Set());
     const [zaloPasteFlow, setZaloPasteFlow] = useState(null);
     const [zaloMirrorOpen, setZaloMirrorOpen] = useState(false);
@@ -694,6 +681,7 @@ function QuickReplies() {
     const galleryUploadInputRef = useRef(null);
     const galleryUploadAbortRef = useRef(null);
     const replyImageClickTimerRef = useRef(null);
+    const sendDraftTextareaRefs = useRef(new Map());
     const pageSize = isSidebarMode ? 20 : (pagination.per_page || 50);
     const galleryPageSize = 60;
 
@@ -743,6 +731,86 @@ function QuickReplies() {
         setError('');
         setMessage('');
     };
+
+    const setSendDraftTextareaRef = useCallback((contentKey, node) => {
+        if (node) {
+            sendDraftTextareaRefs.current.set(contentKey, node);
+            return;
+        }
+
+        sendDraftTextareaRefs.current.delete(contentKey);
+    }, []);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') {
+            return undefined;
+        }
+
+        if (!sendDraft) {
+            sendDraftTextareaRefs.current.clear();
+            setSendDraftContentRows((current) => (current.size > 0 ? new Map() : current));
+            return undefined;
+        }
+
+        let frameId = 0;
+        const measureTextareas = () => {
+            const nextRows = new Map();
+
+            sendDraft.contents.forEach((content, contentIndex) => {
+                const contentKey = content.client_id || content.id || contentIndex;
+                const node = sendDraftTextareaRefs.current.get(contentKey);
+                if (!node) {
+                    return;
+                }
+
+                const style = window.getComputedStyle(node);
+                const lineHeight = Number.parseFloat(style.lineHeight) || 20;
+                const paddingTop = Number.parseFloat(style.paddingTop) || 0;
+                const paddingBottom = Number.parseFloat(style.paddingBottom) || 0;
+                const innerScrollHeight = Math.max(0, node.scrollHeight - paddingTop - paddingBottom);
+                const collapsedContentHeight = lineHeight * SEND_DRAFT_COLLAPSED_ROWS;
+
+                if (innerScrollHeight > collapsedContentHeight + 1) {
+                    nextRows.set(contentKey, Math.ceil(innerScrollHeight / lineHeight));
+                }
+            });
+
+            setSendDraftContentRows((current) => {
+                if (current.size === nextRows.size) {
+                    let same = true;
+                    nextRows.forEach((rows, key) => {
+                        if (current.get(key) !== rows) {
+                            same = false;
+                        }
+                    });
+
+                    if (same) {
+                        return current;
+                    }
+                }
+
+                return nextRows;
+            });
+        };
+
+        const scheduleMeasure = () => {
+            if (frameId) {
+                window.cancelAnimationFrame(frameId);
+            }
+
+            frameId = window.requestAnimationFrame(measureTextareas);
+        };
+
+        scheduleMeasure();
+        window.addEventListener('resize', scheduleMeasure);
+
+        return () => {
+            if (frameId) {
+                window.cancelAnimationFrame(frameId);
+            }
+            window.removeEventListener('resize', scheduleMeasure);
+        };
+    }, [sendDraft]);
 
     useEffect(() => {
         if (typeof window === 'undefined') {
@@ -2048,6 +2116,8 @@ function QuickReplies() {
         });
     };
     const openSendDraft = (reply) => {
+        sendDraftTextareaRefs.current.clear();
+        setSendDraftContentRows(new Map());
         setSendDraft(createSendDraftFromReply(reply));
         setHoveredSendContentKey(null);
         setFocusedSendContentKey(null);
@@ -3382,7 +3452,8 @@ function QuickReplies() {
                                     const contentImages = Array.isArray(content.images) ? content.images : [];
                                     const selectedImageCount = contentImages.filter((image) => image.selected !== false).length;
                                     const contentKey = content.client_id || content.id || contentIndex;
-                                    const canHoverExpandContent = sendDraftNeedsHoverExpand(content.body);
+                                    const contentExpandedRows = sendDraftContentRows.get(contentKey) || SEND_DRAFT_COLLAPSED_ROWS;
+                                    const canHoverExpandContent = sendDraftContentRows.has(contentKey);
                                     const isContentExpanded = canHoverExpandContent && (hoveredSendContentKey === contentKey || focusedSendContentKey === contentKey);
 
                                     return (
@@ -3409,8 +3480,9 @@ function QuickReplies() {
                                             </div>
 
                                             <textarea
+                                                ref={(node) => setSendDraftTextareaRef(contentKey, node)}
                                                 value={content.body}
-                                                rows={sendDraftTextareaRows(content.body, isContentExpanded)}
+                                                rows={sendDraftTextareaRows(contentExpandedRows, isContentExpanded)}
                                                 onFocus={() => setFocusedSendContentKey(contentKey)}
                                                 onBlur={() => setFocusedSendContentKey((current) => (current === contentKey ? null : current))}
                                                 onChange={(event) => updateSendDraftContent(contentIndex, { body: event.target.value })}

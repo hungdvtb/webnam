@@ -2101,7 +2101,6 @@ function QuickReplies() {
         try {
             if (useBrowserClipboardForWeb) {
                 const contents = sendPayloadClipboardContents(preparedPayload);
-                const textToCopy = sendPayloadClipboardText(preparedPayload);
                 const imageCount = sendPayloadImageCount(preparedPayload);
 
                 if (contents.length === 0) {
@@ -2113,26 +2112,14 @@ function QuickReplies() {
                 let sentImages = 0;
                 let manualImages = 0;
 
-                const fallbackToCopyOnly = async () => {
+                const failBecauseLocalBridgeUnavailable = () => {
                     if (sentSteps > 0) {
                         throw new Error('Backend local bị ngắt khi đang gửi Zalo Web. Có thể đã gửi một phần, kiểm tra lại khung chat trước khi gửi lại.');
                     }
 
-                    if (!textToCopy) {
-                        throw new Error(imageCount > 0
-                            ? 'Mẫu này chỉ có ảnh. Chưa thấy backend local nên Zalo Web không tự gửi ảnh được; hãy bật backend local hoặc dùng Zalo PC.'
-                            : 'Mẫu này chưa có nội dung để gửi.');
-                    }
-
-                    await copyTextFallback(textToCopy);
-                    focusZaloWebPopup();
-                    await recordUse(reply);
-                    setCopiedState({ id: replyId, mode: 'sent' });
-                    setZaloPasteFlow(null);
-                    setSendDraft(null);
-                    setMessage(imageCount > 0
-                        ? `Chưa thấy backend local nên mới copy chữ vào clipboard. Bật backend local để tự gửi; mẫu có ${imageCount} ảnh chưa gửi.`
-                        : 'Chưa thấy backend local nên mới copy vào clipboard. Bật backend local để tự gửi sang Zalo Web.'
+                    throw new Error(imageCount > 0
+                        ? `Chưa thấy backend local nên chưa tự gửi được Zalo Web. Bật file start-backend-8003.bat rồi bấm gửi lại; mẫu này có ${imageCount} ảnh nên không gửi bằng chế độ copy thủ công.`
+                        : 'Chưa thấy backend local nên chưa tự gửi được Zalo Web. Bật file start-backend-8003.bat rồi bấm gửi lại.'
                     );
                 };
 
@@ -2147,7 +2134,7 @@ function QuickReplies() {
                             throw bridgeErr;
                         }
 
-                        await fallbackToCopyOnly();
+                        failBecauseLocalBridgeUnavailable();
                         return null;
                     }
                 };

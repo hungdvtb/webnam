@@ -28,7 +28,16 @@ const RETRYABLE_NETWORK_MESSAGE_FRAGMENTS = [
 const IDEMPOTENT_HTTP_METHODS = new Set(['get', 'head', 'options']);
 const LOCAL_QUICK_REPLY_BRIDGE_BASE_URLS = String(
     import.meta.env.VITE_QUICK_REPLY_LOCAL_BRIDGE_URLS
-    || 'http://127.0.0.1:8003/api,http://localhost:8003/api'
+    || [
+        'http://127.0.0.1:8003/api',
+        'http://localhost:8003/api',
+        'http://127.0.0.1:8000/api',
+        'http://localhost:8000/api',
+        'http://127.0.0.1/webnam/backend/public/api',
+        'http://localhost/webnam/backend/public/api',
+        'http://127.0.0.1/webnam/backend/public/index.php/api',
+        'http://localhost/webnam/backend/public/index.php/api',
+    ].join(',')
 )
     .split(',')
     .map((url) => trimTrailingSlash(url))

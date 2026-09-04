@@ -199,17 +199,28 @@ const createSendDraftFromReply = (reply) => ({
     })),
 });
 
-const sendDraftTextareaRows = (body, expanded = false) => {
-    const text = String(body || '');
-    if (!expanded) {
-        return 4;
+const SEND_DRAFT_COLLAPSED_ROWS = 4;
+const SEND_DRAFT_ESTIMATED_CHARS_PER_ROW = 40;
+
+const sendDraftEstimatedRows = (body) => {
+    const text = String(body || '').trimEnd();
+    if (!text) {
+        return 1;
     }
 
-    const estimatedRows = text.split(/\r\n|\r|\n/).reduce((total, line) => (
-        total + Math.max(1, Math.ceil(line.length / 40))
+    return text.split(/\r\n|\r|\n/).reduce((total, line) => (
+        total + Math.max(1, Math.ceil(line.length / SEND_DRAFT_ESTIMATED_CHARS_PER_ROW))
     ), 0);
+};
 
-    return Math.max(4, Math.min(32, estimatedRows + 1));
+const sendDraftNeedsHoverExpand = (body) => sendDraftEstimatedRows(body) > SEND_DRAFT_COLLAPSED_ROWS;
+
+const sendDraftTextareaRows = (body, expanded = false) => {
+    if (!expanded) {
+        return SEND_DRAFT_COLLAPSED_ROWS;
+    }
+
+    return Math.max(SEND_DRAFT_COLLAPSED_ROWS, Math.min(32, sendDraftEstimatedRows(body) + 1));
 };
 const buildSendDraftPayload = (draft) => ({
     contents: (Array.isArray(draft?.contents) ? draft.contents : [])
@@ -3349,7 +3360,8 @@ function QuickReplies() {
                                     const contentImages = Array.isArray(content.images) ? content.images : [];
                                     const selectedImageCount = contentImages.filter((image) => image.selected !== false).length;
                                     const contentKey = content.client_id || content.id || contentIndex;
-                                    const isContentExpanded = hoveredSendContentKey === contentKey || focusedSendContentKey === contentKey;
+                                    const canHoverExpandContent = sendDraftNeedsHoverExpand(content.body);
+                                    const isContentExpanded = canHoverExpandContent && (hoveredSendContentKey === contentKey || focusedSendContentKey === contentKey);
 
                                     return (
                                         <section
@@ -3383,6 +3395,7 @@ function QuickReplies() {
                                                 disabled={!content.selected || Boolean(copyingId)}
                                                 placeholder="Nội dung tin nhắn"
                                                 className={`mt-2 w-full resize-none overflow-hidden rounded-sm border border-slate-200 bg-white px-3 py-2 text-[13px] leading-5 text-slate-900 shadow-sm outline-none transition-all duration-150 focus:border-sky-500 focus:ring-2 focus:ring-sky-500/10 disabled:bg-slate-100 ${isContentExpanded ? 'min-h-[140px]' : 'min-h-[86px]'}`}
+                                                title={canHoverExpandContent ? 'Di chuột hoặc bấm vào để xem hết nội dung' : undefined}
                                             />
 
                                             {contentImages.length > 0 && (

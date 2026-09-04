@@ -62,6 +62,47 @@ const sidebarWindowNameForTarget = (value) => `quick-reply-zalo-sidebar-${normal
 const sidebarBrowserKeywordsForTarget = (value) => [sidebarTitleForTarget(value)];
 const ZALO_WEB_URL = 'https://chat.zalo.me/';
 const ZALO_WEB_POPUP_WINDOW_NAME = 'quick-reply-zalo-web-target';
+const SIDEBAR_ACTION_COLUMN_WIDTH = 37;
+const SIDEBAR_COLUMN_WIDTHS_STORAGE_KEY = 'quick_reply_sidebar_column_widths_v1';
+const SIDEBAR_COLUMN_WIDTH_LIMITS = {
+    shortcut: { default: 76, min: 52, max: 170 },
+    topic: { default: 78, min: 58, max: 170 },
+    message: { default: 190, min: 110, max: 520 },
+};
+const SIDEBAR_COLUMN_IDS = Object.keys(SIDEBAR_COLUMN_WIDTH_LIMITS);
+
+const clampNumber = (value, min, max) => Math.min(max, Math.max(min, Number(value) || min));
+
+const normalizeSidebarColumnWidths = (value = {}) => SIDEBAR_COLUMN_IDS.reduce((result, columnId) => {
+    const limits = SIDEBAR_COLUMN_WIDTH_LIMITS[columnId];
+    result[columnId] = Math.round(clampNumber(value?.[columnId] ?? limits.default, limits.min, limits.max));
+    return result;
+}, {});
+
+const readInitialSidebarColumnWidths = () => {
+    if (typeof window === 'undefined') {
+        return normalizeSidebarColumnWidths();
+    }
+
+    try {
+        const saved = window.localStorage?.getItem(SIDEBAR_COLUMN_WIDTHS_STORAGE_KEY);
+        return normalizeSidebarColumnWidths(saved ? JSON.parse(saved) : {});
+    } catch {
+        return normalizeSidebarColumnWidths();
+    }
+};
+
+const writeSidebarColumnWidthsToStorage = (widths) => {
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    try {
+        window.localStorage?.setItem(SIDEBAR_COLUMN_WIDTHS_STORAGE_KEY, JSON.stringify(normalizeSidebarColumnWidths(widths)));
+    } catch {
+        // The panel still works with in-memory widths if storage is unavailable.
+    }
+};
 
 const readInitialZaloTarget = () => {
     if (typeof window === 'undefined') {
@@ -642,6 +683,8 @@ function QuickReplies() {
     const [sendDraft, setSendDraft] = useState(null);
     const [hoveredSendContentKey, setHoveredSendContentKey] = useState(null);
     const [focusedSendContentKey, setFocusedSendContentKey] = useState(null);
+    const [sidebarColumnWidths, setSidebarColumnWidths] = useState(readInitialSidebarColumnWidths);
+    const [resizingSidebarColumn, setResizingSidebarColumn] = useState(null);
     const [sendDraftContentRows, setSendDraftContentRows] = useState(() => new Map());
     const [selectedReplyIds, setSelectedReplyIds] = useState(() => new Set());
     const [zaloPasteFlow, setZaloPasteFlow] = useState(null);
@@ -682,6 +725,7 @@ function QuickReplies() {
     const galleryUploadAbortRef = useRef(null);
     const replyImageClickTimerRef = useRef(null);
     const sendDraftTextareaRefs = useRef(new Map());
+    const sidebarColumnWidthSaveTimeoutRef = useRef(null);
     const pageSize = isSidebarMode ? 20 : (pagination.per_page || 50);
     const galleryPageSize = 60;
 
@@ -698,6 +742,9 @@ function QuickReplies() {
     const sendDraftPayload = useMemo(() => buildSendDraftPayload(sendDraft), [sendDraft]);
     const sendDraftSelectedCount = sendDraftPayload.contents.length;
     const sendDraftTotalCount = Array.isArray(sendDraft?.contents) ? sendDraft.contents.length : 0;
+    const sidebarTableWidth = useMemo(() => SIDEBAR_ACTION_COLUMN_WIDTH + SIDEBAR_COLUMN_IDS.reduce((total, columnId) => (
+        total + (sidebarColumnWidths[columnId] || SIDEBAR_COLUMN_WIDTH_LIMITS[columnId].default)
+    ), 0), [sidebarColumnWidths]);
 
     const loadBootstrap = useCallback(async () => {
         const response = await quickReplyApi.bootstrap();
@@ -731,6 +778,93 @@ function QuickReplies() {
         setError('');
         setMessage('');
     };
+
+    const startSidebarColumnResize = useCallback((columnId, event) => {
+        if (event.button !== 0 || typeof document === 'undefined') {
+            return;
+        }
+
+        const limits = SIDEBAR_COLUMN_WIDTH_LIMITS[columnId];
+        if (!limits) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        const startX = event.clientX;
+        const startWidth = sidebarColumnWidths[columnId] || limits.default;
+        const previousCursor = document.body.style.cursor;
+        const previousUserSelect = document.body.style.userSelect;
+        let currentWidth = startWidth;
+        let latestWidths = sidebarColumnWidths;
+
+        const applyWidth = (width, persist = false) => {
+            currentWidth = clampNumber(width, limits.min, limits.max);
+            latestWidths = normalizeSidebarColumnWidths({
+                ...latestWidths,
+                [columnId]: currentWidth,
+            });
+            setSidebarColumnWidths(latestWidths);
+
+            if (persist) {
+                writeSidebarColumnWidthsToStorage(latestWidths);
+            }
+        };
+
+        const stopResize = () => {
+            document.removeEventListener('mousemove', handleMouseMove);
+            document.removeEventListener('mouseup', stopResize);
+            document.body.style.cursor = previousCursor;
+            document.body.style.userSelect = previousUserSelect;
+            setResizingSidebarColumn(null);
+            applyWidth(currentWidth, true);
+        };
+
+        const handleMouseMove = (moveEvent) => {
+            applyWidth(startWidth + moveEvent.clientX - startX);
+        };
+
+        setResizingSidebarColumn(columnId);
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+        document.addEventListener('mousemove', handleMouseMove);
+        document.addEventListener('mouseup', stopResize);
+    }, [sidebarColumnWidths]);
+
+    const renderSidebarColumnResizeHandle = (columnId, label) => (
+        <button
+            type="button"
+            onMouseDown={(event) => startSidebarColumnResize(columnId, event)}
+            className={`absolute right-0 top-0 z-20 flex h-full w-3 translate-x-1/2 cursor-col-resize items-center justify-center ${resizingSidebarColumn === columnId ? 'bg-sky-100/80' : 'hover:bg-sky-100/70'}`}
+            title={`Kéo để đổi độ rộng cột ${label}`}
+            aria-label={`Kéo để đổi độ rộng cột ${label}`}
+        >
+            <span className={`h-4 w-px rounded-full ${resizingSidebarColumn === columnId ? 'bg-sky-600' : 'bg-slate-300'}`} />
+        </button>
+    );
+
+    useEffect(() => {
+        if (!isSidebarMode || typeof window === 'undefined') {
+            return undefined;
+        }
+
+        if (sidebarColumnWidthSaveTimeoutRef.current) {
+            window.clearTimeout(sidebarColumnWidthSaveTimeoutRef.current);
+        }
+
+        sidebarColumnWidthSaveTimeoutRef.current = window.setTimeout(() => {
+            writeSidebarColumnWidthsToStorage(sidebarColumnWidths);
+            sidebarColumnWidthSaveTimeoutRef.current = null;
+        }, 300);
+
+        return () => {
+            if (sidebarColumnWidthSaveTimeoutRef.current) {
+                window.clearTimeout(sidebarColumnWidthSaveTimeoutRef.current);
+                sidebarColumnWidthSaveTimeoutRef.current = null;
+            }
+        };
+    }, [isSidebarMode, sidebarColumnWidths]);
 
     const setSendDraftTextareaRef = useCallback((contentKey, node) => {
         if (node) {
@@ -3702,20 +3836,29 @@ function QuickReplies() {
                             {isTrashMode ? 'Thùng rác đang trống.' : 'Chưa có mẫu phù hợp.'}
                         </div>
                     ) : (
-                        <div className="h-full overflow-y-auto overflow-x-hidden">
-                            <table className="w-full table-fixed border-collapse text-[12px]">
+                        <div className="h-full overflow-auto">
+                            <table className="table-fixed border-collapse text-[12px]" style={{ width: `${sidebarTableWidth}px`, minWidth: '100%' }}>
                                 <colgroup>
-                                    <col className="w-9" />
-                                    <col className="w-[76px]" />
-                                    <col className="w-[78px]" />
-                                    <col />
+                                    <col style={{ width: `${SIDEBAR_ACTION_COLUMN_WIDTH}px` }} />
+                                    <col style={{ width: `${sidebarColumnWidths.shortcut}px` }} />
+                                    <col style={{ width: `${sidebarColumnWidths.topic}px` }} />
+                                    <col style={{ width: `${sidebarColumnWidths.message}px` }} />
                                 </colgroup>
                                 <thead className="sticky top-0 z-10 bg-[#f6f9fc]">
                                     <tr className="border-b border-slate-200">
                                         <th className="h-[27px] px-1 text-left text-[10px] font-black uppercase tracking-[0.02em] text-slate-400" aria-label="Gửi" />
-                                        <th className="h-[27px] px-1 text-left text-[10px] font-black uppercase tracking-[0.02em] text-slate-500">Ký tự</th>
-                                        <th className="h-[27px] px-1 text-left text-[10px] font-black uppercase tracking-[0.02em] text-slate-500">Chủ đề</th>
-                                        <th className="h-[27px] px-1.5 text-left text-[10px] font-black uppercase tracking-[0.02em] text-slate-500">Tin nhắn</th>
+                                        <th className="relative h-[27px] select-none px-1 text-left text-[10px] font-black uppercase tracking-[0.02em] text-slate-500">
+                                            Ký tự
+                                            {renderSidebarColumnResizeHandle('shortcut', 'Ký tự')}
+                                        </th>
+                                        <th className="relative h-[27px] select-none px-1 text-left text-[10px] font-black uppercase tracking-[0.02em] text-slate-500">
+                                            Chủ đề
+                                            {renderSidebarColumnResizeHandle('topic', 'Chủ đề')}
+                                        </th>
+                                        <th className="relative h-[27px] select-none px-1.5 text-left text-[10px] font-black uppercase tracking-[0.02em] text-slate-500">
+                                            Tin nhắn
+                                            {renderSidebarColumnResizeHandle('message', 'Tin nhắn')}
+                                        </th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-100">
@@ -3778,14 +3921,14 @@ function QuickReplies() {
                                                 <td className="h-[37px] px-1 py-1 align-middle">
                                                     {topic ? (
                                                         <span
-                                                            className="block h-[22px] w-[72px] overflow-hidden rounded-[3px] px-1.5 text-center text-[11px] font-black leading-[22px] text-white"
+                                                            className="block h-[22px] w-full min-w-0 overflow-hidden rounded-[3px] px-1.5 text-center text-[11px] font-black leading-[22px] text-white"
                                                             style={{ backgroundColor: topic.color || DEFAULT_TOPIC_COLOR }}
                                                             title={topic.name}
                                                         >
                                                             {topic.name}
                                                         </span>
                                                     ) : (
-                                                        <span className="block h-[22px] w-[72px] overflow-hidden rounded-[3px] bg-slate-100 px-1.5 text-center text-[11px] font-black leading-[22px] text-slate-400">-</span>
+                                                        <span className="block h-[22px] w-full min-w-0 overflow-hidden rounded-[3px] bg-slate-100 px-1.5 text-center text-[11px] font-black leading-[22px] text-slate-400">-</span>
                                                     )}
                                                 </td>
                                                 <td className="h-[37px] min-w-0 px-1.5 py-1 align-middle">

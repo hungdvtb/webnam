@@ -9,6 +9,7 @@ const SYNCED_EXACT_KEYS = new Set([
     'order_column_widths',
     'added_cost_price_migrated_form',
     'order_form_product_quick_setup_map_v1',
+    'quick_reply_sidebar_column_widths_v1',
 ]);
 
 const LOCAL_PRIORITY_EXACT_KEYS = new Set([

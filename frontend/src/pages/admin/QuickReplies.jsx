@@ -2380,6 +2380,25 @@ function QuickReplies() {
         await submitReplyToZalo(sendDraft.reply, payload);
     };
 
+    const handleSendDraftKeyDown = (event) => {
+        if (event.key !== 'Enter' || event.altKey || event.nativeEvent?.isComposing) {
+            return;
+        }
+
+        const target = event.target;
+        const tagName = String(target?.tagName || '').toLowerCase();
+        if (tagName === 'button' || tagName === 'select' || (tagName === 'input' && target?.type !== 'text')) {
+            return;
+        }
+
+        event.preventDefault();
+        if (copyingId || sendDraftSelectedCount === 0) {
+            return;
+        }
+
+        void sendPreparedReplyToZalo();
+    };
+
     const sendReplyToZalo = async (reply, options = {}) => {
         const replyId = reply?.id;
         if (!replyId) {
@@ -3327,7 +3346,10 @@ function QuickReplies() {
 
     const sendDraftModal = sendDraft ? (
                 <div className="fixed inset-0 z-[110] flex items-start justify-center overflow-y-auto bg-slate-950/45 p-2 backdrop-blur-[2px] sm:p-6">
-                    <div className="mt-2 flex max-h-[calc(100vh-1rem)] w-full max-w-2xl flex-col rounded-sm bg-white shadow-2xl sm:mt-4 sm:max-h-[calc(100vh-3rem)]">
+                    <div
+                        className="mt-2 flex max-h-[calc(100vh-1rem)] w-full max-w-2xl flex-col rounded-sm bg-white shadow-2xl sm:mt-4 sm:max-h-[calc(100vh-3rem)]"
+                        onKeyDown={handleSendDraftKeyDown}
+                    >
                         <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-3 py-3 sm:px-5">
                             <div className="min-w-0">
                                 <div className="flex min-w-0 flex-wrap items-center gap-1.5">

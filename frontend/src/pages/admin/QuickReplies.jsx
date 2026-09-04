@@ -2093,10 +2093,15 @@ function QuickReplies() {
             ? payload
             : buildSendDraftPayload(createSendDraftFromReply(reply));
         const useBrowserClipboardForWeb = shouldUseBrowserOnlyZaloWebDock(zaloTarget);
+        const useLocalBridgeForPc = shouldUseLocalWindowBridge(zaloTarget);
 
         setCopyingId(replyId);
         setError('');
-        setMessage(useBrowserClipboardForWeb ? 'Đang chuẩn bị nội dung cho Zalo Web...' : 'Đang gửi sang chat Zalo đang mở...');
+        setMessage(useBrowserClipboardForWeb
+            ? 'Đang chuẩn bị nội dung cho Zalo Web...'
+            : useLocalBridgeForPc
+                ? 'Đang gửi sang Zalo PC qua backend local...'
+                : 'Đang gửi sang chat Zalo đang mở...');
 
         try {
             if (useBrowserClipboardForWeb) {
@@ -2216,6 +2221,122 @@ function QuickReplies() {
                 return;
             }
 
+            if (useLocalBridgeForPc) {
+                const contents = sendPayloadClipboardContents(preparedPayload);
+                const imageCount = sendPayloadImageCount(preparedPayload);
+
+                if (contents.length === 0) {
+                    throw new Error('Mẫu này chưa có nội dung để gửi.');
+                }
+
+                let sentSteps = 0;
+                let sentText = 0;
+                let sentImages = 0;
+                let manualImages = 0;
+
+                const failBecauseLocalBridgeUnavailable = () => {
+                    if (sentSteps > 0) {
+                        throw new Error('Backend local bị ngắt khi đang gửi Zalo PC. Có thể đã gửi một phần, kiểm tra lại khung chat trước khi gửi lại.');
+                    }
+
+                    throw new Error(imageCount > 0
+                        ? `Chưa thấy backend local nên chưa tự gửi được Zalo PC. Bật file start-backend-8003.bat rồi bấm gửi lại; mẫu này có ${imageCount} ảnh nên không gửi bằng chế độ copy thủ công.`
+                        : 'Chưa thấy backend local nên chưa tự gửi được Zalo PC. Bật file start-backend-8003.bat rồi bấm gửi lại.'
+                    );
+                };
+
+                const pasteToZaloPc = async (data = {}) => {
+                    try {
+                        return await quickReplyApi.localWindowBridgePasteZalo({
+                            zalo_target: 'pc',
+                            ...data,
+                        });
+                    } catch (bridgeErr) {
+                        if (!isLocalBridgeNetworkError(bridgeErr)) {
+                            throw bridgeErr;
+                        }
+
+                        failBecauseLocalBridgeUnavailable();
+                        return null;
+                    }
+                };
+
+                for (const content of contents) {
+                    let pastedInStep = false;
+                    let pastedImagesInStep = 0;
+
+                    if (content.body) {
+                        await copyTextFallback(content.body);
+                        const pasteResponse = await pasteToZaloPc({
+                            paste: true,
+                            enter: false,
+                        });
+                        if (!pasteResponse) {
+                            return;
+                        }
+                        pastedInStep = true;
+                        sentText += 1;
+                        await sleep(260);
+                    }
+
+                    for (const item of content.images) {
+                        let copyResult = null;
+                        try {
+                            copyResult = await writeImageSourceToClipboard(item.src);
+                        } catch (imageErr) {
+                            console.warn('Cannot copy image to clipboard for Zalo PC.', imageErr, item.image);
+                            manualImages += 1;
+                            continue;
+                        }
+
+                        if (copyResult !== 'image') {
+                            manualImages += 1;
+                            continue;
+                        }
+
+                        const pasteResponse = await pasteToZaloPc({
+                            paste: true,
+                            enter: false,
+                        });
+                        if (!pasteResponse) {
+                            return;
+                        }
+                        pastedInStep = true;
+                        pastedImagesInStep += 1;
+                        sentImages += 1;
+                        await sleep(650);
+                    }
+
+                    if (pastedInStep) {
+                        const sendResponse = await pasteToZaloPc({
+                            paste: false,
+                            enter: true,
+                            before_enter_delay_ms: pastedImagesInStep > 0 ? 1500 : 280,
+                        });
+                        if (!sendResponse) {
+                            return;
+                        }
+                        sentSteps += 1;
+                        await sleep(760);
+                    }
+                }
+
+                if (sentSteps === 0) {
+                    throw new Error(manualImages > 0
+                        ? 'Không copy được ảnh sang clipboard để gửi Zalo PC. Hãy gửi ảnh thủ công hoặc thử lại bằng backend local.'
+                        : 'Mẫu này chưa có nội dung để gửi.');
+                }
+
+                await recordUse(reply);
+                setCopiedState({ id: replyId, mode: 'sent' });
+                setZaloPasteFlow(null);
+                setSendDraft(null);
+                setMessage(manualImages > 0
+                    ? `Đã gửi ${sentSteps} tin sang Zalo PC. Đã gửi ${sentText} chữ, ${sentImages} ảnh; còn ${manualImages} ảnh trình duyệt không copy được.`
+                    : `Đã gửi ${sentSteps} tin sang Zalo PC.`
+                );
+                return;
+            }
             const response = await quickReplyApi.sendToZalo(replyId, { ...preparedPayload, zalo_target: zaloTarget });
             if (response?.data?.reply) {
                 updateReplyInList(response.data.reply);

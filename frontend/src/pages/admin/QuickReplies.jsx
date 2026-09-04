@@ -3601,12 +3601,21 @@ function QuickReplies() {
                                         const isTrashedReply = isTrashMode || Boolean(reply.is_trashed);
 
                                         return (
-                                            <tr key={reply.id} className={`h-[37px] transition hover:bg-sky-50/70 ${index % 2 === 1 ? 'bg-[#fbfdff]' : 'bg-white'} ${index === 0 && !isTrashMode ? 'bg-sky-50/60' : ''}`}>
+                                            <tr
+                                                key={reply.id}
+                                                onClick={() => {
+                                                    if (!isTrashedReply && !isCopying) {
+                                                        sendReplyToZalo(reply);
+                                                    }
+                                                }}
+                                                className={`h-[37px] transition ${!isTrashedReply && !isCopying ? 'cursor-pointer hover:bg-sky-50/70 active:bg-sky-100/70' : 'hover:bg-sky-50/70'} ${index % 2 === 1 ? 'bg-[#fbfdff]' : 'bg-white'} ${index === 0 && !isTrashMode ? 'bg-sky-50/60' : ''}`}
+                                                title={isTrashedReply ? 'Mẫu đang trong thùng rác' : 'Bấm để chọn/gửi mẫu này'}
+                                            >
                                                 <td className="h-[37px] px-1 py-1 align-middle">
                                                     {isTrashedReply ? (
                                                         <button
                                                             type="button"
-                                                            onClick={() => restoreReply(reply)}
+                                                            onClick={(event) => { event.stopPropagation(); restoreReply(reply); }}
                                                             className="inline-flex size-[27px] items-center justify-center rounded-sm border border-emerald-200 bg-white text-emerald-700 shadow-sm transition hover:border-emerald-300 hover:bg-emerald-50"
                                                             title="Khôi phục mẫu"
                                                             aria-label="Khôi phục mẫu"
@@ -3616,7 +3625,7 @@ function QuickReplies() {
                                                     ) : (
                                                         <button
                                                             type="button"
-                                                            onClick={() => sendReplyToZalo(reply)}
+                                                            onClick={(event) => { event.stopPropagation(); sendReplyToZalo(reply); }}
                                                             disabled={isCopying}
                                                             className="inline-flex size-[27px] items-center justify-center rounded-sm bg-sky-700 text-white shadow-sm transition hover:bg-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
                                                             title="Gửi vào chat Zalo đang mở"
@@ -3629,7 +3638,7 @@ function QuickReplies() {
                                                 <td className="h-[37px] px-1 py-1 align-middle">
                                                     <button
                                                         type="button"
-                                                        onClick={() => copyReplyAll(reply)}
+                                                        onClick={(event) => { event.stopPropagation(); copyReplyAll(reply); }}
                                                         disabled={isTrashedReply}
                                                         className="block w-full truncate text-left text-[12px] font-black text-slate-800 transition hover:text-sky-700 disabled:cursor-not-allowed disabled:text-slate-400"
                                                         title={`${reply.shortcut} - bấm để copy nhanh`}
@@ -3658,8 +3667,8 @@ function QuickReplies() {
                                                         {images.length > 0 && !isTrashedReply && (
                                                             <button
                                                                 type="button"
-                                                                onClick={() => handleReplyThumbnailClick(reply)}
-                                                                onDoubleClick={() => handleReplyThumbnailDoubleClick(reply)}
+                                                                onClick={(event) => { event.stopPropagation(); handleReplyThumbnailClick(reply); }}
+                                                                onDoubleClick={(event) => { event.stopPropagation(); handleReplyThumbnailDoubleClick(reply); }}
                                                                 onMouseEnter={(event) => showReplyImageHoverPreview(event, reply)}
                                                                 onMouseMove={(event) => showReplyImageHoverPreview(event, reply)}
                                                                 onMouseLeave={() => setReplyImageHoverPreview(null)}
@@ -4165,7 +4174,7 @@ function QuickReplies() {
                                                 <td className="px-2 py-3 align-top">
                                                     <button
                                                         type="button"
-                                                        onClick={() => copyReplyAll(reply)}
+                                                        onClick={(event) => { event.stopPropagation(); copyReplyAll(reply); }}
                                                         disabled={isTrashedReply}
                                                         className="inline-flex h-8 w-full max-w-full items-center justify-center overflow-hidden rounded-sm bg-slate-100 px-2.5 font-black text-slate-700 transition hover:bg-sky-100 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-60"
                                                         title={reply.shortcut}
@@ -4228,12 +4237,12 @@ function QuickReplies() {
                                                 <td className="px-2 py-3 align-top">
                                                     <div className="flex justify-end gap-1">
                                                         {isTrashedReply ? (
-                                                            <button type="button" onClick={() => restoreReply(reply)} className={`${tableIconButtonClassName} hover:border-emerald-300 hover:text-emerald-700`} title="Khôi phục mẫu">
+                                                            <button type="button" onClick={(event) => { event.stopPropagation(); restoreReply(reply); }} className={`${tableIconButtonClassName} hover:border-emerald-300 hover:text-emerald-700`} title="Khôi phục mẫu">
                                                                 <span className="material-symbols-outlined text-[17px]">restore_from_trash</span>
                                                             </button>
                                                         ) : (
                                                             <>
-                                                                <button type="button" onClick={() => sendReplyToZalo(reply)} disabled={isCopying} className={`${tableIconButtonClassName} hover:border-blue-300 hover:text-blue-700`} title="Gửi vào chat Zalo đang mở">
+                                                                <button type="button" onClick={(event) => { event.stopPropagation(); sendReplyToZalo(reply); }} disabled={isCopying} className={`${tableIconButtonClassName} hover:border-blue-300 hover:text-blue-700`} title="Gửi vào chat Zalo đang mở">
                                                                     <span className="material-symbols-outlined text-[17px]">{isCopied && copiedState.mode === 'sent' ? 'check' : 'send'}</span>
                                                                 </button>
                                                                 <button type="button" onClick={() => openEditForm(reply)} className={tableIconButtonClassName} title="Sửa mẫu">

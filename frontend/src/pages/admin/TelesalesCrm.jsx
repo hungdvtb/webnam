@@ -414,6 +414,7 @@ const TelesalesCrm = () => {
     const location = useLocation();
     const [initialViewState] = useState(() => buildInitialViewState(location.search));
     const tableScrollRef = useRef(null);
+    const actionMenuRef = useRef(null);
     const todayValue = useMemo(() => toDateInputValue(), []);
     const monthValue = useMemo(() => toMonthInputValue(), []);
     const initialMonthRange = useMemo(() => getCurrentMonthRange(), []);
@@ -449,9 +450,9 @@ const TelesalesCrm = () => {
     const [toast, setToast] = useState('');
     const [pendingReturnRestore, setPendingReturnRestore] = useState(initialViewState.restoreContext);
     const [restoredLeadId, setRestoredLeadId] = useState(initialViewState.restoreContext?.leadId || null);
-    const [selectedLeadIds, setSelectedLeadIds] = useState([]);
-    const [actionMenuOpen, setActionMenuOpen] = useState(false);
+    const [actionMenuLeadId, setActionMenuLeadId] = useState(null);
     const [leadEditOpen, setLeadEditOpen] = useState(false);
+    const [leadEditLead, setLeadEditLead] = useState(null);
     const [leadEditForm, setLeadEditForm] = useState({
         customer_name: '',
         phone: '',
@@ -460,7 +461,7 @@ const TelesalesCrm = () => {
     });
     const [leadEditError, setLeadEditError] = useState('');
     const [leadEditSaving, setLeadEditSaving] = useState(false);
-    const [bulkDeleting, setBulkDeleting] = useState(false);
+    const [deletingLeadId, setDeletingLeadId] = useState(null);
 
 
     const [statsOpen, setStatsOpen] = useState(false);
@@ -526,14 +527,6 @@ const TelesalesCrm = () => {
     const currentEnd = pagination.total > 0 ? Math.min(pagination.current_page * pagination.per_page, pagination.total) : 0;
     const visibleColumnCount = columnOptions.filter((column) => visibleColumns[column.key]).length;
     const tableColumnCount = visibleColumnCount + 1;
-    const selectedLeadIdSet = useMemo(() => new Set(selectedLeadIds.map((id) => String(id))), [selectedLeadIds]);
-    const selectedLeads = useMemo(
-        () => leads.filter((lead) => selectedLeadIdSet.has(String(lead.id))),
-        [leads, selectedLeadIdSet]
-    );
-    const allVisibleLeadsSelected = leads.length > 0 && leads.every((lead) => selectedLeadIdSet.has(String(lead.id)));
-    const hasVisibleLeadSelection = leads.some((lead) => selectedLeadIdSet.has(String(lead.id)));
-    const canEditSelectedLead = selectedLeadIds.length === 1 && selectedLeads.length === 1;
 
     const dateRangeLabel = useMemo(() => {
         if (dateFrom && dateTo) return `${formatShortDateLabel(dateFrom)} - ${formatShortDateLabel(dateTo)}`;
@@ -652,7 +645,8 @@ const TelesalesCrm = () => {
             delete next[normalizedLeadId];
             return next;
         });
-        setSelectedLeadIds((prev) => prev.filter((id) => String(id) !== normalizedLeadId));
+        setActionMenuLeadId((currentLeadId) => (String(currentLeadId || '') === normalizedLeadId ? null : currentLeadId));
+        setLeadEditLead(null);
         setLeadEditOpen(false);
         setLeadEditError('');
     }, []);
@@ -697,12 +691,37 @@ const TelesalesCrm = () => {
     }, [fetchLeads, page]);
 
     useEffect(() => {
-        const visibleIds = new Set(leads.map((lead) => String(lead.id)));
-        setSelectedLeadIds((prev) => {
-            const next = prev.filter((id) => visibleIds.has(String(id)));
-            return next.length === prev.length ? prev : next;
-        });
-    }, [leads]);
+        if (!actionMenuLeadId) return;
+
+        const menuLeadStillVisible = leads.some((lead) => String(lead.id) === String(actionMenuLeadId));
+        if (!menuLeadStillVisible) {
+            setActionMenuLeadId(null);
+        }
+    }, [actionMenuLeadId, leads]);
+
+    useEffect(() => {
+        if (!actionMenuLeadId) return undefined;
+
+        const closeActionMenu = (event) => {
+            if (actionMenuRef.current?.contains(event.target)) return;
+            setActionMenuLeadId(null);
+        };
+        const closeActionMenuOnEscape = (event) => {
+            if (event.key === 'Escape') {
+                setActionMenuLeadId(null);
+            }
+        };
+
+        document.addEventListener('mousedown', closeActionMenu);
+        document.addEventListener('touchstart', closeActionMenu);
+        document.addEventListener('keydown', closeActionMenuOnEscape);
+
+        return () => {
+            document.removeEventListener('mousedown', closeActionMenu);
+            document.removeEventListener('touchstart', closeActionMenu);
+            document.removeEventListener('keydown', closeActionMenuOnEscape);
+        };
+    }, [actionMenuLeadId]);
 
     useEffect(() => {
         if (!pendingReturnRestore || loading) return undefined;
@@ -803,36 +822,25 @@ const TelesalesCrm = () => {
         setPage(1);
     };
 
-    const toggleSelectLead = useCallback((leadId, checked) => {
+    const toggleLeadActionMenu = (leadId) => {
         const normalizedLeadId = String(leadId || '');
         if (!normalizedLeadId) return;
 
-        setSelectedLeadIds((prev) => {
-            const exists = prev.some((id) => String(id) === normalizedLeadId);
-            if (checked) return exists ? prev : [...prev, normalizedLeadId];
-            return prev.filter((id) => String(id) !== normalizedLeadId);
-        });
-    }, []);
+        setActionMenuLeadId((currentLeadId) => (
+            String(currentLeadId || '') === normalizedLeadId ? null : normalizedLeadId
+        ));
+    };
 
-    const toggleSelectAllLeads = useCallback(() => {
-        if (leads.length === 0) return;
+    const openEditLead = (lead) => {
+        setActionMenuLeadId(null);
 
-        setSelectedLeadIds(allVisibleLeadsSelected
-            ? []
-            : leads.map((lead) => String(lead.id))
-        );
-    }, [allVisibleLeadsSelected, leads]);
-
-    const openEditSelectedLead = () => {
-        const lead = selectedLeads[0];
-        setActionMenuOpen(false);
-
-        if (!canEditSelectedLead || !lead) {
-            setErrorMessage('Tích chọn đúng 1 khách để sửa thông tin.');
+        if (!lead?.id) {
+            setErrorMessage('Không tìm thấy khách để sửa thông tin.');
             return;
         }
 
         const zaloSameAsPhone = normalizePhoneDigits(lead.zalo_phone || lead.phone) === normalizePhoneDigits(lead.phone);
+        setLeadEditLead(lead);
         setLeadEditForm({
             customer_name: lead.customer_name || '',
             phone: lead.phone || '',
@@ -848,6 +856,7 @@ const TelesalesCrm = () => {
     const closeLeadEdit = () => {
         if (leadEditSaving) return;
         setLeadEditOpen(false);
+        setLeadEditLead(null);
         setLeadEditError('');
     };
 
@@ -862,9 +871,9 @@ const TelesalesCrm = () => {
     const handleLeadEditSubmit = async (event) => {
         event.preventDefault();
 
-        const lead = selectedLeads[0];
-        if (!canEditSelectedLead || !lead) {
-            setLeadEditError('Tích chọn đúng 1 khách để sửa thông tin.');
+        const lead = leadEditLead;
+        if (!lead?.id) {
+            setLeadEditError('Không tìm thấy khách để sửa thông tin.');
             return;
         }
 
@@ -898,11 +907,12 @@ const TelesalesCrm = () => {
 
             if (nextLead) {
                 setLeads((prev) => prev.map((item) => Number(item.id) === Number(nextLead.id) ? nextLead : item));
-                setSelectedLeadIds([String(nextLead.id)]);
+                setLeadEditLead(nextLead);
             }
 
             setStats((prev) => ({ ...emptyStats, ...(response.data?.stats || prev) }));
             setLeadEditOpen(false);
+            setLeadEditLead(null);
             setToast('Đã cập nhật thông tin khách.');
 
             if (historyOpenIds[lead.id]) {
@@ -923,33 +933,33 @@ const TelesalesCrm = () => {
         }
     };
 
-    const handleDeleteSelectedLeads = async () => {
-        const targetIds = selectedLeadIds.map((id) => String(id)).filter(Boolean);
-        if (targetIds.length === 0) return;
+    const handleDeleteLead = async (lead) => {
+        if (!lead?.id) return;
 
-        const firstLead = selectedLeads[0];
-        const targetLabel = targetIds.length === 1
-            ? (firstLead?.customer_name || firstLead?.phone || 'khách này')
-            : `${formatNumber(targetIds.length)} khách đã chọn`;
+        const targetLabel = lead.customer_name || lead.phone || 'khách này';
 
-        setActionMenuOpen(false);
+        setActionMenuLeadId(null);
         if (!window.confirm(`Xóa ${targetLabel} khỏi CRM telesales?`)) return;
 
-        setBulkDeleting(true);
+        setDeletingLeadId(lead.id);
         setErrorMessage('');
         setToast('');
 
         try {
-            const response = await telesalesApi.bulkDelete(targetIds);
-            const deletedCount = Number(response.data?.count ?? targetIds.length) || targetIds.length;
+            const response = await telesalesApi.destroy(lead.id);
             setStats((prev) => ({ ...emptyStats, ...(response.data?.stats || prev) }));
-            setSelectedLeadIds([]);
             await fetchLeads(page);
-            setToast(`Đã xóa ${formatNumber(deletedCount)} khách khỏi CRM.`);
+            setToast('Đã xóa 1 khách khỏi CRM.');
         } catch (error) {
-            setErrorMessage(resolveApiMessage(error, 'Không xóa được khách đã chọn.'));
+            if (isNotFoundRequest(error)) {
+                forgetLeadFromCurrentView(lead.id);
+                setToast('Khách này không còn tồn tại hoặc không thuộc gian hàng hiện tại.');
+                return;
+            }
+
+            setErrorMessage(resolveApiMessage(error, 'Không xóa được khách này.'));
         } finally {
-            setBulkDeleting(false);
+            setDeletingLeadId(null);
         }
     };
 
@@ -2065,7 +2075,7 @@ const TelesalesCrm = () => {
     const renderLeadEditModal = () => {
         if (!leadEditOpen) return null;
 
-        const editingLead = selectedLeads[0];
+        const editingLead = leadEditLead;
 
         return (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4">
@@ -2261,58 +2271,11 @@ const TelesalesCrm = () => {
 
                 <div className="min-w-0 overflow-hidden rounded-sm border border-slate-200 bg-white shadow-sm">
                     <div className="border-b border-slate-200 p-3">
-                        <div className="grid grid-cols-1 gap-2 xl:grid-cols-[136px_124px_minmax(150px,1fr)_150px_156px_128px_132px_160px_180px_180px_152px] xl:items-center">
+                        <div className="grid grid-cols-1 gap-2 xl:grid-cols-[136px_minmax(150px,1fr)_150px_156px_128px_132px_160px_180px_180px_152px] xl:items-center">
                             <button type="button" onClick={() => setImportOpen(true)} className={primaryButtonClassName}>
                                 <span className="material-symbols-outlined text-[18px]">add</span>
                                 Nhập khách
                             </button>
-
-                            <div className="relative">
-                                <button type="button" onClick={() => setActionMenuOpen((open) => !open)} className={`${secondaryButtonClassName} w-full justify-between px-3`}>
-                                    <span className="inline-flex items-center gap-2">
-                                        <span className="material-symbols-outlined text-[18px]">more_horiz</span>
-                                        Thao tác
-                                    </span>
-                                    {selectedLeadIds.length > 0 ? (
-                                        <span className="ml-1 inline-flex min-w-5 items-center justify-center rounded-full bg-teal-50 px-1.5 text-[11px] font-black text-teal-700">
-                                            {formatNumber(selectedLeadIds.length)}
-                                        </span>
-                                    ) : null}
-                                </button>
-
-                                {actionMenuOpen ? (
-                                    <div className="absolute left-0 top-12 z-30 w-[240px] rounded-sm border border-slate-200 bg-white p-2 shadow-xl">
-                                        <div className="px-2 pb-2 text-[12px] font-semibold text-slate-500">
-                                            {selectedLeadIds.length > 0
-                                                ? `Đã chọn ${formatNumber(selectedLeadIds.length)} khách`
-                                                : 'Tích ô nhỏ ở bảng để chọn khách'}
-                                        </div>
-                                        <button
-                                            type="button"
-                                            onClick={openEditSelectedLead}
-                                            disabled={!canEditSelectedLead || leadEditSaving || bulkDeleting}
-                                            className="flex h-9 w-full items-center gap-2 rounded-sm px-2 text-left text-[13px] font-bold text-slate-700 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-white"
-                                        >
-                                            <span className="material-symbols-outlined text-[18px]">edit</span>
-                                            Sửa khách
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={handleDeleteSelectedLeads}
-                                            disabled={selectedLeadIds.length === 0 || bulkDeleting}
-                                            className="flex h-9 w-full items-center gap-2 rounded-sm px-2 text-left text-[13px] font-bold text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-white"
-                                        >
-                                            <span className="material-symbols-outlined text-[18px]">delete</span>
-                                            {bulkDeleting ? 'Đang xóa...' : 'Xóa khách'}
-                                        </button>
-                                        {selectedLeadIds.length > 1 ? (
-                                            <div className="mt-2 rounded-sm bg-slate-50 px-2 py-1.5 text-[11px] font-semibold leading-5 text-slate-500">
-                                                Sửa từng khách một; xóa có thể áp dụng cho nhiều khách đã chọn.
-                                            </div>
-                                        ) : null}
-                                    </div>
-                                ) : null}
-                            </div>
 
                             <div className="relative min-w-0">
                                 <span className="material-symbols-outlined pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-slate-400">search</span>
@@ -2488,18 +2451,8 @@ const TelesalesCrm = () => {
                         <table className="min-w-[1632px] table-fixed border-collapse">
                             <thead className="sticky top-0 z-20">
                                 <tr className="bg-slate-50 text-left text-[12px] font-bold text-slate-500">
-                                    <th className="w-[52px] border border-slate-200 px-2 py-3 text-center">
-                                        <label className="inline-flex size-8 items-center justify-center rounded-sm border border-slate-200 bg-white shadow-sm" title="Chọn tất cả khách đang hiển thị">
-                                            <input
-                                                type="checkbox"
-                                                checked={allVisibleLeadsSelected}
-                                                disabled={leads.length === 0}
-                                                onChange={toggleSelectAllLeads}
-                                                aria-label="Chọn tất cả khách đang hiển thị"
-                                                aria-checked={hasVisibleLeadSelection && !allVisibleLeadsSelected ? 'mixed' : allVisibleLeadsSelected}
-                                                className="size-4 accent-teal-700 disabled:cursor-not-allowed"
-                                            />
-                                        </label>
+                                    <th className="w-[48px] border border-slate-200 px-2 py-3 text-center">
+                                        <span className="material-symbols-outlined text-[18px] text-slate-400" title="Thao tác khách">more_horiz</span>
                                     </th>
                                     {visibleColumns.customer ? <th className="w-[190px] border border-slate-200 px-3 py-3">Khách hàng</th> : null}
                                     {visibleColumns.phone ? <th className="w-[210px] border border-slate-200 px-3 py-3">SĐT / Zalo</th> : null}
@@ -2546,21 +2499,49 @@ const TelesalesCrm = () => {
                                     const currentStatusColor = taskStatusDisplay?.color || currentStatusOption?.color || '#64748b';
                                     const currentTaskDue = workTask?.due_label || '';
                                     const rowWasRestored = String(restoredLeadId || '') === String(lead.id);
-                                    const rowSelected = selectedLeadIdSet.has(String(lead.id));
+                                    const actionMenuOpenForLead = String(actionMenuLeadId || '') === String(lead.id);
+                                    const leadDeleting = String(deletingLeadId || '') === String(lead.id);
 
                                     return (
                                         <React.Fragment key={lead.id}>
-                                            <tr id={`telesales-lead-${lead.id}`} data-telesales-lead-row={lead.id} className={`border-b border-slate-200 text-[13px] transition ${rowWasRestored || rowSelected ? 'bg-teal-50' : 'bg-white hover:bg-teal-50/40'}`}>
+                                            <tr id={`telesales-lead-${lead.id}`} data-telesales-lead-row={lead.id} className={`border-b border-slate-200 text-[13px] transition ${rowWasRestored || actionMenuOpenForLead ? 'bg-teal-50' : 'bg-white hover:bg-teal-50/40'}`}>
                                                 <td className="border border-slate-200 px-2 py-3 text-center align-middle">
-                                                    <label className="inline-flex size-8 items-center justify-center rounded-sm border border-slate-200 bg-white shadow-sm hover:border-teal-300" title="Chọn khách này">
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={rowSelected}
-                                                            onChange={(event) => toggleSelectLead(lead.id, event.target.checked)}
-                                                            className="size-4 accent-teal-700"
-                                                            aria-label={`Chọn ${lead.customer_name || lead.phone || lead.id}`}
-                                                        />
-                                                    </label>
+                                                    <div ref={actionMenuOpenForLead ? actionMenuRef : null} className="relative inline-flex">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => toggleLeadActionMenu(lead.id)}
+                                                            disabled={inlineSaving || leadDeleting}
+                                                            className="inline-flex size-8 items-center justify-center rounded-sm border border-slate-200 bg-white text-slate-600 shadow-sm hover:border-teal-300 hover:text-teal-700 disabled:cursor-wait disabled:opacity-50"
+                                                            title="Thao tác khách"
+                                                            aria-label={`Thao tác ${lead.customer_name || lead.phone || lead.id}`}
+                                                            aria-expanded={actionMenuOpenForLead}
+                                                        >
+                                                            <span className="material-symbols-outlined text-[18px]">more_horiz</span>
+                                                        </button>
+
+                                                        {actionMenuOpenForLead ? (
+                                                            <div className="absolute left-0 top-10 z-40 w-[150px] rounded-sm border border-slate-200 bg-white p-1.5 text-left shadow-xl">
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => openEditLead(lead)}
+                                                                    disabled={leadEditSaving || leadDeleting}
+                                                                    className="flex h-9 w-full items-center gap-2 rounded-sm px-2 text-[13px] font-bold text-slate-700 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-wait disabled:text-slate-300 disabled:hover:bg-white"
+                                                                >
+                                                                    <span className="material-symbols-outlined text-[18px]">edit</span>
+                                                                    Sửa khách
+                                                                </button>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => handleDeleteLead(lead)}
+                                                                    disabled={leadDeleting}
+                                                                    className="flex h-9 w-full items-center gap-2 rounded-sm px-2 text-[13px] font-bold text-red-600 hover:bg-red-50 disabled:cursor-wait disabled:text-slate-300 disabled:hover:bg-white"
+                                                                >
+                                                                    <span className="material-symbols-outlined text-[18px]">delete</span>
+                                                                    {leadDeleting ? 'Đang xóa...' : 'Xóa khách'}
+                                                                </button>
+                                                            </div>
+                                                        ) : null}
+                                                    </div>
                                                 </td>
 
                                                 {visibleColumns.customer ? <td className="border border-slate-200 px-3 py-3 align-middle">

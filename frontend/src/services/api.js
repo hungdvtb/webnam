@@ -45,6 +45,9 @@ const LOCAL_QUICK_REPLY_BRIDGE_BASE_URLS = String(
 const LOCAL_QUICK_REPLY_BRIDGE_TIMEOUT_MS = Number(
     import.meta.env.VITE_QUICK_REPLY_LOCAL_BRIDGE_TIMEOUT_MS || 6500
 );
+const LOCAL_QUICK_REPLY_BRIDGE_MEDIA_TIMEOUT_MS = Number(
+    import.meta.env.VITE_QUICK_REPLY_LOCAL_BRIDGE_MEDIA_TIMEOUT_MS || 180000
+);
 
 const normalizeHostname = (value) => String(value || '').trim().replace(/^\[|\]$/g, '').toLowerCase();
 const isLoopbackHostname = (value) => LOOPBACK_HOST_PATTERN.test(normalizeHostname(value));
@@ -101,15 +104,36 @@ const sleep = (ms) => new Promise((resolve) => {
     setTimeout(resolve, ms);
 });
 
+const hasLocalBridgeMediaPayload = (data = {}) => [
+    data?.image_urls,
+    data?.media_urls,
+    data?.video_urls,
+    data?.file_paths,
+].some((items) => Array.isArray(items) && items.length > 0);
+
+const localQuickReplyBridgeTimeout = (data = {}) => {
+    const requestedTimeout = Number(data?.bridge_timeout_ms);
+    if (Number.isFinite(requestedTimeout) && requestedTimeout > 0) {
+        return Math.max(1000, requestedTimeout);
+    }
+
+    const fallbackTimeout = hasLocalBridgeMediaPayload(data)
+        ? LOCAL_QUICK_REPLY_BRIDGE_MEDIA_TIMEOUT_MS
+        : LOCAL_QUICK_REPLY_BRIDGE_TIMEOUT_MS;
+
+    return Number.isFinite(fallbackTimeout) && fallbackTimeout > 0
+        ? fallbackTimeout
+        : 6500;
+};
+
 const postLocalQuickReplyBridge = async (path, data = {}) => {
     let lastError = null;
+    const timeout = localQuickReplyBridgeTimeout(data);
 
     for (const baseURL of LOCAL_QUICK_REPLY_BRIDGE_BASE_URLS) {
         try {
             return await axios.post(`${baseURL}${path}`, data, {
-                timeout: Number.isFinite(LOCAL_QUICK_REPLY_BRIDGE_TIMEOUT_MS)
-                    ? LOCAL_QUICK_REPLY_BRIDGE_TIMEOUT_MS
-                    : 6500,
+                timeout,
                 withCredentials: false,
                 headers: {
                     'Accept': 'application/json',

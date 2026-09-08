@@ -2405,8 +2405,8 @@ function QuickReplies() {
                 let manualImages = 0;
 
                 const failBecauseLocalBridgeUnavailable = async () => {
-                    if (sentSteps > 0) {
-                        throw new Error('Backend local bị ngắt khi đang gửi Zalo Web. Có thể đã gửi một phần, kiểm tra lại khung chat trước khi gửi lại.');
+                    if (sentSteps > 0 || sentText > 0 || sentImages > 0) {
+                        throw new Error('Backend local bị ngắt hoặc xử lý ảnh/video quá lâu khi đang gửi Zalo Web. Có thể đã dán một phần, kiểm tra lại khung chat trước khi gửi lại.');
                     }
 
                     if (await copyTextOnlyWhenLocalBridgeUnavailable('Zalo Web')) {
@@ -2519,8 +2519,8 @@ function QuickReplies() {
                 let manualImages = 0;
 
                 const failBecauseLocalBridgeUnavailable = async () => {
-                    if (sentSteps > 0) {
-                        throw new Error('Backend local bị ngắt khi đang gửi Zalo PC. Có thể đã gửi một phần, kiểm tra lại khung chat trước khi gửi lại.');
+                    if (sentSteps > 0 || sentText > 0 || sentImages > 0) {
+                        throw new Error('Backend local bị ngắt hoặc xử lý ảnh/video quá lâu khi đang gửi Zalo PC. Có thể đã dán một phần, kiểm tra lại khung chat trước khi gửi lại.');
                     }
 
                     if (await copyTextOnlyWhenLocalBridgeUnavailable('Zalo PC')) {

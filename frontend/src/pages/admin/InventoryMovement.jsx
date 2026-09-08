@@ -9121,6 +9121,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             { label: 'Có thể bán', value: formatNumber(productSummary.total_actual_stock ?? productSummary.total_sellable_stock ?? 0) },
             ...trackingItems,
             { label: 'Tổng giá trị tồn kho', value: formatCurrency(productSummary.total_inventory_value || 0), note: 'Tính theo Có thể bán = Tồn kho - SL chờ xuất' },
+            { label: 'Tổng giá trị tồn kho (tính cả âm)', value: formatCurrency(productSummary.total_inventory_value_with_negative ?? productSummary.total_inventory_value ?? 0), note: 'Có thể bán âm vẫn trừ vào tổng' },
             { label: 'Tổng mã', value: formatNumber(productSummary.total_products) },
             { label: 'Tổng nhập', value: formatNumber(productSummary.total_imported) },
             { label: 'Tổng xuất', value: formatNumber(productSummary.total_exported) },

@@ -2850,6 +2850,7 @@ class InventoryController extends Controller
         $product->setAttribute('computed_stock', $computedStock);
         $product->setAttribute('actual_stock', $actualStock);
         $product->setAttribute('inventory_value', round(max($actualStock, 0) * $displayCost, 2));
+        $product->setAttribute('inventory_value_with_negative', round($actualStock * $displayCost, 2));
     }
 
     private function transformExportOrderRow(Order $order, array $overview = []): array
@@ -3647,6 +3648,7 @@ class InventoryController extends Controller
             . ')';
         $actualStockSql = '(' . $computedStockSql . ' - ' . $pendingExportQtySql . ')';
         $inventoryValueSql = '(GREATEST(' . $actualStockSql . ', 0) * COALESCE(products.cost_price, products.expected_cost, 0))';
+        $inventoryValueWithNegativeSql = '(' . $actualStockSql . ' * COALESCE(products.cost_price, products.expected_cost, 0))';
         $trackingDemandQtySql = '(' . $recentOutboundQtySql . ' + ' . $pendingExportQtySql . ')';
         $trackingDailyAverageSql = '(' . $trackingDemandQtySql . ' / ' . self::INVENTORY_TRACKING_WINDOW_DAYS . '.0)';
         $positiveActualStockSql = 'GREATEST(' . $actualStockSql . ', 0)';
@@ -3675,6 +3677,7 @@ class InventoryController extends Controller
         $variantPendingReturnQtySql = 'COALESCE(variant_inventory_rollups.pending_return_quantity, 0)';
         $variantActualStockSql = 'COALESCE(variant_inventory_rollups.actual_stock, 0)';
         $variantInventoryValueSql = 'COALESCE(variant_inventory_rollups.inventory_value, 0)';
+        $variantInventoryValueWithNegativeSql = 'COALESCE(variant_inventory_rollups.inventory_value_with_negative, 0)';
         $variantRecentOutboundQtySql = 'COALESCE(variant_inventory_rollups.recent_outbound_quantity, 0)';
         $variantTrackingDemandQtySql = 'COALESCE(variant_inventory_rollups.tracking_demand_quantity, 0)';
         $variantTrackingDailyAverageSql = '(' . $variantTrackingDemandQtySql . ' / ' . self::INVENTORY_TRACKING_WINDOW_DAYS . '.0)';
@@ -3721,6 +3724,7 @@ class InventoryController extends Controller
                 ->selectRaw($variantPendingReturnQtySql . ' as variant_pending_return_quantity')
                 ->selectRaw($variantActualStockSql . ' as variant_actual_stock')
                 ->selectRaw($variantInventoryValueSql . ' as variant_inventory_value')
+                ->selectRaw($variantInventoryValueWithNegativeSql . ' as variant_inventory_value_with_negative')
                 ->selectRaw($variantRecentOutboundQtySql . ' as variant_recent_outbound_quantity')
                 ->selectRaw($variantTrackingDemandQtySql . ' as variant_tracking_demand_quantity')
                 ->selectRaw($variantTrackingDailyAverageSql . ' as variant_tracking_daily_average')
@@ -3732,6 +3736,7 @@ class InventoryController extends Controller
                 ->selectRaw($pendingReturnQtySql . ' as pending_return_quantity')
                 ->selectRaw($actualStockSql . ' as actual_stock')
                 ->selectRaw($inventoryValueSql . ' as inventory_value')
+                ->selectRaw($inventoryValueWithNegativeSql . ' as inventory_value_with_negative')
                 ->selectRaw($recentOutboundQtySql . ' as recent_outbound_quantity')
                 ->selectRaw($trackingDemandQtySql . ' as tracking_demand_quantity')
                 ->selectRaw($trackingDailyAverageSql . ' as tracking_daily_average')
@@ -3764,6 +3769,7 @@ class InventoryController extends Controller
             ->selectRaw($variantPendingReturnQtySql . ' as variant_pending_return_quantity')
             ->selectRaw($variantActualStockSql . ' as variant_actual_stock')
             ->selectRaw($variantInventoryValueSql . ' as variant_inventory_value')
+            ->selectRaw($variantInventoryValueWithNegativeSql . ' as variant_inventory_value_with_negative')
             ->selectRaw($variantRecentOutboundQtySql . ' as variant_recent_outbound_quantity')
             ->selectRaw($variantTrackingDemandQtySql . ' as variant_tracking_demand_quantity')
             ->selectRaw($variantTrackingDailyAverageSql . ' as variant_tracking_daily_average')
@@ -3775,6 +3781,7 @@ class InventoryController extends Controller
             ->selectRaw($pendingReturnQtySql . ' as pending_return_quantity')
             ->selectRaw($actualStockSql . ' as actual_stock')
             ->selectRaw($inventoryValueSql . ' as inventory_value')
+            ->selectRaw($inventoryValueWithNegativeSql . ' as inventory_value_with_negative')
             ->selectRaw($recentOutboundQtySql . ' as recent_outbound_quantity')
             ->selectRaw($trackingDemandQtySql . ' as tracking_demand_quantity')
             ->selectRaw($trackingDailyAverageSql . ' as tracking_daily_average')
@@ -3996,6 +4003,7 @@ class InventoryController extends Controller
             . ')';
         $actualStockSql = '(' . $computedStockSql . ' - ' . $pendingExportQtySql . ')';
         $inventoryValueSql = '(GREATEST(' . $actualStockSql . ', 0) * COALESCE(inventory_rollup_children.cost_price, inventory_rollup_children.expected_cost, 0))';
+        $inventoryValueWithNegativeSql = '(' . $actualStockSql . ' * COALESCE(inventory_rollup_children.cost_price, inventory_rollup_children.expected_cost, 0))';
         $trackingDemandQtySql = '(' . $recentOutboundQtySql . ' + ' . $pendingExportQtySql . ')';
 
         return $query
@@ -4010,6 +4018,7 @@ class InventoryController extends Controller
             ->selectRaw('COALESCE(SUM(' . $pendingReturnQtySql . '), 0) as pending_return_quantity')
             ->selectRaw('COALESCE(SUM(' . $actualStockSql . '), 0) as actual_stock')
             ->selectRaw('COALESCE(SUM(' . $inventoryValueSql . '), 0) as inventory_value')
+            ->selectRaw('COALESCE(SUM(' . $inventoryValueWithNegativeSql . '), 0) as inventory_value_with_negative')
             ->selectRaw('COALESCE(SUM(' . $recentOutboundQtySql . '), 0) as recent_outbound_quantity')
             ->selectRaw('COALESCE(SUM(' . $trackingDemandQtySql . '), 0) as tracking_demand_quantity')
             ->groupBy('inventory_rollup_links.product_id');
@@ -4956,6 +4965,7 @@ class InventoryController extends Controller
             ->selectRaw('COALESCE(SUM(GREATEST(actual_stock, 0)), 0) as total_actual_stock')
             ->selectRaw('COALESCE(SUM(damaged_quantity), 0) as total_damaged_stock')
             ->selectRaw('COALESCE(SUM(inventory_value), 0) as total_inventory_value')
+            ->selectRaw('COALESCE(SUM(inventory_value_with_negative), 0) as total_inventory_value_with_negative')
             ->selectRaw('COALESCE(SUM(recent_outbound_quantity), 0) as total_recent_outbound_quantity')
             ->selectRaw('COALESCE(SUM(tracking_demand_quantity), 0) as total_tracking_demand_quantity')
             ->selectRaw('COALESCE(SUM(CASE WHEN tracking_demand_quantity > 0 THEN 1 ELSE 0 END), 0) as tracking_active_products')
@@ -4976,6 +4986,7 @@ class InventoryController extends Controller
             'total_sellable_stock' => InventoryQuantity::normalize($summary->total_actual_stock ?? 0),
             'total_damaged_stock' => InventoryQuantity::normalize($summary->total_damaged_stock ?? 0),
             'total_inventory_value' => round((float) ($summary->total_inventory_value ?? 0), 2),
+            'total_inventory_value_with_negative' => round((float) ($summary->total_inventory_value_with_negative ?? 0), 2),
             'tracking_window_days' => self::INVENTORY_TRACKING_WINDOW_DAYS,
             'total_recent_outbound_quantity' => InventoryQuantity::normalize($summary->total_recent_outbound_quantity ?? 0),
             'total_tracking_demand_quantity' => InventoryQuantity::normalize($summary->total_tracking_demand_quantity ?? 0),
@@ -5557,6 +5568,11 @@ class InventoryController extends Controller
             : ($product->inventory_value !== null
                 ? round((float) $product->inventory_value, 2)
                 : round(max($actualStock, 0) * $displayCost, 2));
+        $inventoryValueWithNegative = $usesVariantRollupMetrics
+            ? round((float) ($product->variant_inventory_value_with_negative ?? 0), 2)
+            : ($product->inventory_value_with_negative !== null
+                ? round((float) $product->inventory_value_with_negative, 2)
+                : round($actualStock * $displayCost, 2));
         $stockAlert = $actualStock <= 0
             ? 'out'
             : ($actualStock <= 5 ? 'low' : 'available');
@@ -5612,6 +5628,7 @@ class InventoryController extends Controller
             'pending_return_quantity' => $pendingReturnQuantity,
             'actual_stock' => $actualStock,
             'inventory_value' => $inventoryValue,
+            'inventory_value_with_negative' => $inventoryValueWithNegative,
             'tracking_window_days' => self::INVENTORY_TRACKING_WINDOW_DAYS,
             'recent_outbound_quantity' => $recentOutboundQuantity,
             'tracking_demand_quantity' => $trackingDemandQuantity,

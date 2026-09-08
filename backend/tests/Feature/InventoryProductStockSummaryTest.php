@@ -108,6 +108,7 @@ class InventoryProductStockSummaryTest extends TestCase
         $this->assertSame(7, (int) ($row['computed_stock'] ?? 0));
         $this->assertSame(100000.0, (float) ($row['display_cost'] ?? 0));
         $this->assertSame(700000.0, (float) ($row['inventory_value'] ?? 0));
+        $this->assertSame(700000.0, (float) ($row['inventory_value_with_negative'] ?? 0));
         $this->assertSame('available', (string) ($row['stock_alert'] ?? ''));
         $this->assertSame(7, (int) $product->fresh()->stock_quantity);
 
@@ -119,6 +120,46 @@ class InventoryProductStockSummaryTest extends TestCase
         $this->assertSame(7, (int) ($summary['total_stock'] ?? 0));
         $this->assertSame(7, (int) ($summary['total_sellable_stock'] ?? 0));
         $this->assertSame(700000.0, (float) ($summary['total_inventory_value'] ?? 0));
+        $this->assertSame(700000.0, (float) ($summary['total_inventory_value_with_negative'] ?? 0));
+    }
+
+    public function test_inventory_products_summary_can_include_negative_available_stock_value(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $supplier = $this->createSupplier($account);
+        $product = $this->createProduct($account, $supplier, [
+            'name' => 'San pham am ton cho xuat',
+            'sku' => 'NEGATIVE-STOCK-VALUE-001',
+            'expected_cost' => 100000,
+            'cost_price' => 100000,
+        ]);
+
+        $order = $this->createOrder($account, $user, [
+            'order_number' => 'ORD-PENDING-NEGATIVE-001',
+            'status' => 'new',
+        ]);
+        $this->createOrderItem($account, $order, $product, 3);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/inventory/products?per_page=20');
+
+        $response->assertOk();
+
+        $row = collect($response->json('data'))->firstWhere('id', $product->id);
+        $summary = $response->json('summary');
+
+        $this->assertNotNull($row);
+        $this->assertSame(0, (int) ($row['computed_stock'] ?? 0));
+        $this->assertSame(3, (int) ($row['pending_export_quantity'] ?? 0));
+        $this->assertSame(-3, (int) ($row['actual_stock'] ?? 0));
+        $this->assertSame(0.0, (float) ($row['inventory_value'] ?? 0));
+        $this->assertSame(-300000.0, (float) ($row['inventory_value_with_negative'] ?? 0));
+
+        $this->assertSame(3, (int) ($summary['total_pending_export'] ?? 0));
+        $this->assertSame(0, (int) ($summary['total_actual_stock'] ?? 0));
+        $this->assertSame(0.0, (float) ($summary['total_inventory_value'] ?? 0));
+        $this->assertSame(-300000.0, (float) ($summary['total_inventory_value_with_negative'] ?? 0));
     }
 
     public function test_refresh_order_items_returns_inventory_snapshot_for_available_to_sell(): void

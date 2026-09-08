@@ -6130,6 +6130,11 @@ class OrderController extends Controller
         );
         $this->syncExchangeReturnRefundNote($order);
 
+        $createdReturnSlip = $this->createAutomaticReturnSlipIfNeeded($order, 'order_update');
+        if ($createdReturnSlip) {
+            $order->refresh();
+        }
+
         return $order;
     }
 
@@ -6395,6 +6400,7 @@ class OrderController extends Controller
 
                 $newStatus = $request->status;
                 $oldStatus = $order->status;
+                $createdReturnSlip = null;
 
                 // Validate that the status exists in order_statuses for this account
                 $exists = \App\Models\OrderStatus::where('account_id', $order->account_id)
@@ -6457,10 +6463,24 @@ class OrderController extends Controller
                             $order->refresh();
 
                             if ((string) $order->status === (string) $newStatus) {
-                                return response()->json($order->load(array_merge(
+                                $createdReturnSlip = $this->createAutomaticReturnSlipIfNeeded($order, 'order_status_update');
+                                if ($createdReturnSlip) {
+                                    $order->refresh();
+                                }
+
+                                $responsePayload = $order->load(array_merge(
                                     $this->orderDetailRelations(),
                                     ['customer', 'shipments']
-                                )));
+                                ))->toArray();
+
+                                if ($createdReturnSlip) {
+                                    $responsePayload['auto_return_slip'] = [
+                                        'id' => (int) $createdReturnSlip->id,
+                                        'document_number' => $createdReturnSlip->document_number,
+                                    ];
+                                }
+
+                                return response()->json($responsePayload);
                             }
                         }
                     }
@@ -6495,6 +6515,11 @@ class OrderController extends Controller
                         $order->refresh();
                     }
 
+                    $createdReturnSlip = $this->createAutomaticReturnSlipIfNeeded($order, 'order_status_update');
+                    if ($createdReturnSlip) {
+                        $order->refresh();
+                    }
+
                     $responsePayload = $order->load(array_merge(
                         $this->orderDetailRelations(),
                         ['customer', 'shipments']
@@ -6504,6 +6529,12 @@ class OrderController extends Controller
                         $responsePayload['auto_export_slip'] = [
                             'id' => (int) $createdExportSlip->id,
                             'document_number' => $createdExportSlip->document_number,
+                        ];
+                    }
+                    if ($createdReturnSlip) {
+                        $responsePayload['auto_return_slip'] = [
+                            'id' => (int) $createdReturnSlip->id,
+                            'document_number' => $createdReturnSlip->document_number,
                         ];
                     }
 
@@ -6527,6 +6558,11 @@ class OrderController extends Controller
                     $order->refresh();
                 }
 
+                $createdReturnSlip = $this->createAutomaticReturnSlipIfNeeded($order, 'order_status_update');
+                if ($createdReturnSlip) {
+                    $order->refresh();
+                }
+
                 $responsePayload = $order->load(array_merge(
                     $this->orderDetailRelations(),
                     ['customer', 'shipments']
@@ -6536,6 +6572,12 @@ class OrderController extends Controller
                     $responsePayload['auto_export_slip'] = [
                         'id' => (int) $createdExportSlip->id,
                         'document_number' => $createdExportSlip->document_number,
+                    ];
+                }
+                if ($createdReturnSlip) {
+                    $responsePayload['auto_return_slip'] = [
+                        'id' => (int) $createdReturnSlip->id,
+                        'document_number' => $createdReturnSlip->document_number,
                     ];
                 }
 
@@ -6552,6 +6594,22 @@ class OrderController extends Controller
             \Illuminate\Support\Facades\Log::error("Order Status Update Error for ID {$id}: " . $e->getMessage());
             return response()->json(['message' => 'Có lỗi xảy ra: ' . $e->getMessage()], 500);
         }
+    }
+
+    private function createAutomaticReturnSlipIfNeeded(Order $order, string $createdFrom): ?InventoryDocument
+    {
+        if (!in_array((string) $order->status, [
+            OrderStatusCatalog::RETURNED_CODE,
+            OrderStatusCatalog::EXCHANGE_COMPLETED_CODE,
+        ], true)) {
+            return null;
+        }
+
+        return $this->orderInventorySlipService->createAutomaticReturnSlipForOrder(
+            $order,
+            Auth::id(),
+            $createdFrom
+        );
     }
 
     private function shouldConfirmCompletedExportSlipBackfill(
@@ -6922,6 +6980,7 @@ class OrderController extends Controller
         $hasStatusUpdate = array_key_exists('status', $data);
         $statusChangedCount = 0;
         $statusUnchangedCount = 0;
+        $autoReturnSlipCount = 0;
 
         if ($hasStatusUpdate) {
             $data['status'] = trim((string) $data['status']);
@@ -6986,7 +7045,7 @@ class OrderController extends Controller
             }
         }
 
-        DB::transaction(function () use ($ids, $data, $customAttributes, $hasStatusUpdate, $ordersForStatusUpdate, $request, &$statusChangedCount, &$statusUnchangedCount) {
+        DB::transaction(function () use ($ids, $data, $customAttributes, $hasStatusUpdate, $ordersForStatusUpdate, $request, &$statusChangedCount, &$statusUnchangedCount, &$autoReturnSlipCount) {
             $bulkColumnData = $data;
             unset($bulkColumnData['status']);
 
@@ -7010,6 +7069,10 @@ class OrderController extends Controller
                     $oldStatus = (string) $order->status;
 
                     if ($newStatus === $oldStatus) {
+                        if ($this->createAutomaticReturnSlipIfNeeded($order, 'order_bulk_status_update')) {
+                            $autoReturnSlipCount++;
+                        }
+
                         $statusUnchangedCount++;
                         continue;
                     }
@@ -7050,6 +7113,10 @@ class OrderController extends Controller
                                 $order->refresh();
 
                                 if ((string) $order->status === $newStatus) {
+                                    if ($this->createAutomaticReturnSlipIfNeeded($order, 'order_bulk_status_update')) {
+                                        $autoReturnSlipCount++;
+                                    }
+
                                     $statusChangedCount++;
                                     continue;
                                 }
@@ -7067,6 +7134,10 @@ class OrderController extends Controller
                     ]);
 
                     $order->update(['status' => $newStatus]);
+                    if ($this->createAutomaticReturnSlipIfNeeded($order, 'order_bulk_status_update')) {
+                        $autoReturnSlipCount++;
+                    }
+
                     $statusChangedCount++;
                 }
             }
@@ -7096,6 +7167,7 @@ class OrderController extends Controller
             'updated_count' => count($ids),
             'status_changed_count' => $statusChangedCount,
             'status_unchanged_count' => $statusUnchangedCount,
+            'auto_return_slip_count' => $autoReturnSlipCount,
         ]);
     }
 

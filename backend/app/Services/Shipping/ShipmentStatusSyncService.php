@@ -8,6 +8,7 @@ use App\Models\Order;
 use App\Models\OrderStatusLog;
 use App\Models\Shipment;
 use App\Models\ShipmentStatusLog;
+use App\Services\OrderInventorySlipService;
 use App\Support\OrderCodAdjustmentSystemNote;
 use App\Support\OrderExchangeRefundSystemNote;
 use App\Support\OrderStatusCatalog;
@@ -342,6 +343,8 @@ class ShipmentStatusSyncService
             )
             && !$financialChanged
         ) {
+            $this->createAutomaticReturnSlipIfNeeded($order, $changedBy, $source);
+
             return false;
         }
 
@@ -400,7 +403,25 @@ class ShipmentStatusSyncService
         $order->update($updateData);
         $this->syncInvoiceAmountFromOrder($order, $updateData);
 
+        $this->createAutomaticReturnSlipIfNeeded($order->fresh() ?: $order, $changedBy, $source);
+
         return true;
+    }
+
+    private function createAutomaticReturnSlipIfNeeded(Order $order, ?int $changedBy, string $source): void
+    {
+        if (!in_array((string) $order->status, [
+            OrderStatusCatalog::RETURNED_CODE,
+            OrderStatusCatalog::EXCHANGE_COMPLETED_CODE,
+        ], true)) {
+            return;
+        }
+
+        app(OrderInventorySlipService::class)->createAutomaticReturnSlipForOrder(
+            $order,
+            $changedBy,
+            $source
+        );
     }
 
     public function syncShipmentFinancialsFromOrder(Order $order): bool

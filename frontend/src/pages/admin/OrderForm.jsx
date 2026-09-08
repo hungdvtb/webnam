@@ -11125,6 +11125,16 @@ const OrderForm = () => {
         : [];
     const categoryGroupUndoCount = categoryGroupUndoItems.length;
     const hasCategoryGroupUndo = categoryGroupUndoCount > 0;
+    const categoryGroupUndoByLineId = useMemo(() => {
+        const map = new Map();
+        categoryGroupUndoItems.forEach((entry) => {
+            const lineId = normalizeCanvasText(entry?.lineId);
+            if (lineId) {
+                map.set(lineId, entry);
+            }
+        });
+        return map;
+    }, [categoryGroupUndoItems]);
 
     const restoreCategoryGroupUndoLines = useCallback((lineIds = []) => {
         const requestedLineIds = new Set(
@@ -11196,7 +11206,7 @@ const OrderForm = () => {
     }, [restoreCategoryGroupUndoLines]);
 
     const categoryGroupUndoPanel = hasCategoryGroupUndo ? (
-        <div className="mb-3 rounded-[18px] border border-amber-200 bg-amber-50/80 px-3 py-3 shadow-sm lg:rounded-sm lg:px-4">
+        <div className="mb-3 rounded-[18px] border border-amber-200 bg-amber-50/80 px-3 py-3 shadow-sm lg:hidden">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div className="min-w-0">
                     <div className="flex items-center gap-2 text-[12px] font-black uppercase tracking-[0.12em] text-amber-800">
@@ -19133,6 +19143,7 @@ const OrderForm = () => {
                                                             const originalNameLabel = getOrderLineOriginalNameLabel(item);
                                                             const displayNameLabel = getOrderLineDisplayNameLabel(item);
                                                             const sourceBadgeLabel = getCrossSellSourceBadgeLabel(item);
+                                                            const categoryGroupUndoEntry = categoryGroupUndoByLineId.get(normalizeCanvasText(item?.line_id));
 
                                                             return (
                                                                 <td
@@ -19187,12 +19198,30 @@ const OrderForm = () => {
                                                                     ) : (
                                                                     <div className="flex items-center gap-2 overflow-hidden">
                                                                         <div className="flex-1 min-w-0">
-                                                                            <p
-                                                                                ref={(node) => setOrderItemNameRef(itemNameCellKey, node)}
-                                                                                className={`${hasActualOrderProductOverride(item) ? 'text-rose-700' : 'text-primary'} font-bold leading-tight truncate`}
-                                                                            >
-                                                                                {displayNameLabel}
-                                                                            </p>
+                                                                            <div className="flex min-w-0 items-center gap-1.5">
+                                                                                <p
+                                                                                    ref={(node) => setOrderItemNameRef(itemNameCellKey, node)}
+                                                                                    className={`${hasActualOrderProductOverride(item) ? 'text-rose-700' : 'text-primary'} min-w-0 flex-1 truncate font-bold leading-tight`}
+                                                                                >
+                                                                                    {displayNameLabel}
+                                                                                </p>
+                                                                                {categoryGroupUndoEntry ? (
+                                                                                    <button
+                                                                                        type="button"
+                                                                                        onPointerDown={(event) => event.stopPropagation()}
+                                                                                        onClick={(event) => {
+                                                                                            event.preventDefault();
+                                                                                            event.stopPropagation();
+                                                                                            handleRestoreOneCategoryGroupUndo(item.line_id);
+                                                                                        }}
+                                                                                        className="inline-flex size-6 shrink-0 items-center justify-center rounded-sm border border-amber-200 bg-amber-50 text-amber-700 shadow-sm transition-all hover:border-amber-300 hover:bg-amber-100"
+                                                                                        title={`Hoàn tác đổi nhóm: ${categoryGroupUndoEntry.toName || 'Sản phẩm mới'} -> ${categoryGroupUndoEntry.fromName || 'Sản phẩm cũ'}`}
+                                                                                        aria-label="Hoàn tác đổi nhóm dòng này"
+                                                                                    >
+                                                                                        <span className="material-symbols-outlined text-[15px]">undo</span>
+                                                                                    </button>
+                                                                                ) : null}
+                                                                            </div>
                                                                             {originalNameLabel ? (
                                                                                 <p className="order-form-cell-meta truncate font-semibold text-primary/35">
                                                                                     {`\u0054\u00ean g\u1ed1c: ${originalNameLabel}`}
@@ -19538,6 +19567,20 @@ const OrderForm = () => {
                                             <span className="material-symbols-outlined text-[18px]">delete_outline</span>
                                             <span className="absolute -right-1.5 -top-1.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-rose-700 px-1 text-[10px] font-black leading-none text-white shadow-sm ring-2 ring-white">
                                                 {selectedOrderLineItems.length}
+                                            </span>
+                                        </button>
+                                    ) : null}
+                                    {hasCategoryGroupUndo ? (
+                                        <button
+                                            type="button"
+                                            onClick={handleRestoreAllCategoryGroupUndo}
+                                            title={`Hoàn tác tất cả ${categoryGroupUndoCount} sản phẩm vừa đổi nhóm`}
+                                            aria-label="Hoàn tác tất cả đổi nhóm"
+                                            className="relative hidden size-10 items-center justify-center rounded-full border border-amber-200 bg-amber-50 text-amber-700 shadow-sm transition-all hover:border-amber-300 hover:bg-amber-100 lg:inline-flex"
+                                        >
+                                            <span className="material-symbols-outlined text-[18px]">restart_alt</span>
+                                            <span className="absolute -right-1.5 -top-1.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-amber-700 px-1 text-[10px] font-black leading-none text-white shadow-sm ring-2 ring-white">
+                                                {categoryGroupUndoCount}
                                             </span>
                                         </button>
                                     ) : null}

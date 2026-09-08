@@ -3,12 +3,18 @@
 namespace Tests\Feature;
 
 use App\Models\Account;
+use App\Models\InventoryBatch;
 use App\Models\InventoryDocument;
 use App\Models\InventoryDocumentItem;
 use App\Models\Order;
 use App\Models\OrderItem;
+use App\Models\OrderSupplementItem;
 use App\Models\Product;
+use App\Models\Shipment;
 use App\Models\User;
+use App\Services\AccessControlService;
+use App\Services\Shipping\ShipmentStatusSyncService;
+use App\Support\OrderStatusCatalog;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -570,6 +576,430 @@ class OrderBatchReturnSlipTest extends TestCase
         $this->assertSame('not_returned', (string) $partialOrder->fresh()->return_status);
     }
 
+    public function test_auto_return_slip_skips_orders_created_before_rollout_cutoff(): void
+    {
+        [$account, $user] = $this->authenticate();
+        OrderStatusCatalog::ensureDefaultSystemStatuses((int) $account->id);
+
+        DB::table('system_settings')->updateOrInsert(
+            ['key' => 'orders.auto_return_slip_start_at'],
+            [
+                'value' => now()->toDateTimeString(),
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]
+        );
+
+        $oldCreatedAt = now()->subDay();
+
+        $product = $this->createProduct($account, [
+            'name' => 'San pham don cu da can kho',
+            'sku' => 'OLD-AUTO-RETURNED-001',
+            'price' => 150000,
+            'cost_price' => 70000,
+            'expected_cost' => 70000,
+        ]);
+
+        $oldReturnedOrder = $this->createOfficialOrder($account, $user, $product, 2, 'OR-OLD-AUTO-RETURNED-0001', [
+            'status' => 'shipping',
+            'return_status' => 'not_returned',
+        ]);
+        $oldReturnedOrder->forceFill([
+            'created_at' => $oldCreatedAt,
+            'updated_at' => $oldCreatedAt,
+            'officialized_at' => $oldCreatedAt,
+        ])->save();
+        $this->createExportDocument($account, $oldReturnedOrder, $product, 2, 'PXK-OLD-AUTO-RETURNED-0001');
+
+        $this
+            ->withHeaders($this->headers($account))
+            ->putJson("/api/orders/{$oldReturnedOrder->id}/status", [
+                'status' => OrderStatusCatalog::RETURNED_CODE,
+            ])
+            ->assertOk()
+            ->assertJsonPath('status', OrderStatusCatalog::RETURNED_CODE);
+
+        $this->assertSame(0, InventoryDocument::query()
+            ->where('type', 'return')
+            ->where('reference_type', 'order')
+            ->where('reference_id', $oldReturnedOrder->id)
+            ->count());
+
+        $sentProduct = $this->createProduct($account, [
+            'name' => 'San pham doi don cu',
+            'sku' => 'OLD-EXCHANGE-SENT-001',
+        ]);
+        $returnedProduct = $this->createProduct($account, [
+            'name' => 'San pham doi ve don cu',
+            'sku' => 'OLD-EXCHANGE-RETURNED-001',
+            'price' => 125000,
+            'cost_price' => 65000,
+            'expected_cost' => 65000,
+        ]);
+
+        $oldExchangeOrder = $this->createOfficialOrder($account, $user, $sentProduct, 1, 'OR-OLD-AUTO-EXCHANGE-0001', [
+            'order_type' => Order::TYPE_EXCHANGE_RETURN,
+            'status' => 'pending_return',
+            'return_status' => 'not_returned',
+        ]);
+        $oldExchangeOrder->forceFill([
+            'created_at' => $oldCreatedAt,
+            'updated_at' => $oldCreatedAt,
+            'officialized_at' => $oldCreatedAt,
+        ])->save();
+
+        OrderSupplementItem::query()->create([
+            'order_id' => $oldExchangeOrder->id,
+            'account_id' => $account->id,
+            'product_id' => $returnedProduct->id,
+            'product_name_snapshot' => $returnedProduct->name,
+            'product_sku_snapshot' => $returnedProduct->sku,
+            'quantity' => 1,
+            'price' => 125000,
+            'cost_price' => 65000,
+            'total_price' => 125000,
+            'total_cost' => 65000,
+        ]);
+
+        $this
+            ->withHeaders($this->headers($account))
+            ->putJson("/api/orders/{$oldExchangeOrder->id}/status", [
+                'status' => OrderStatusCatalog::EXCHANGE_COMPLETED_CODE,
+            ])
+            ->assertOk()
+            ->assertJsonPath('status', OrderStatusCatalog::EXCHANGE_COMPLETED_CODE);
+
+        $this->assertSame(0, InventoryDocument::query()
+            ->where('type', 'return')
+            ->where('reference_type', 'order')
+            ->where('reference_id', $oldExchangeOrder->id)
+            ->count());
+        $this->assertSame('not_returned', (string) $oldExchangeOrder->fresh()->return_status);
+        $this->assertSame('0.000', (string) $returnedProduct->fresh()->stock_quantity);
+    }
+
+    public function test_returned_status_auto_creates_return_slip_for_exported_order_items(): void
+    {
+        [$account, $user] = $this->authenticate();
+        OrderStatusCatalog::ensureDefaultSystemStatuses((int) $account->id);
+
+        $product = $this->createProduct($account, [
+            'name' => 'San pham da hoan tu dong',
+            'sku' => 'AUTO-RETURNED-001',
+            'price' => 150000,
+            'cost_price' => 70000,
+            'expected_cost' => 70000,
+        ]);
+
+        $order = $this->createOfficialOrder($account, $user, $product, 3, 'OR-AUTO-RETURNED-0001', [
+            'status' => 'shipping',
+            'return_status' => 'not_returned',
+        ]);
+        $this->createExportDocument($account, $order, $product, 3, 'PXK-AUTO-RETURNED-0001');
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->putJson("/api/orders/{$order->id}/status", [
+                'status' => OrderStatusCatalog::RETURNED_CODE,
+            ]);
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('status', OrderStatusCatalog::RETURNED_CODE);
+
+        $document = InventoryDocument::query()
+            ->where('type', 'return')
+            ->where('reference_type', 'order')
+            ->where('reference_id', $order->id)
+            ->firstOrFail();
+
+        $this->assertSame('completed', (string) $document->status);
+        $this->assertSame('returned_order_auto_return', (string) data_get($document->meta, 'source'));
+        $this->assertSame('order_status_update', (string) data_get($document->meta, 'created_from'));
+        $this->assertSame('3.000', (string) $document->total_quantity);
+        $this->assertSame('210000.00', (string) $document->total_amount);
+        $this->assertDatabaseHas('inventory_document_items', [
+            'inventory_document_id' => $document->id,
+            'product_id' => $product->id,
+            'quantity' => 3,
+            'direction' => 'in',
+            'unit_cost' => 70000,
+            'total_cost' => 210000,
+        ]);
+
+        $repeatResponse = $this
+            ->withHeaders($this->headers($account))
+            ->putJson("/api/orders/{$order->id}/status", [
+                'status' => OrderStatusCatalog::RETURNED_CODE,
+            ]);
+
+        $repeatResponse->assertOk();
+        $this->assertSame(1, InventoryDocument::query()
+            ->where('type', 'return')
+            ->where('reference_type', 'order')
+            ->where('reference_id', $order->id)
+            ->count());
+    }
+
+    public function test_returned_shipment_sync_auto_creates_return_slip_for_order_items(): void
+    {
+        [$account, $user] = $this->authenticate();
+        OrderStatusCatalog::ensureDefaultSystemStatuses((int) $account->id);
+
+        $product = $this->createProduct($account, [
+            'name' => 'San pham van don da hoan',
+            'sku' => 'AUTO-SHIP-RETURNED-001',
+            'price' => 170000,
+            'cost_price' => 90000,
+            'expected_cost' => 90000,
+        ]);
+
+        $order = $this->createOfficialOrder($account, $user, $product, 2, 'OR-AUTO-SHIP-RETURNED-0001', [
+            'status' => 'shipping',
+            'return_status' => 'not_returned',
+        ]);
+
+        $shipment = Shipment::query()->create([
+            'account_id' => $account->id,
+            'order_id' => $order->id,
+            'order_code' => $order->order_number,
+            'shipment_number' => 'VD-AUTO-SHIP-RETURNED',
+            'tracking_number' => 'TRACK-AUTO-SHIP-RETURNED',
+            'carrier_tracking_code' => 'TRACK-AUTO-SHIP-RETURNED',
+            'carrier_name' => 'Manual Carrier',
+            'channel' => 'manual',
+            'customer_name' => $order->customer_name,
+            'customer_phone' => $order->customer_phone,
+            'customer_address' => $order->shipping_address,
+            'status' => 'returned',
+            'shipment_status' => 'returned',
+            'cod_amount' => (float) $order->total_price,
+            'shipping_cost' => 0,
+            'service_fee' => 0,
+            'actual_received_amount' => 0,
+            'created_by' => $user->id,
+            'shipped_at' => now(),
+            'returned_at' => now(),
+        ]);
+
+        $synced = app(ShipmentStatusSyncService::class)->syncOrderFromShipment(
+            $shipment->fresh(),
+            'shipment_sync',
+            $user->id
+        );
+
+        $this->assertTrue($synced);
+        $order->refresh();
+        $this->assertSame(OrderStatusCatalog::RETURNED_CODE, (string) $order->status);
+
+        $document = InventoryDocument::query()
+            ->where('type', 'return')
+            ->where('reference_type', 'order')
+            ->where('reference_id', $order->id)
+            ->firstOrFail();
+
+        $this->assertSame('returned_order_auto_return', (string) data_get($document->meta, 'source'));
+        $this->assertSame('shipment_sync', (string) data_get($document->meta, 'created_from'));
+        $this->assertDatabaseHas('inventory_document_items', [
+            'inventory_document_id' => $document->id,
+            'product_id' => $product->id,
+            'quantity' => 2,
+            'direction' => 'in',
+            'unit_cost' => 90000,
+            'total_cost' => 180000,
+        ]);
+    }
+
+    public function test_exchange_completed_status_auto_creates_return_slip_for_supplement_items(): void
+    {
+        [$account, $user] = $this->authenticate();
+        OrderStatusCatalog::ensureDefaultSystemStatuses((int) $account->id);
+
+        $sentProduct = $this->createProduct($account, [
+            'name' => 'San pham gui doi',
+            'sku' => 'EXCHANGE-SENT-001',
+            'price' => 180000,
+            'cost_price' => 90000,
+            'expected_cost' => 90000,
+        ]);
+        $returnedProduct = $this->createProduct($account, [
+            'name' => 'San pham khach doi ve',
+            'sku' => 'EXCHANGE-RETURNED-001',
+            'price' => 220000,
+            'cost_price' => 80000,
+            'expected_cost' => 80000,
+        ]);
+
+        $order = $this->createOfficialOrder($account, $user, $sentProduct, 1, 'OR-AUTO-EXCHANGE-0001', [
+            'order_type' => Order::TYPE_EXCHANGE_RETURN,
+            'status' => 'pending_return',
+            'return_status' => 'not_returned',
+        ]);
+
+        OrderSupplementItem::query()->create([
+            'order_id' => $order->id,
+            'account_id' => $account->id,
+            'product_id' => $returnedProduct->id,
+            'product_name_snapshot' => $returnedProduct->name,
+            'product_sku_snapshot' => $returnedProduct->sku,
+            'quantity' => 2,
+            'price' => 220000,
+            'cost_price' => 80000,
+            'total_price' => 440000,
+            'total_cost' => 160000,
+            'notes' => 'Hang khach doi ve',
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->putJson("/api/orders/{$order->id}/status", [
+                'status' => OrderStatusCatalog::EXCHANGE_COMPLETED_CODE,
+            ]);
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('status', OrderStatusCatalog::EXCHANGE_COMPLETED_CODE)
+            ->assertJsonPath('return_status', 'returned');
+
+        $document = InventoryDocument::query()
+            ->where('type', 'return')
+            ->where('reference_type', 'order')
+            ->where('reference_id', $order->id)
+            ->firstOrFail();
+
+        $this->assertSame('completed', (string) $document->status);
+        $this->assertSame('exchange_completed_auto_return', (string) data_get($document->meta, 'source'));
+        $this->assertSame('order_status_update', (string) data_get($document->meta, 'created_from'));
+        $this->assertSame('2.000', (string) $document->total_quantity);
+        $this->assertSame('160000.00', (string) $document->total_amount);
+
+        $this->assertDatabaseHas('inventory_document_items', [
+            'inventory_document_id' => $document->id,
+            'product_id' => $returnedProduct->id,
+            'quantity' => 2,
+            'direction' => 'in',
+            'unit_cost' => 80000,
+            'total_cost' => 160000,
+        ]);
+        $this->assertDatabaseMissing('inventory_document_items', [
+            'inventory_document_id' => $document->id,
+            'product_id' => $sentProduct->id,
+        ]);
+        $this->assertDatabaseHas('inventory_batches', [
+            'source_type' => 'document',
+            'source_id' => $document->id,
+            'product_id' => $returnedProduct->id,
+            'quantity' => 2,
+            'remaining_quantity' => 2,
+            'unit_cost' => 80000,
+            'status' => 'open',
+        ]);
+
+        $returnedProduct->refresh();
+        $this->assertSame('2.000', (string) $returnedProduct->stock_quantity);
+
+        $repeatResponse = $this
+            ->withHeaders($this->headers($account))
+            ->putJson("/api/orders/{$order->id}/status", [
+                'status' => OrderStatusCatalog::EXCHANGE_COMPLETED_CODE,
+            ]);
+
+        $repeatResponse->assertOk();
+        $this->assertSame(1, InventoryDocument::query()
+            ->where('type', 'return')
+            ->where('reference_type', 'order')
+            ->where('reference_id', $order->id)
+            ->count());
+        $this->assertSame(1, InventoryBatch::query()
+            ->where('source_type', 'document')
+            ->where('source_id', $document->id)
+            ->where('product_id', $returnedProduct->id)
+            ->count());
+    }
+
+    public function test_exchange_delivery_shipment_sync_auto_creates_return_slip(): void
+    {
+        [$account, $user] = $this->authenticate();
+        OrderStatusCatalog::ensureDefaultSystemStatuses((int) $account->id);
+
+        $sentProduct = $this->createProduct($account, [
+            'name' => 'San pham gui doi qua van don',
+            'sku' => 'EXCHANGE-SHIP-SENT-001',
+        ]);
+        $returnedProduct = $this->createProduct($account, [
+            'name' => 'San pham doi ve qua van don',
+            'sku' => 'EXCHANGE-SHIP-RETURNED-001',
+            'price' => 125000,
+            'cost_price' => 65000,
+            'expected_cost' => 65000,
+        ]);
+
+        $order = $this->createOfficialOrder($account, $user, $sentProduct, 1, 'OR-AUTO-EXCHANGE-SHIP-0001', [
+            'order_type' => Order::TYPE_EXCHANGE_RETURN,
+            'status' => 'pending_return',
+            'return_status' => 'not_returned',
+            'return_tracking_code' => 'TRACK-EXCHANGE-DH',
+        ]);
+
+        OrderSupplementItem::query()->create([
+            'order_id' => $order->id,
+            'account_id' => $account->id,
+            'product_id' => $returnedProduct->id,
+            'product_name_snapshot' => $returnedProduct->name,
+            'product_sku_snapshot' => $returnedProduct->sku,
+            'quantity' => 1,
+            'price' => 125000,
+            'cost_price' => 65000,
+            'total_price' => 125000,
+            'total_cost' => 65000,
+        ]);
+
+        $shipment = Shipment::query()->create([
+            'account_id' => $account->id,
+            'order_id' => $order->id,
+            'order_code' => $order->order_number,
+            'shipment_number' => 'VD-AUTO-EXCHANGE-SHIP',
+            'tracking_number' => 'TRACK-EXCHANGE-DH',
+            'carrier_tracking_code' => 'TRACK-EXCHANGE-DH',
+            'carrier_name' => 'Manual Carrier',
+            'channel' => 'manual',
+            'customer_name' => $order->customer_name,
+            'customer_phone' => $order->customer_phone,
+            'customer_address' => $order->shipping_address,
+            'status' => 'delivered',
+            'shipment_status' => 'delivered',
+            'cod_amount' => (float) $order->total_price,
+            'shipping_cost' => 0,
+            'service_fee' => 0,
+            'actual_received_amount' => (float) $order->total_price,
+            'created_by' => $user->id,
+            'shipped_at' => now(),
+            'delivered_at' => now(),
+        ]);
+
+        $synced = app(ShipmentStatusSyncService::class)->syncOrderFromShipment(
+            $shipment->fresh(),
+            'shipment_sync',
+            $user->id
+        );
+
+        $this->assertTrue($synced);
+        $order->refresh();
+        $this->assertSame(OrderStatusCatalog::EXCHANGE_COMPLETED_CODE, (string) $order->status);
+        $this->assertSame('returned', (string) $order->return_status);
+        $this->assertSame(1, InventoryDocument::query()
+            ->where('type', 'return')
+            ->where('reference_type', 'order')
+            ->where('reference_id', $order->id)
+            ->count());
+        $this->assertDatabaseHas('inventory_document_items', [
+            'product_id' => $returnedProduct->id,
+            'quantity' => 1,
+            'direction' => 'in',
+            'unit_cost' => 65000,
+        ]);
+    }
+
     private function authenticate(): array
     {
         $account = Account::query()->create([
@@ -580,7 +1010,12 @@ class OrderBatchReturnSlipTest extends TestCase
         ]);
 
         $user = User::factory()->create();
-        $user->accounts()->attach($account->id, ['role' => 'owner']);
+        $user->accounts()->attach($account->id, [
+            'role' => 'owner',
+            'status' => 1,
+            'permissions' => json_encode(AccessControlService::permissionsForRole('owner')),
+            'data_permissions' => json_encode(AccessControlService::dataPermissionsForRole('owner')),
+        ]);
 
         Sanctum::actingAs($user, ['*']);
 

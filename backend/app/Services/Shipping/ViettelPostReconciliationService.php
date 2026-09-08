@@ -5,6 +5,7 @@ namespace App\Services\Shipping;
 use App\Models\Order;
 use App\Models\Shipment;
 use App\Models\ShipmentReconciliation;
+use App\Services\OrderInventorySlipService;
 use App\Services\SimpleXlsxService;
 use App\Support\OrderShippingFeeCalculator;
 use App\Support\OrderStatusCatalog;
@@ -840,6 +841,14 @@ class ViettelPostReconciliationService
             if ($freshOrder && $isSuccessfulExchangeReturn && (string) $freshOrder->status !== OrderStatusCatalog::EXCHANGE_COMPLETED_CODE) {
                 OrderStatusCatalog::ensureExchangeCompletedStatus((int) $freshOrder->account_id);
                 $freshOrder->forceFill(['status' => OrderStatusCatalog::EXCHANGE_COMPLETED_CODE])->save();
+                $freshOrder = $freshOrder->fresh();
+            }
+            if ($freshOrder && $isSuccessfulExchangeReturn) {
+                app(OrderInventorySlipService::class)->createAutomaticReturnSlipForOrder(
+                    $freshOrder,
+                    $userId,
+                    'viettelpost_reconcile'
+                );
             }
             $returnShippingAdjustment = in_array($returnType, ['exchange', 'partial'], true)
                 ? $this->applyPartialDeliveryShippingFeeToOriginalOrder(

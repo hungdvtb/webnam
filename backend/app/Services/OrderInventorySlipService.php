@@ -11,12 +11,14 @@ use App\Models\Order;
 use App\Models\OrderStatusLog;
 use App\Models\Product;
 use App\Models\Shipment;
+use App\Models\SystemSetting;
 use App\Services\Inventory\InventoryService;
 use App\Support\InventoryQuantity;
 use App\Support\OrderStatusCatalog;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
 
@@ -25,6 +27,9 @@ class OrderInventorySlipService
     private const ACTIVE_STATUSES = ['draft', 'completed'];
     private const MANAGED_RETURN_SOURCE = 'order_return_reconciliation';
     private const MANAGED_RETURN_ADJUSTMENT_SOURCE = 'order_return_reconciliation_adjustment';
+    private const AUTO_EXCHANGE_RETURN_SOURCE = 'exchange_completed_auto_return';
+    private const AUTO_RETURNED_ORDER_SOURCE = 'returned_order_auto_return';
+    private const AUTO_RETURN_SLIP_START_SETTING = 'orders.auto_return_slip_start_at';
     private const RETURN_STATUS_NOT_RETURNED = 'not_returned';
     private const RETURN_STATUS_RETURNED = 'returned';
     private const RETURN_STATUS_ONLY_ORDER_TYPES = [
@@ -33,6 +38,8 @@ class OrderInventorySlipService
     ];
     private ?bool $inventoryDocumentOrderLinksTableExists = null;
     private ?bool $inventoryDocumentItemOrderLinksTableExists = null;
+    private bool $automaticReturnSlipStartAtResolved = false;
+    private ?Carbon $automaticReturnSlipStartAt = null;
 
     public function __construct(
         private readonly InventoryService $inventoryService,
@@ -48,6 +55,13 @@ class OrderInventorySlipService
     private function inventoryAccountIdForOrder(Order $order): int
     {
         return $this->inventoryAccountId((int) ($order->account_id ?? 0));
+    }
+
+    private function catalogAccountIdForOrder(Order $order): int
+    {
+        $accountId = (int) ($order->account_id ?? 0);
+
+        return (int) ($this->accountDataScopeService->catalogAccountId($accountId) ?? $accountId);
     }
 
     private function hasInventoryDocumentOrderLinksTable(): bool
@@ -796,6 +810,242 @@ class OrderInventorySlipService
         });
     }
 
+    public function createAutomaticReturnSlipForOrder(
+        Order $order,
+        ?int $userId = null,
+        string $createdFrom = 'order_status_update'
+    ): ?InventoryDocument {
+        return match (trim((string) $order->status)) {
+            OrderStatusCatalog::EXCHANGE_COMPLETED_CODE => $this->createAutomaticExchangeReturnSlip($order, $userId, $createdFrom),
+            OrderStatusCatalog::RETURNED_CODE => $this->createAutomaticReturnedOrderSlip($order, $userId, $createdFrom),
+            default => null,
+        };
+    }
+
+    public function createAutomaticExchangeReturnSlip(
+        Order $order,
+        ?int $userId = null,
+        string $createdFrom = 'order_status_update'
+    ): ?InventoryDocument {
+        if (!$this->canCreateAutomaticExchangeReturnSlip()) {
+            return null;
+        }
+
+        try {
+            return DB::transaction(function () use ($order, $userId, $createdFrom) {
+                $lockedOrder = Order::query()
+                    ->whereKey((int) $order->id)
+                    ->lockForUpdate()
+                    ->with('supplementItems')
+                    ->first();
+
+                if (
+                    !$lockedOrder
+                    || (string) ($lockedOrder->order_kind ?: Order::KIND_OFFICIAL) !== Order::KIND_OFFICIAL
+                    || $lockedOrder->getNormalizedOrderType() !== Order::TYPE_EXCHANGE_RETURN
+                    || trim((string) $lockedOrder->status) !== OrderStatusCatalog::EXCHANGE_COMPLETED_CODE
+                    || !$this->orderEligibleForAutomaticReturnSlip($lockedOrder)
+                    || $this->orderHasActiveReturnSlip($lockedOrder)
+                ) {
+                    return null;
+                }
+
+                $items = $this->automaticExchangeReturnItems($lockedOrder);
+                if ($items->isEmpty()) {
+                    return null;
+                }
+
+                $productIds = $items
+                    ->pluck('product_id')
+                    ->map(fn ($id) => (int) $id)
+                    ->unique()
+                    ->values()
+                    ->all();
+                $catalogAccountId = $this->catalogAccountIdForOrder($lockedOrder);
+                $products = Product::withoutGlobalScope('account_id')
+                    ->withTrashed()
+                    ->whereIn('id', $productIds)
+                    ->where('account_id', $catalogAccountId)
+                    ->lockForUpdate()
+                    ->get()
+                    ->keyBy('id');
+                $items = $items
+                    ->filter(fn (array $item) => $products->has((int) $item['product_id']))
+                    ->values();
+
+                if ($items->isEmpty()) {
+                    return null;
+                }
+
+                $inventoryAccountId = $this->inventoryAccountIdForOrder($lockedOrder);
+                $documentDate = now();
+                $document = InventoryDocument::create([
+                    'account_id' => $inventoryAccountId,
+                    'document_number' => $this->generateDocumentNumber('return', $inventoryAccountId),
+                    'type' => 'return',
+                    'document_date' => $documentDate->toDateString(),
+                    'status' => 'completed',
+                    'reference_type' => 'order',
+                    'reference_id' => (int) $lockedOrder->id,
+                    'notes' => 'Tự động tạo phiếu hoàn khi đơn đổi hàng thành công.',
+                    'meta' => [
+                        'source' => self::AUTO_EXCHANGE_RETURN_SOURCE,
+                        'created_from' => $createdFrom,
+                        'order_id' => (int) $lockedOrder->id,
+                        'order_number' => $lockedOrder->order_number,
+                    ],
+                    'created_by' => $userId,
+                ]);
+
+                $touchedProductIds = [];
+
+                foreach ($items as $index => $item) {
+                    $product = $products->get((int) $item['product_id']);
+                    $quantity = InventoryQuantity::normalize($item['quantity'] ?? 0);
+                    $unitCost = round((float) ($item['unit_cost'] ?? 0), 2);
+                    if ($unitCost <= 0) {
+                        $unitCost = round((float) ($product->cost_price ?? $product->expected_cost ?? 0), 2);
+                    }
+                    $unitPrice = round((float) ($item['unit_price'] ?? $product->price ?? 0), 2);
+
+                    $documentItem = InventoryDocumentItem::create([
+                        'account_id' => $inventoryAccountId,
+                        'inventory_document_id' => (int) $document->id,
+                        'product_id' => (int) $product->id,
+                        'product_name_snapshot' => $item['product_name'] ?: $product->name,
+                        'product_sku_snapshot' => $item['product_sku'] ?: $product->sku,
+                        'quantity' => $quantity,
+                        'stock_bucket' => 'sellable',
+                        'direction' => 'in',
+                        'unit_cost' => $unitCost,
+                        'total_cost' => round($unitCost * $quantity, 2),
+                        'unit_price' => $unitPrice,
+                        'total_price' => round($unitPrice * $quantity, 2),
+                        'notes' => $item['notes'] ?: 'Tự động từ sản phẩm đổi trả về',
+                        'meta' => [
+                            'source' => self::AUTO_EXCHANGE_RETURN_SOURCE,
+                            'supplement_item_ids' => $item['supplement_item_ids'],
+                        ],
+                    ]);
+
+                    InventoryBatch::create([
+                        'account_id' => $inventoryAccountId,
+                        'product_id' => (int) $product->id,
+                        'source_type' => 'document',
+                        'source_id' => (int) $document->id,
+                        'batch_number' => $this->generateLotNumber($document->document_number, $index + 1),
+                        'received_at' => $documentDate->copy()->setTimeFrom(now()),
+                        'quantity' => $quantity,
+                        'remaining_quantity' => $quantity,
+                        'unit_cost' => $unitCost,
+                        'status' => 'open',
+                        'meta' => [
+                            'source_name' => 'Phieu hoan doi hang tu dong',
+                            'source_label' => $document->document_number,
+                            'document_type' => 'return',
+                            'document_item_id' => (int) $documentItem->id,
+                            'order_id' => (int) $lockedOrder->id,
+                            'order_number' => $lockedOrder->order_number,
+                        ],
+                    ]);
+
+                    $touchedProductIds[] = (int) $product->id;
+                }
+
+                $this->finalizeDocumentTotals($document);
+
+                $statusTransition = $this->applyCompletedReturnStatusToOrder(
+                    $lockedOrder->fresh(),
+                    (string) $document->document_number,
+                    $userId
+                );
+
+                $document->forceFill([
+                    'meta' => array_merge((array) ($document->meta ?? []), [
+                        'order_status_snapshot' => $statusTransition['snapshot'],
+                        'applied_order_status' => $statusTransition['applied_status'],
+                        'return_status_snapshot' => $statusTransition['return_status_snapshot'],
+                        'applied_return_status' => $statusTransition['applied_return_status'],
+                    ]),
+                ])->save();
+
+                $this->inventoryService->refreshProducts($touchedProductIds);
+
+                return $document->fresh([
+                    'creator:id,name',
+                    'items.product:id,sku,name',
+                ]);
+            });
+        } catch (\Throwable $exception) {
+            Log::warning('Failed to create automatic exchange return slip.', [
+                'order_id' => (int) ($order->id ?? 0),
+                'order_number' => $order->order_number ?? null,
+                'created_from' => $createdFrom,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return null;
+        }
+    }
+
+    public function createAutomaticReturnedOrderSlip(
+        Order $order,
+        ?int $userId = null,
+        string $createdFrom = 'order_status_update'
+    ): ?InventoryDocument {
+        if (!$this->canCreateAutomaticReturnedOrderSlip()) {
+            return null;
+        }
+
+        try {
+            return DB::transaction(function () use ($order, $userId, $createdFrom) {
+                $lockedOrder = Order::query()
+                    ->whereKey((int) $order->id)
+                    ->lockForUpdate()
+                    ->with('items')
+                    ->first();
+
+                if (
+                    !$lockedOrder
+                    || (string) ($lockedOrder->order_kind ?: Order::KIND_OFFICIAL) !== Order::KIND_OFFICIAL
+                    || in_array($lockedOrder->getNormalizedOrderType(), self::RETURN_STATUS_ONLY_ORDER_TYPES, true)
+                    || trim((string) $lockedOrder->status) !== OrderStatusCatalog::RETURNED_CODE
+                    || !$this->orderEligibleForAutomaticReturnSlip($lockedOrder)
+                    || $this->orderHasActiveReturnSlip($lockedOrder)
+                ) {
+                    return null;
+                }
+
+                $items = $this->automaticReturnedOrderItems($lockedOrder);
+                if ($items->isEmpty()) {
+                    return null;
+                }
+
+                return $this->createSlip($lockedOrder, [
+                    'type' => 'return',
+                    'document_date' => now()->toDateString(),
+                    'notes' => 'Tự động tạo phiếu hoàn khi đơn đã hoàn.',
+                    'items' => $items->all(),
+                    'meta' => [
+                        'source' => self::AUTO_RETURNED_ORDER_SOURCE,
+                        'created_from' => $createdFrom,
+                        'order_id' => (int) $lockedOrder->id,
+                        'order_number' => $lockedOrder->order_number,
+                    ],
+                ], $userId);
+            });
+        } catch (\Throwable $exception) {
+            Log::warning('Failed to create automatic returned order slip.', [
+                'order_id' => (int) ($order->id ?? 0),
+                'order_number' => $order->order_number ?? null,
+                'created_from' => $createdFrom,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return null;
+        }
+    }
+
     public function deleteSlip(Order $order, int $documentId): void
     {
         DB::transaction(function () use ($order, $documentId) {
@@ -993,6 +1243,186 @@ class OrderInventorySlipService
     private function shouldUseReturnStatusForCompletedReturn(Order $order): bool
     {
         return in_array($order->getNormalizedOrderType(), self::RETURN_STATUS_ONLY_ORDER_TYPES, true);
+    }
+
+    private function canCreateAutomaticExchangeReturnSlip(): bool
+    {
+        return Schema::hasTable('order_supplement_items')
+            && Schema::hasTable('inventory_documents')
+            && Schema::hasTable('inventory_document_items')
+            && Schema::hasTable('inventory_batches')
+            && Schema::hasTable('products');
+    }
+
+    private function canCreateAutomaticReturnedOrderSlip(): bool
+    {
+        return Schema::hasTable('order_items')
+            && Schema::hasTable('inventory_documents')
+            && Schema::hasTable('inventory_document_items')
+            && Schema::hasTable('inventory_batches')
+            && Schema::hasTable('products');
+    }
+
+    private function orderEligibleForAutomaticReturnSlip(Order $order): bool
+    {
+        $startAt = $this->automaticReturnSlipStartAt();
+        if (!$startAt) {
+            return false;
+        }
+
+        $orderCreatedAt = $order->officialized_at ?: $order->created_at;
+        if (!$orderCreatedAt) {
+            return false;
+        }
+
+        return Carbon::parse($orderCreatedAt)->greaterThanOrEqualTo($startAt);
+    }
+
+    private function automaticReturnSlipStartAt(): ?Carbon
+    {
+        if ($this->automaticReturnSlipStartAtResolved) {
+            return $this->automaticReturnSlipStartAt?->copy();
+        }
+
+        $this->automaticReturnSlipStartAtResolved = true;
+
+        if (!Schema::hasTable('system_settings')) {
+            return null;
+        }
+
+        $value = SystemSetting::getValue(self::AUTO_RETURN_SLIP_START_SETTING);
+        if (!is_string($value) || trim($value) === '') {
+            $value = now()->toDateTimeString();
+            SystemSetting::setValue(self::AUTO_RETURN_SLIP_START_SETTING, $value);
+        }
+
+        try {
+            $this->automaticReturnSlipStartAt = Carbon::parse($value);
+        } catch (\Throwable) {
+            $this->automaticReturnSlipStartAt = null;
+        }
+
+        return $this->automaticReturnSlipStartAt?->copy();
+    }
+
+    private function orderHasActiveReturnSlip(Order $order): bool
+    {
+        $query = InventoryDocument::query()
+            ->where('type', 'return')
+            ->whereIn('status', self::ACTIVE_STATUSES)
+            ->where(function ($documentQuery) use ($order) {
+                $documentQuery->where(function ($legacyQuery) use ($order) {
+                    $legacyQuery
+                        ->where('reference_type', 'order')
+                        ->where('reference_id', (int) $order->id);
+                });
+
+                if ($this->hasInventoryDocumentOrderLinksTable()) {
+                    $documentQuery->orWhereExists(function ($linkQuery) use ($order) {
+                        $linkQuery
+                            ->select(DB::raw(1))
+                            ->from('inventory_document_order_links')
+                            ->whereColumn('inventory_document_order_links.inventory_document_id', 'inventory_documents.id')
+                            ->where('inventory_document_order_links.order_id', (int) $order->id);
+                    });
+                }
+            });
+
+        return $query->exists();
+    }
+
+    private function automaticExchangeReturnItems(Order $order): Collection
+    {
+        return $order->supplementItems
+            ->filter(function ($item) {
+                return (int) ($item->product_id ?? 0) > 0
+                    && InventoryQuantity::normalize($item->quantity ?? 0) > 0;
+            })
+            ->groupBy(fn ($item) => (int) $item->product_id)
+            ->map(function (Collection $groupedItems, int $productId) {
+                $quantity = InventoryQuantity::normalize(
+                    $groupedItems->sum(fn ($item) => InventoryQuantity::normalize($item->quantity ?? 0))
+                );
+
+                if ($quantity <= 0) {
+                    return null;
+                }
+
+                $totalCost = round($groupedItems->sum(function ($item) {
+                    $quantity = InventoryQuantity::normalize($item->quantity ?? 0);
+                    $storedTotal = $item->total_cost;
+
+                    return $storedTotal !== null && $storedTotal !== ''
+                        ? (float) $storedTotal
+                        : round((float) ($item->cost_price ?? 0) * $quantity, 2);
+                }), 2);
+                $totalPrice = round($groupedItems->sum(function ($item) {
+                    $quantity = InventoryQuantity::normalize($item->quantity ?? 0);
+                    $storedTotal = $item->total_price;
+
+                    return $storedTotal !== null && $storedTotal !== ''
+                        ? (float) $storedTotal
+                        : round((float) ($item->price ?? 0) * $quantity, 2);
+                }), 2);
+                $firstItem = $groupedItems->first();
+
+                return [
+                    'product_id' => $productId,
+                    'product_name' => $firstItem?->product_name_snapshot ?: "San pham #{$productId}",
+                    'product_sku' => $firstItem?->product_sku_snapshot,
+                    'quantity' => $quantity,
+                    'unit_cost' => $quantity > 0 ? round($totalCost / $quantity, 2) : 0,
+                    'unit_price' => $quantity > 0 ? round($totalPrice / $quantity, 2) : 0,
+                    'notes' => $groupedItems
+                        ->pluck('notes')
+                        ->filter()
+                        ->map(fn ($note) => trim((string) $note))
+                        ->filter()
+                        ->unique()
+                        ->implode(' | '),
+                    'supplement_item_ids' => $groupedItems
+                        ->pluck('id')
+                        ->map(fn ($id) => (int) $id)
+                        ->filter()
+                        ->values()
+                        ->all(),
+                ];
+            })
+            ->filter()
+            ->values();
+    }
+
+    private function automaticReturnedOrderItems(Order $order): Collection
+    {
+        $order->loadMissing(['items']);
+
+        $automaticExports = Schema::hasTable('shipments') && Schema::hasTable('shipment_items')
+            ? $this->loadAutomaticExportsForSingleOrder($order)
+            : collect();
+        $detail = $this->buildDetailPayload(
+            $order,
+            $this->loadDocumentsForSingleOrder($order),
+            $automaticExports,
+            false
+        );
+
+        return collect($detail['products'] ?? [])
+            ->map(function (array $product) {
+                $productId = (int) ($product['product_id'] ?? 0);
+                $quantity = InventoryQuantity::normalize($product['reversible_quantity'] ?? 0);
+
+                if ($productId <= 0 || $quantity <= 0) {
+                    return null;
+                }
+
+                return [
+                    'product_id' => $productId,
+                    'quantity' => $quantity,
+                    'notes' => 'Tự động từ đơn đã hoàn',
+                ];
+            })
+            ->filter()
+            ->values();
     }
 
     private function normalizeOrderReturnStatus(mixed $returnStatus): string
@@ -2232,12 +2662,12 @@ class OrderInventorySlipService
         $selectedOrders = collect($sourceContext['orders']);
 
         if ($document !== null) {
-            $this->ensureReturnSlipCanBeDeleted($document);
-
             $existingAdjustmentDocument = $this->findLinkedAdjustmentDocument($document);
             if ($existingAdjustmentDocument) {
                 $this->inventoryService->deleteDocument($existingAdjustmentDocument);
             }
+
+            $this->ensureReturnSlipCanBeDeleted($document);
 
             InventoryBatch::query()
                 ->where('source_type', 'document')
@@ -2901,6 +3331,10 @@ class OrderInventorySlipService
 
             $allocation = $this->allocateManagedReturnToOrders($orderBreakdown, $actualQuantity, $primaryOrder);
 
+            $isExtraProduct = array_key_exists('is_extra_product', $item)
+                ? (bool) $item['is_extra_product']
+                : $exportedQuantity === 0;
+
             $normalized[$productId] = [
                 'product_id' => $productId,
                 'product_name' => $source['product_name'] ?? ($item['product_name'] ?? "San pham #{$productId}"),
@@ -2909,7 +3343,7 @@ class OrderInventorySlipService
                 'actual_quantity' => $actualQuantity,
                 'discrepancy_quantity' => $actualQuantity - $exportedQuantity,
                 'notes' => $item['notes'] ?? null,
-                'is_extra_product' => $exportedQuantity === 0,
+                'is_extra_product' => $isExtraProduct,
                 'order_breakdown' => $allocation->all(),
                 'unit_cost' => $this->resolveManagedReturnWeightedUnitCost($allocation),
                 'unit_price' => $this->resolveManagedReturnWeightedUnitPrice($allocation),

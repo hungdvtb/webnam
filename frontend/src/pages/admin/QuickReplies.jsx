@@ -289,6 +289,14 @@ const sendPayloadClipboardContents = (payload) => (Array.isArray(payload?.conten
     })
     .filter((content) => content.body || content.images.length > 0);
 
+const bridgeClipboardUrl = (url) => {
+    try {
+        return new URL(url, window.location.origin).href;
+    } catch {
+        return String(url || '');
+    }
+};
+
 const focusZaloWebPopup = () => {
     let zaloWindow = null;
 
@@ -397,12 +405,7 @@ const replyImageSteps = (reply) => flattenReplyImages(reply)
     })
     .filter(Boolean);
 
-const copyTextFallback = async (text) => {
-    if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(text);
-        return;
-    }
-
+const copyTextWithTextarea = (text) => {
     const textarea = document.createElement('textarea');
     textarea.value = text;
     textarea.setAttribute('readonly', 'readonly');
@@ -410,8 +413,30 @@ const copyTextFallback = async (text) => {
     textarea.style.opacity = '0';
     document.body.appendChild(textarea);
     textarea.select();
-    document.execCommand('copy');
-    document.body.removeChild(textarea);
+    const copied = document.execCommand('copy');
+    textarea.remove();
+
+    if (!copied) {
+        throw new Error('Không copy được nội dung.');
+    }
+};
+
+const copyTextFallback = async (text) => {
+    let clipboardError = null;
+    if (navigator.clipboard?.writeText && document.hasFocus()) {
+        try {
+            await navigator.clipboard.writeText(text);
+            return;
+        } catch (err) {
+            clipboardError = err;
+        }
+    }
+
+    try {
+        copyTextWithTextarea(text);
+    } catch (err) {
+        throw clipboardError || err;
+    }
 };
 
 const shouldFetchWithCredentials = (url) => {
@@ -535,7 +560,7 @@ const isLocalBridgeNetworkError = (error) => {
 };
 
 const localBridgeUnavailableMessage = (targetAppName) => (
-    `Không thấy backend local tại 127.0.0.1:8003, nên web chính chưa kéo được ${targetAppName}. Bật backend local trên máy này rồi bấm Panel phải lại.`
+    `Không thấy backend local tại 127.0.0.1:8003, nên web chính chưa kéo được ${targetAppName}. Bấm Cài Bridge rồi chạy file cài một lần trên máy này, sau đó bấm Panel phải lại.`
 );
 
 const openZaloWebWindowBesideSidebar = (metrics) => {
@@ -2353,7 +2378,7 @@ function QuickReplies() {
             setCopiedState({ id: replyId, mode: 'all' });
             setZaloPasteFlow(null);
             setSendDraft(null);
-            setMessage(`Chưa thấy backend local trên máy này nên đã copy nội dung vào clipboard. Bấm Ctrl+V rồi Enter trong ${targetName}. Muốn tự gửi trực tiếp thì bật file start-backend-8003.bat trên máy này rồi gửi lại.`);
+            setMessage(`Chưa thấy backend local trên máy này nên đã copy nội dung vào clipboard. Bấm Ctrl+V rồi Enter trong ${targetName}. Muốn tự gửi trực tiếp thì bấm Cài Bridge và chạy file cài một lần trên máy này rồi gửi lại.`);
             return true;
         };
 
@@ -2389,8 +2414,8 @@ function QuickReplies() {
                     }
 
                     throw new Error(imageCount > 0
-                        ? `Chưa thấy backend local nên chưa tự gửi được Zalo Web. Bật file start-backend-8003.bat rồi bấm gửi lại; mẫu này có ${imageCount} ảnh nên không gửi bằng chế độ copy thủ công.`
-                        : 'Chưa thấy backend local nên chưa tự gửi được Zalo Web. Bật file start-backend-8003.bat rồi bấm gửi lại.'
+                        ? `Chưa thấy backend local nên chưa tự gửi được Zalo Web. Bấm Cài Bridge và chạy file cài một lần rồi bấm gửi lại; mẫu này có ${imageCount} ảnh nên không gửi bằng chế độ copy thủ công.`
+                        : 'Chưa thấy backend local nên chưa tự gửi được Zalo Web. Bấm Cài Bridge và chạy file cài một lần rồi bấm gửi lại.'
                     );
                 };
 
@@ -2415,8 +2440,8 @@ function QuickReplies() {
                     let pastedImagesInStep = 0;
 
                     if (content.body) {
-                        await copyTextFallback(content.body);
                         const pasteResponse = await pasteToZaloWeb({
+                            text: content.body,
                             paste: true,
                             enter: false,
                         });
@@ -2429,21 +2454,14 @@ function QuickReplies() {
                     }
 
                     for (const item of content.images) {
-                        let copyResult = null;
-                        try {
-                            copyResult = await writeImageSourceToClipboard(item.src);
-                        } catch (imageErr) {
-                            console.warn('Cannot copy image to clipboard for Zalo Web.', imageErr, item.image);
-                            manualImages += 1;
-                            continue;
-                        }
-
-                        if (copyResult !== 'image') {
+                        const imageUrl = bridgeClipboardUrl(item.src);
+                        if (!imageUrl) {
                             manualImages += 1;
                             continue;
                         }
 
                         const pasteResponse = await pasteToZaloWeb({
+                            image_urls: [imageUrl],
                             paste: true,
                             enter: false,
                         });
@@ -2510,8 +2528,8 @@ function QuickReplies() {
                     }
 
                     throw new Error(imageCount > 0
-                        ? `Chưa thấy backend local nên chưa tự gửi được Zalo PC. Bật file start-backend-8003.bat rồi bấm gửi lại; mẫu này có ${imageCount} ảnh nên không gửi bằng chế độ copy thủ công.`
-                        : 'Chưa thấy backend local nên chưa tự gửi được Zalo PC. Bật file start-backend-8003.bat rồi bấm gửi lại.'
+                        ? `Chưa thấy backend local nên chưa tự gửi được Zalo PC. Bấm Cài Bridge và chạy file cài một lần rồi bấm gửi lại; mẫu này có ${imageCount} ảnh nên không gửi bằng chế độ copy thủ công.`
+                        : 'Chưa thấy backend local nên chưa tự gửi được Zalo PC. Bấm Cài Bridge và chạy file cài một lần rồi bấm gửi lại.'
                     );
                 };
 
@@ -2536,8 +2554,8 @@ function QuickReplies() {
                     let pastedImagesInStep = 0;
 
                     if (content.body) {
-                        await copyTextFallback(content.body);
                         const pasteResponse = await pasteToZaloPc({
+                            text: content.body,
                             paste: true,
                             enter: false,
                         });
@@ -2550,21 +2568,14 @@ function QuickReplies() {
                     }
 
                     for (const item of content.images) {
-                        let copyResult = null;
-                        try {
-                            copyResult = await writeImageSourceToClipboard(item.src);
-                        } catch (imageErr) {
-                            console.warn('Cannot copy image to clipboard for Zalo PC.', imageErr, item.image);
-                            manualImages += 1;
-                            continue;
-                        }
-
-                        if (copyResult !== 'image') {
+                        const imageUrl = bridgeClipboardUrl(item.src);
+                        if (!imageUrl) {
                             manualImages += 1;
                             continue;
                         }
 
                         const pasteResponse = await pasteToZaloPc({
+                            image_urls: [imageUrl],
                             paste: true,
                             enter: false,
                         });
@@ -2931,7 +2942,7 @@ function QuickReplies() {
                             [180, 620, 1400].forEach((delay) => {
                                 window.setTimeout(() => dockSidebarWindowToRight(sidebarWindow, metrics, false), delay);
                             });
-                            setMessage('Đã mở panel PC bên phải. Không thấy backend local nên chưa tự kéo được Zalo PC; kéo Zalo app sang trái hoặc bật backend local để tự kéo.');
+                            setMessage('Đã mở panel PC bên phải. Không thấy backend local nên chưa tự kéo được Zalo PC; kéo Zalo app sang trái hoặc bấm Cài Bridge để tự kéo.');
                             return;
                         }
 

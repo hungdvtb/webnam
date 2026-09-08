@@ -44,6 +44,12 @@ public static class Win32LiteBridge
 
 Add-Type -AssemblyName System.Windows.Forms | Out-Null
 
+try {
+    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+} catch {
+    # Older Windows builds may not expose the enum; the default protocol still applies.
+}
+
 $script:AllowedOrigins = @(
     'http://localhost:3003',
     'http://127.0.0.1:3003',
@@ -149,6 +155,196 @@ function Limit-Number {
     )
 
     return [Math]::Min([Math]::Max($Value, $Min), $Max)
+}
+
+function Invoke-ClipboardWrite {
+    param([scriptblock] $Action)
+
+    $lastError = $null
+    for ($attempt = 0; $attempt -lt 10; $attempt += 1) {
+        try {
+            & $Action
+            return
+        } catch {
+            $lastError = $_
+            Start-Sleep -Milliseconds (80 + ($attempt * 80))
+        }
+    }
+
+    throw "Cannot write Windows clipboard: $($lastError.Exception.Message)"
+}
+
+function Set-BridgeClipboardText {
+    param([string] $Text)
+
+    if ($null -eq $Text) {
+        return $false
+    }
+
+    Invoke-ClipboardWrite {
+        [System.Windows.Forms.Clipboard]::SetText($Text, [System.Windows.Forms.TextDataFormat]::UnicodeText)
+    }
+
+    return $true
+}
+
+function Clear-OldBridgeTempDirectories {
+    param([string] $Root)
+
+    if (-not (Test-Path -LiteralPath $Root)) {
+        return
+    }
+
+    try {
+        Get-ChildItem -LiteralPath $Root -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-2) } |
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    } catch {
+        # Temp cleanup should never block sending.
+    }
+}
+
+function New-BridgeTempDirectory {
+    $root = Join-Path ([System.IO.Path]::GetTempPath()) 'WebnamZaloBridge\clipboard'
+    [void] [System.IO.Directory]::CreateDirectory($root)
+    Clear-OldBridgeTempDirectories $root
+
+    $directory = Join-Path $root ([Guid]::NewGuid().ToString('N'))
+    [void] [System.IO.Directory]::CreateDirectory($directory)
+
+    return $directory
+}
+
+function Resolve-BridgeDownloadExtension {
+    param(
+        [string] $Url,
+        [string] $ContentType
+    )
+
+    $allowedExtensions = @('.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.mp4', '.mov', '.webm', '.mkv', '.avi')
+    try {
+        $extension = [System.IO.Path]::GetExtension(([Uri] $Url).AbsolutePath).ToLowerInvariant()
+        if ($allowedExtensions -contains $extension) {
+            return $extension
+        }
+    } catch {
+        # Fall back to content type below.
+    }
+
+    $normalizedType = "$ContentType".Split(';')[0].Trim().ToLowerInvariant()
+    switch ($normalizedType) {
+        'image/png' { return '.png' }
+        'image/webp' { return '.webp' }
+        'image/gif' { return '.gif' }
+        'image/bmp' { return '.bmp' }
+        'image/x-ms-bmp' { return '.bmp' }
+        'video/mp4' { return '.mp4' }
+        'video/quicktime' { return '.mov' }
+        'video/webm' { return '.webm' }
+        'video/x-matroska' { return '.mkv' }
+        'video/x-msvideo' { return '.avi' }
+        default { return '.jpg' }
+    }
+}
+
+function Save-BridgeUrlToFile {
+    param(
+        [string] $Url,
+        [string] $Directory,
+        [int] $Index
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Url)) {
+        throw 'Media URL is empty.'
+    }
+
+    try {
+        $uri = [Uri] $Url
+        if (-not (@('http', 'https') -contains $uri.Scheme.ToLowerInvariant())) {
+            throw 'Media URL must be http or https.'
+        }
+    } catch {
+        throw "Invalid media URL: $Url"
+    }
+
+    $client = New-Object System.Net.WebClient
+    try {
+        $client.Headers.Set('User-Agent', 'Mozilla/5.0 WebnamZaloBridge/1.0')
+        $bytes = $client.DownloadData($Url)
+        $contentType = "$($client.ResponseHeaders['Content-Type'])"
+        $extension = Resolve-BridgeDownloadExtension $Url $contentType
+        $path = Join-Path $Directory ('zalo-bridge-media-{0:D2}{1}' -f $Index, $extension)
+        [System.IO.File]::WriteAllBytes($path, $bytes)
+
+        return $path
+    } finally {
+        $client.Dispose()
+    }
+}
+
+function Set-BridgeClipboardFiles {
+    param([string[]] $Paths)
+
+    $existingPaths = @($Paths | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_ -PathType Leaf) })
+    if ($existingPaths.Count -eq 0) {
+        return 0
+    }
+
+    $collection = New-Object System.Collections.Specialized.StringCollection
+    foreach ($path in $existingPaths) {
+        [void] $collection.Add((Resolve-Path -LiteralPath $path).Path)
+    }
+
+    Invoke-ClipboardWrite {
+        [System.Windows.Forms.Clipboard]::SetFileDropList($collection)
+    }
+
+    return $existingPaths.Count
+}
+
+function Set-BridgeClipboardPayload {
+    param($Payload)
+
+    $filePaths = @()
+    $providedPaths = ConvertTo-StringArray (Get-BridgeValue $Payload 'file_paths' @()) @()
+    foreach ($path in $providedPaths) {
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            $filePaths += (Resolve-Path -LiteralPath $path).Path
+        }
+    }
+
+    $mediaUrls = @()
+    $mediaUrls += ConvertTo-StringArray (Get-BridgeValue $Payload 'image_urls' @()) @()
+    $mediaUrls += ConvertTo-StringArray (Get-BridgeValue $Payload 'media_urls' @()) @()
+    $mediaUrls += ConvertTo-StringArray (Get-BridgeValue $Payload 'video_urls' @()) @()
+
+    if ($mediaUrls.Count -gt 0) {
+        $tempDirectory = New-BridgeTempDirectory
+        for ($index = 0; $index -lt $mediaUrls.Count; $index += 1) {
+            $filePaths += Save-BridgeUrlToFile $mediaUrls[$index] $tempDirectory ($index + 1)
+        }
+    }
+
+    if ($filePaths.Count -gt 0) {
+        return @{
+            type = 'files'
+            count = Set-BridgeClipboardFiles ([string[]] $filePaths)
+        }
+    }
+
+    $textValue = Get-BridgeValue $Payload 'text' $null
+    if ($null -ne $textValue -and "$textValue" -ne '') {
+        [void] (Set-BridgeClipboardText "$textValue")
+        return @{
+            type = 'text'
+            count = 1
+        }
+    }
+
+    return @{
+        type = 'existing'
+        count = 0
+    }
 }
 
 function Normalize-ZaloTarget {
@@ -384,6 +580,7 @@ function Invoke-PasteZalo {
     $enter = ConvertTo-BridgeBool $Payload.enter $false
     $defaultDelay = if ($enter) { 250 } else { 0 }
     $delay = Limit-Number ([int] (Get-BridgeValue $Payload 'before_enter_delay_ms' $defaultDelay)) 0 5000
+    $clipboardPayload = Set-BridgeClipboardPayload $Payload
 
     Activate-Window $window
     $shell = New-Object -ComObject WScript.Shell
@@ -407,6 +604,8 @@ function Invoke-PasteZalo {
         target = $target
         pasted = $paste
         enter = $enter
+        clipboard_type = $clipboardPayload.type
+        clipboard_count = $clipboardPayload.count
         window_title = $window.Title
         process = $window.ProcessName
     }

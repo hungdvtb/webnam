@@ -1,0 +1,679 @@
+param(
+    [int] $Port = 8003,
+    [switch] $SelfTest
+)
+
+$ErrorActionPreference = 'Stop'
+
+if (-not ('Win32LiteBridge' -as [type])) {
+    Add-Type @"
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+
+public static class Win32LiteBridge
+{
+    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    public static extern bool IsWindowVisible(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern int GetWindowTextLength(IntPtr hWnd);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+
+    [DllImport("user32.dll")]
+    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll")]
+    public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern bool MoveWindow(IntPtr hWnd, int X, int Y, int nWidth, int nHeight, bool bRepaint);
+}
+"@
+}
+
+Add-Type -AssemblyName System.Windows.Forms | Out-Null
+
+$script:AllowedOrigins = @(
+    'http://localhost:3003',
+    'http://127.0.0.1:3003',
+    'https://admin.gomdaithanh.com',
+    'http://admin.gomdaithanh.com'
+)
+
+$script:BrowserProcessNames = @('chrome', 'msedge', 'firefox', 'browser', 'coccoc', 'brave')
+
+function Test-ContainsText {
+    param(
+        [string] $Text,
+        [string] $Needle
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Text) -or [string]::IsNullOrWhiteSpace($Needle)) {
+        return $false
+    }
+
+    return $Text.IndexOf($Needle, [StringComparison]::OrdinalIgnoreCase) -ge 0
+}
+
+function Test-ContainsAnyText {
+    param(
+        [string] $Text,
+        [string[]] $Needles
+    )
+
+    foreach ($needle in $Needles) {
+        if (Test-ContainsText $Text $needle) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function ConvertTo-StringArray {
+    param(
+        $Value,
+        [string[]] $Fallback
+    )
+
+    $items = @()
+    if ($null -eq $Value) {
+        $items = @()
+    } elseif ($Value -is [array]) {
+        $items = $Value
+    } else {
+        $items = @($Value)
+    }
+
+    $normalized = @($items | ForEach-Object { "$_".Trim() } | Where-Object { $_ -ne '' })
+    if ($normalized.Count -gt 0) {
+        return [string[]] $normalized
+    }
+
+    return [string[]] $Fallback
+}
+
+function ConvertTo-BridgeBool {
+    param(
+        $Value,
+        [bool] $Default
+    )
+
+    if ($null -eq $Value) {
+        return $Default
+    }
+
+    if ($Value -is [bool]) {
+        return [bool] $Value
+    }
+
+    $text = "$Value".Trim().ToLowerInvariant()
+    return @('1', 'true', 'yes', 'on') -contains $text
+}
+
+function Get-BridgeValue {
+    param(
+        $Object,
+        [string] $Name,
+        $Default
+    )
+
+    if ($null -eq $Object -or [string]::IsNullOrWhiteSpace($Name)) {
+        return $Default
+    }
+
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property -or $null -eq $property.Value) {
+        return $Default
+    }
+
+    return $property.Value
+}
+
+function Limit-Number {
+    param(
+        [int] $Value,
+        [int] $Min,
+        [int] $Max
+    )
+
+    return [Math]::Min([Math]::Max($Value, $Min), $Max)
+}
+
+function Normalize-ZaloTarget {
+    param($Target)
+
+    $text = "$Target".Trim().ToLowerInvariant()
+    if (@('web', 'chrome', 'zalo_web', 'zalo-web') -contains $text) {
+        return 'web'
+    }
+
+    return 'pc'
+}
+
+function Get-ZaloKeywords {
+    param([string] $Target)
+
+    if ((Normalize-ZaloTarget $Target) -eq 'web') {
+        return @('Zalo -', 'chat.zalo.me', 'web.zalo.me')
+    }
+
+    return @('Zalo')
+}
+
+function Test-BrowserProcess {
+    param([string] $ProcessName)
+
+    $normalized = "$ProcessName".Trim().ToLowerInvariant()
+    foreach ($name in $script:BrowserProcessNames) {
+        if ($normalized -eq $name) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Get-TopLevelWindows {
+    $script:LiteBridgeWindows = @()
+
+    $callback = [Win32LiteBridge+EnumWindowsProc] {
+        param([IntPtr] $Handle, [IntPtr] $Param)
+
+        try {
+            if (-not [Win32LiteBridge]::IsWindowVisible($Handle)) {
+                return $true
+            }
+
+            $length = [Win32LiteBridge]::GetWindowTextLength($Handle)
+            if ($length -le 0) {
+                return $true
+            }
+
+            $titleBuilder = New-Object System.Text.StringBuilder -ArgumentList ($length + 1)
+            [void] [Win32LiteBridge]::GetWindowText($Handle, $titleBuilder, $titleBuilder.Capacity)
+            $title = $titleBuilder.ToString().Trim()
+            if ($title -eq '') {
+                return $true
+            }
+
+            [uint32] $processId = 0
+            [void] [Win32LiteBridge]::GetWindowThreadProcessId($Handle, [ref] $processId)
+            $processName = ''
+            try {
+                $processName = (Get-Process -Id ([int] $processId) -ErrorAction Stop).ProcessName
+            } catch {
+                $processName = ''
+            }
+
+            $script:LiteBridgeWindows += [pscustomobject] @{
+                Handle = $Handle
+                Title = $title
+                ProcessId = [int] $processId
+                ProcessName = $processName
+            }
+        } catch {
+            return $true
+        }
+
+        return $true
+    }
+
+    [void] [Win32LiteBridge]::EnumWindows($callback, [IntPtr]::Zero)
+    $windows = @($script:LiteBridgeWindows)
+    Remove-Variable -Scope Script -Name LiteBridgeWindows -ErrorAction SilentlyContinue
+
+    return $windows
+}
+
+function Get-ZaloWindowScore {
+    param(
+        $Window,
+        [string] $Target,
+        [string[]] $Keywords
+    )
+
+    $score = 0
+    foreach ($keyword in $Keywords) {
+        if (Test-ContainsText $Window.Title $keyword) {
+            $score += 20
+        }
+    }
+
+    if (Test-ContainsText $Window.Title 'Sidebar') {
+        $score -= 120
+    }
+
+    if (Test-ContainsText $Window.Title 'quick-replies') {
+        $score -= 120
+    }
+
+    $isBrowser = Test-BrowserProcess $Window.ProcessName
+    if ($Target -eq 'web') {
+        if ($isBrowser) {
+            $score += 80
+        }
+        if (Test-ContainsText $Window.Title 'Zalo -') {
+            $score += 40
+        }
+        if ((Test-ContainsText $Window.Title 'chat.zalo') -or (Test-ContainsText $Window.Title 'web.zalo')) {
+            $score += 40
+        }
+    } else {
+        if (-not $isBrowser) {
+            $score += 80
+        }
+        if (Test-ContainsText $Window.ProcessName 'Zalo') {
+            $score += 120
+        }
+        if (Test-ContainsText $Window.Title 'Zalo -') {
+            $score += 30
+        }
+    }
+
+    return $score
+}
+
+function Find-ZaloWindow {
+    param(
+        [string] $Target,
+        [string[]] $Keywords
+    )
+
+    $targetName = Normalize-ZaloTarget $Target
+    $fallbackKeywords = Get-ZaloKeywords $targetName
+    $keywordsToUse = ConvertTo-StringArray $Keywords $fallbackKeywords
+    $matches = @()
+
+    foreach ($window in (Get-TopLevelWindows)) {
+        if (-not (Test-ContainsAnyText $window.Title $keywordsToUse)) {
+            continue
+        }
+
+        $score = Get-ZaloWindowScore $window $targetName $keywordsToUse
+        if ($score -gt 0) {
+            $matches += [pscustomobject] @{ Window = $window; Score = $score }
+        }
+    }
+
+    return ($matches | Sort-Object -Property Score -Descending | Select-Object -First 1).Window
+}
+
+function Find-PanelWindow {
+    param([string[]] $Keywords)
+
+    $fallback = @('Sidebar', 'quick-replies', 'admin.gomdaithanh.com', 'localhost:3003')
+    $keywordsToUse = ConvertTo-StringArray $Keywords $fallback
+    $matches = @()
+
+    foreach ($window in (Get-TopLevelWindows)) {
+        if (-not (Test-ContainsAnyText $window.Title $keywordsToUse)) {
+            continue
+        }
+
+        $score = 20
+        foreach ($keyword in $keywordsToUse) {
+            if (Test-ContainsText $window.Title $keyword) {
+                $score += 20
+            }
+        }
+
+        if (Test-ContainsText $window.Title 'Sidebar') {
+            $score += 80
+        }
+        if (Test-ContainsText $window.Title 'quick-replies') {
+            $score += 60
+        }
+        if (Test-BrowserProcess $window.ProcessName) {
+            $score += 20
+        }
+
+        $matches += [pscustomobject] @{ Window = $window; Score = $score }
+    }
+
+    return ($matches | Sort-Object -Property Score -Descending | Select-Object -First 1).Window
+}
+
+function Activate-Window {
+    param($Window)
+
+    if ($null -eq $Window) {
+        throw 'Window not found.'
+    }
+
+    [void] [Win32LiteBridge]::ShowWindow($Window.Handle, 9)
+    Start-Sleep -Milliseconds 120
+    [void] [Win32LiteBridge]::SetForegroundWindow($Window.Handle)
+
+    try {
+        $shell = New-Object -ComObject WScript.Shell
+        if ($Window.ProcessId -gt 0) {
+            [void] $shell.AppActivate($Window.ProcessId)
+        } else {
+            [void] $shell.AppActivate($Window.Title)
+        }
+    } catch {
+        # SetForegroundWindow above is usually enough.
+    }
+
+    Start-Sleep -Milliseconds 160
+}
+
+function Invoke-PasteZalo {
+    param($Payload)
+
+    $target = Normalize-ZaloTarget $Payload.zalo_target
+    $keywords = ConvertTo-StringArray $Payload.window_keywords (Get-ZaloKeywords $target)
+    $window = Find-ZaloWindow $target $keywords
+    if ($null -eq $window) {
+        throw "Cannot find Zalo $target window. Open the Zalo chat window and try again."
+    }
+
+    $paste = ConvertTo-BridgeBool $Payload.paste $true
+    $enter = ConvertTo-BridgeBool $Payload.enter $false
+    $defaultDelay = if ($enter) { 250 } else { 0 }
+    $delay = Limit-Number ([int] (Get-BridgeValue $Payload 'before_enter_delay_ms' $defaultDelay)) 0 5000
+
+    Activate-Window $window
+    $shell = New-Object -ComObject WScript.Shell
+
+    if ($paste) {
+        $shell.SendKeys('^v')
+        Start-Sleep -Milliseconds 280
+    }
+
+    if ($enter) {
+        if ($delay -gt 0) {
+            Start-Sleep -Milliseconds $delay
+        }
+        $shell.SendKeys('~')
+        Start-Sleep -Milliseconds 180
+    }
+
+    return @{
+        ok = $true
+        action = 'paste'
+        target = $target
+        pasted = $paste
+        enter = $enter
+        window_title = $window.Title
+        process = $window.ProcessName
+    }
+}
+
+function Test-SafeSidebarUrl {
+    param([string] $Url)
+
+    if ([string]::IsNullOrWhiteSpace($Url)) {
+        return $false
+    }
+
+    try {
+        $uri = [Uri] $Url
+        $host = $uri.Host.ToLowerInvariant()
+        return (@('localhost', '127.0.0.1', 'admin.gomdaithanh.com') -contains $host) -and $uri.AbsolutePath -eq '/admin/quick-replies'
+    } catch {
+        return $false
+    }
+}
+
+function Invoke-SplitZalo {
+    param($Payload)
+
+    $target = Normalize-ZaloTarget $Payload.zalo_target
+    $zaloKeywords = ConvertTo-StringArray $Payload.zalo_window_keywords (Get-ZaloKeywords $target)
+    $panelKeywords = ConvertTo-StringArray $Payload.browser_window_keywords @('Sidebar', 'quick-replies', 'admin.gomdaithanh.com', 'localhost:3003')
+
+    $panel = Find-PanelWindow $panelKeywords
+    if (($null -eq $panel) -and (Test-SafeSidebarUrl "$($Payload.sidebar_url)")) {
+        Start-Process "$($Payload.sidebar_url)"
+        Start-Sleep -Milliseconds 1500
+        $panel = Find-PanelWindow $panelKeywords
+    }
+
+    $zalo = Find-ZaloWindow $target $zaloKeywords
+    if ($null -eq $zalo) {
+        throw "Cannot find Zalo $target window. Open Zalo first and try again."
+    }
+
+    $screen = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+    $gap = Limit-Number ([int] (Get-BridgeValue $Payload 'gap' 0)) 0 48
+    $margin = Limit-Number ([int] (Get-BridgeValue $Payload 'margin' 0)) 0 80
+    $sidebarWidth = Limit-Number ([int] (Get-BridgeValue $Payload 'sidebar_width' 360)) 300 520
+
+    $left = [int] ($screen.Left + $margin)
+    $top = [int] ($screen.Top + $margin)
+    $height = [int] ([Math]::Max(320, $screen.Height - ($margin * 2)))
+    $totalWidth = [int] ([Math]::Max(700, $screen.Width - ($margin * 2)))
+    $zaloWidth = [int] ([Math]::Max(520, $totalWidth - $sidebarWidth - $gap))
+    $panelLeft = [int] ($left + $zaloWidth + $gap)
+
+    [void] [Win32LiteBridge]::ShowWindow($zalo.Handle, 9)
+    [void] [Win32LiteBridge]::MoveWindow($zalo.Handle, $left, $top, $zaloWidth, $height, $true)
+
+    if ($null -ne $panel) {
+        [void] [Win32LiteBridge]::ShowWindow($panel.Handle, 9)
+        [void] [Win32LiteBridge]::MoveWindow($panel.Handle, $panelLeft, $top, $sidebarWidth, $height, $true)
+        Activate-Window $panel
+    } else {
+        Activate-Window $zalo
+    }
+
+    return @{
+        ok = $true
+        action = 'split'
+        target = $target
+        zalo_found = $true
+        browser_found = ($null -ne $panel)
+        zalo_title = $zalo.Title
+        browser_title = $(if ($null -ne $panel) { $panel.Title } else { '' })
+    }
+}
+
+function Test-OriginAllowed {
+    param([string] $Origin)
+
+    if ([string]::IsNullOrWhiteSpace($Origin)) {
+        return $true
+    }
+
+    $originTrimmed = $Origin.TrimEnd('/')
+    foreach ($allowed in $script:AllowedOrigins) {
+        if ($originTrimmed.Equals($allowed.TrimEnd('/'), [StringComparison]::OrdinalIgnoreCase)) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Read-HttpRequest {
+    param([System.Net.Sockets.TcpClient] $Client)
+
+    $Client.ReceiveTimeout = 10000
+    $stream = $Client.GetStream()
+    $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8, $false, 8192, $true)
+    $requestLine = $reader.ReadLine()
+    if ([string]::IsNullOrWhiteSpace($requestLine)) {
+        return $null
+    }
+
+    $headers = @{}
+    while ($true) {
+        $line = $reader.ReadLine()
+        if ($null -eq $line -or $line -eq '') {
+            break
+        }
+
+        $colon = $line.IndexOf(':')
+        if ($colon -gt 0) {
+            $name = $line.Substring(0, $colon).Trim().ToLowerInvariant()
+            $value = $line.Substring($colon + 1).Trim()
+            $headers[$name] = $value
+        }
+    }
+
+    $body = ''
+    $contentLength = 0
+    if ($headers.ContainsKey('content-length')) {
+        [void] [int]::TryParse($headers['content-length'], [ref] $contentLength)
+    }
+
+    if ($contentLength -gt 0) {
+        $buffer = New-Object char[] $contentLength
+        $read = $reader.ReadBlock($buffer, 0, $contentLength)
+        if ($read -gt 0) {
+            $body = -join $buffer[0..($read - 1)]
+        }
+    }
+
+    $parts = $requestLine.Split(' ')
+    $path = if ($parts.Count -ge 2) { $parts[1] } else { '/' }
+    if ($path.StartsWith('http://') -or $path.StartsWith('https://')) {
+        try {
+            $path = ([Uri] $path).PathAndQuery
+        } catch {
+            $path = '/'
+        }
+    }
+
+    return @{
+        Stream = $stream
+        Method = if ($parts.Count -ge 1) { $parts[0].ToUpperInvariant() } else { 'GET' }
+        Path = $path
+        Headers = $headers
+        Body = $body
+    }
+}
+
+function Write-HttpResponse {
+    param(
+        [System.IO.Stream] $Stream,
+        [int] $Status,
+        [string] $Reason,
+        $Body,
+        [string] $Origin
+    )
+
+    $bodyBytes = @()
+    $contentType = 'application/json; charset=utf-8'
+    if ($null -ne $Body) {
+        $json = $Body | ConvertTo-Json -Depth 12 -Compress
+        $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+    }
+
+    $headers = "HTTP/1.1 $Status $Reason`r`n"
+    $headers += "Content-Type: $contentType`r`n"
+    $headers += "Content-Length: $($bodyBytes.Length)`r`n"
+    $headers += "Connection: close`r`n"
+    $headers += "Access-Control-Allow-Methods: POST, OPTIONS`r`n"
+    $headers += "Access-Control-Allow-Headers: Accept, Content-Type, X-Requested-With, X-Quick-Reply-Local-Bridge`r`n"
+    $headers += "Access-Control-Max-Age: 600`r`n"
+    $headers += "Access-Control-Allow-Private-Network: true`r`n"
+    if (-not [string]::IsNullOrWhiteSpace($Origin)) {
+        $headers += "Access-Control-Allow-Origin: $Origin`r`n"
+        $headers += "Vary: Origin`r`n"
+    }
+    $headers += "`r`n"
+
+    $headerBytes = [System.Text.Encoding]::ASCII.GetBytes($headers)
+    $Stream.Write($headerBytes, 0, $headerBytes.Length)
+    if ($bodyBytes.Length -gt 0) {
+        $Stream.Write($bodyBytes, 0, $bodyBytes.Length)
+    }
+    $Stream.Flush()
+}
+
+function Handle-Request {
+    param($Request)
+
+    $origin = ''
+    if ($Request.Headers.ContainsKey('origin')) {
+        $origin = $Request.Headers['origin']
+    }
+
+    if (-not (Test-OriginAllowed $origin)) {
+        Write-HttpResponse $Request.Stream 403 'Forbidden' @{ message = 'Origin is not allowed.' } ''
+        return
+    }
+
+    if ($Request.Method -eq 'OPTIONS') {
+        Write-HttpResponse $Request.Stream 204 'No Content' $null $origin
+        return
+    }
+
+    if ($Request.Method -ne 'POST') {
+        Write-HttpResponse $Request.Stream 405 'Method Not Allowed' @{ message = 'Use POST.' } $origin
+        return
+    }
+
+    if (-not $Request.Headers.ContainsKey('x-quick-reply-local-bridge') -or $Request.Headers['x-quick-reply-local-bridge'] -ne '1') {
+        Write-HttpResponse $Request.Stream 403 'Forbidden' @{ message = 'Missing bridge header.' } $origin
+        return
+    }
+
+    $pathOnly = ($Request.Path -split '\?')[0]
+    $payload = @{}
+    if (-not [string]::IsNullOrWhiteSpace($Request.Body)) {
+        $payload = $Request.Body | ConvertFrom-Json
+    }
+
+    try {
+        if ($pathOnly -eq '/api/quick-replies/local-window-bridge/paste-zalo') {
+            $result = Invoke-PasteZalo $payload
+            Write-HttpResponse $Request.Stream 200 'OK' @{ message = 'Lite bridge pasted to Zalo.'; result = $result } $origin
+            return
+        }
+
+        if ($pathOnly -eq '/api/quick-replies/local-window-bridge/split-zalo') {
+            $result = Invoke-SplitZalo $payload
+            Write-HttpResponse $Request.Stream 200 'OK' @{ message = 'Lite bridge arranged Zalo and quick reply panel.'; result = $result } $origin
+            return
+        }
+
+        Write-HttpResponse $Request.Stream 404 'Not Found' @{ message = 'Bridge endpoint not found.' } $origin
+    } catch {
+        Write-HttpResponse $Request.Stream 422 'Unprocessable Entity' @{ message = $_.Exception.Message } $origin
+    }
+}
+
+if ($SelfTest) {
+    $windows = @(Get-TopLevelWindows)
+    Write-Host "OK: Zalo bridge lite script loaded. Visible windows: $($windows.Count). Port: $Port."
+    exit 0
+}
+
+$listener = New-Object System.Net.Sockets.TcpListener -ArgumentList ([System.Net.IPAddress]::Parse('127.0.0.1')), $Port
+$listener.Server.SetSocketOption([System.Net.Sockets.SocketOptionLevel]::Socket, [System.Net.Sockets.SocketOptionName]::ReuseAddress, $true)
+$listener.Start()
+Write-Host "Webnam Zalo Bridge Lite listening on http://127.0.0.1:$Port"
+
+while ($true) {
+    $client = $listener.AcceptTcpClient()
+    try {
+        $request = Read-HttpRequest $client
+        if ($null -ne $request) {
+            Handle-Request $request
+        }
+    } catch {
+        try {
+            $stream = $client.GetStream()
+            Write-HttpResponse $stream 500 'Internal Server Error' @{ message = $_.Exception.Message } ''
+        } catch {
+            # Ignore response failures.
+        }
+    } finally {
+        $client.Close()
+    }
+}

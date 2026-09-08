@@ -62,6 +62,7 @@ const sidebarWindowNameForTarget = (value) => `quick-reply-zalo-sidebar-${normal
 const sidebarBrowserKeywordsForTarget = (value) => [sidebarTitleForTarget(value)];
 const ZALO_WEB_URL = 'https://chat.zalo.me/';
 const ZALO_WEB_POPUP_WINDOW_NAME = 'quick-reply-zalo-web-target';
+const ZALO_BRIDGE_INSTALLER_URL = '/downloads/install-zalo-bridge-lite-8003.bat';
 const SIDEBAR_ACTION_COLUMN_WIDTH = 37;
 const SIDEBAR_COLUMN_WIDTHS_STORAGE_KEY = 'quick_reply_sidebar_column_widths_v1';
 const SIDEBAR_COLUMN_WIDTH_LIMITS = {
@@ -1317,6 +1318,17 @@ function QuickReplies() {
         setGalleryPage(1);
         setError('');
         setMessage('');
+    };
+
+    const downloadZaloBridgeInstaller = () => {
+        const link = document.createElement('a');
+        link.href = ZALO_BRIDGE_INSTALLER_URL;
+        link.download = 'install-zalo-bridge-lite-8003.bat';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setError('');
+        setMessage('Đã tải file cài Zalo Bridge. Mở file install-zalo-bridge-lite-8003.bat vừa tải; nếu máy có ổ D thì file sẽ tự cài vào D:\\WebnamZaloBridge, nếu không có ổ D thì cài vào AppData và bật chạy nền. Chrome không cho web tự chạy file tải về, nên cần bấm mở file đó một lần.');
     };
 
     const cancelGalleryUpload = (notify = true) => {
@@ -4053,6 +4065,15 @@ function QuickReplies() {
                     </div>
 
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+                        <button
+                            type="button"
+                            onClick={downloadZaloBridgeInstaller}
+                            className={secondaryButtonClassName}
+                            title="Tải file cài Zalo Bridge Lite cho máy mới"
+                        >
+                            <span className="material-symbols-outlined text-[18px]">download</span>
+                            Cài Bridge
+                        </button>
                         <AccountSelector />
                         <div className="relative shrink-0" title={`Đích gửi hiện tại: ${zaloTargetLabel}`}>
                             <span className="material-symbols-outlined pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-slate-600">{selectedZaloTargetOption.icon}</span>

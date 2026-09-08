@@ -4,7 +4,7 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import api, { accountApi, orderAiTrainingApi, orderApi, productApi, productReplacementApi, leadApi, cmsApi, categoryApi } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { useUI } from '../../context/UIContext';
-import { motion, Reorder, AnimatePresence } from 'framer-motion';
+import { motion, Reorder, AnimatePresence, useDragControls } from 'framer-motion';
 import SearchableSelect from '../../components/SearchableSelect';
 import OrderSupplementItemsSection from '../../components/admin/OrderSupplementItemsSection';
 import OrderAiSearchPanel from '../../components/admin/OrderAiSearchPanel';
@@ -6085,6 +6085,155 @@ const ProductThumb = ({ src, fallback = null, imageClassName = 'size-full object
                 setFailed(true);
             }}
         />
+    );
+};
+
+const MOBILE_ORDER_ITEM_REORDER_HOLD_MS = 260;
+const MOBILE_ORDER_ITEM_REORDER_CANCEL_DISTANCE = 10;
+const MOBILE_ORDER_ITEM_REORDER_IGNORE_SELECTOR = [
+    'button',
+    'input',
+    'textarea',
+    'select',
+    'a',
+    '[role="button"]',
+    '[data-order-mobile-drag-ignore="true"]',
+].join(',');
+
+const shouldIgnoreMobileOrderItemDrag = (target) => (
+    Boolean(target && typeof target.closest === 'function' && target.closest(MOBILE_ORDER_ITEM_REORDER_IGNORE_SELECTOR))
+);
+
+const MobileOrderItemReorderCard = ({ item, className = '', onSelect, children }) => {
+    const dragControls = useDragControls();
+    const holdTimerRef = useRef(null);
+    const pressStartRef = useRef(null);
+    const suppressClickRef = useRef(false);
+    const [isDragging, setIsDragging] = useState(false);
+
+    const clearHoldTimer = useCallback(() => {
+        if (holdTimerRef.current !== null) {
+            window.clearTimeout(holdTimerRef.current);
+            holdTimerRef.current = null;
+        }
+    }, []);
+
+    const clearPressState = useCallback(() => {
+        clearHoldTimer();
+        pressStartRef.current = null;
+    }, [clearHoldTimer]);
+
+    const releaseClickSuppression = useCallback(() => {
+        window.setTimeout(() => {
+            suppressClickRef.current = false;
+        }, 0);
+    }, []);
+
+    useEffect(() => () => clearHoldTimer(), [clearHoldTimer]);
+
+    const handlePointerDown = useCallback((event) => {
+        if (event.pointerType === 'mouse' && event.button !== 0) return;
+        if (shouldIgnoreMobileOrderItemDrag(event.target)) return;
+
+        clearHoldTimer();
+        pressStartRef.current = {
+            x: event.clientX,
+            y: event.clientY,
+        };
+
+        const dragStartEvent = event.nativeEvent || event;
+
+        holdTimerRef.current = window.setTimeout(() => {
+            holdTimerRef.current = null;
+            suppressClickRef.current = true;
+            dragControls.start(dragStartEvent);
+
+            if (typeof window.navigator?.vibrate === 'function') {
+                window.navigator.vibrate(8);
+            }
+        }, MOBILE_ORDER_ITEM_REORDER_HOLD_MS);
+    }, [clearHoldTimer, dragControls]);
+
+    const handlePointerMove = useCallback((event) => {
+        if (holdTimerRef.current === null || !pressStartRef.current) return;
+
+        const xDelta = event.clientX - pressStartRef.current.x;
+        const yDelta = event.clientY - pressStartRef.current.y;
+
+        if (Math.hypot(xDelta, yDelta) > MOBILE_ORDER_ITEM_REORDER_CANCEL_DISTANCE) {
+            clearPressState();
+        }
+    }, [clearPressState]);
+
+    const handleClickCapture = useCallback((event) => {
+        if (!suppressClickRef.current) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+        releaseClickSuppression();
+    }, [releaseClickSuppression]);
+
+    const handleDragStart = useCallback(() => {
+        suppressClickRef.current = true;
+        setIsDragging(true);
+    }, []);
+
+    const handleDragHandlePointerDown = useCallback((event) => {
+        if (event.pointerType === 'mouse' && event.button !== 0) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+        clearPressState();
+        suppressClickRef.current = true;
+        dragControls.start(event);
+
+        if (event.pointerType === 'touch' && typeof window.navigator?.vibrate === 'function') {
+            window.navigator.vibrate(8);
+        }
+    }, [clearPressState, dragControls]);
+
+    const dragHandleProps = useMemo(() => ({
+        onPointerDown: handleDragHandlePointerDown,
+        onClick: (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+        },
+        style: { touchAction: 'none' },
+    }), [handleDragHandlePointerDown]);
+
+    const handleDragEnd = useCallback(() => {
+        clearPressState();
+        setIsDragging(false);
+        releaseClickSuppression();
+    }, [clearPressState, releaseClickSuppression]);
+
+    const renderedChildren = typeof children === 'function'
+        ? children({ dragHandleProps })
+        : children;
+
+    return (
+        <Reorder.Item
+            value={item}
+            as="div"
+            dragControls={dragControls}
+            dragListener={false}
+            dragElastic={0.08}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={clearPressState}
+            onPointerCancel={clearPressState}
+            onClickCapture={handleClickCapture}
+            onClick={onSelect}
+            onDragStart={handleDragStart}
+            onDragEnd={handleDragEnd}
+            whileDrag={{ scale: 1.015 }}
+            transition={{ type: 'spring', stiffness: 520, damping: 38 }}
+            className={`relative select-none cursor-grab active:cursor-grabbing ${className} ${
+                isDragging ? 'z-[45] ring-2 ring-primary/20 shadow-[0_24px_60px_-34px_rgba(15,23,42,0.55)]' : ''
+            }`}
+        >
+            {renderedChildren}
+        </Reorder.Item>
     );
 };
 
@@ -14970,8 +15119,14 @@ const OrderForm = () => {
     const addProductById = useCallback((product) => {
         if (!product) return;
         appendProductToOrder(product, { trackSearch: true });
-        // Keep search term and dropdown open for consecutive selections
-    }, [appendProductToOrder]);
+
+        if (isCompactOrderMobileLayout) {
+            setShowSearchDropdown(false);
+            setShowSearchHistory(false);
+            setShowProductQuickFilterPanel(false);
+            setShowProductQuickSetupPanel(false);
+        }
+    }, [appendProductToOrder, isCompactOrderMobileLayout]);
 
     const updateItem = React.useCallback((index, field, value) => {
         setFormData(prev => {
@@ -18597,36 +18752,45 @@ const OrderForm = () => {
 
                         {categoryGroupUndoPanel}
 
-                        <div className="mt-2 -mx-2 space-y-2 lg:hidden">
+                        <div className="mt-2 -mx-2 lg:hidden">
                             {formData.items.length === 0 ? (
                                 <div className="rounded-[22px] border border-dashed border-primary/15 bg-white px-5 py-10 text-center shadow-sm">
                                     <div className="text-[14px] font-semibold leading-[1.45] text-primary/40">Chưa có sản phẩm</div>
                                     <div className="mt-2 text-[14px] leading-[1.55] text-primary/60">Bấm “Thêm sản phẩm” rồi chọn nhanh để tạo báo giá.</div>
                                 </div>
                             ) : (
-                                formData.items.map((item, index) => {
-                                    const itemTotal = Number(item.price || 0) * Number(item.quantity || 0);
-                                    const canReplaceItem = Boolean(item.line_id);
-                                    const isSelectedLine = normalizeCanvasText(selectedOrderLineId) === normalizeCanvasText(item.line_id);
-                                    const hasActualOverride = hasActualOrderProductOverride(item);
-                                    const isEditingName = normalizeCanvasText(editingOrderLineName.lineId) === normalizeCanvasText(item.line_id);
-                                    const originalNameLabel = getOrderLineOriginalNameLabel(item);
-                                    const sourceBadgeLabel = getCrossSellSourceBadgeLabel(item);
+                                <Reorder.Group
+                                    axis="y"
+                                    values={formData.items}
+                                    onReorder={handleReorder}
+                                    as="div"
+                                    className="space-y-2"
+                                >
+                                    {formData.items.map((item, index) => {
+                                        const itemTotal = Number(item.price || 0) * Number(item.quantity || 0);
+                                        const canReplaceItem = Boolean(item.line_id);
+                                        const isSelectedLine = normalizeCanvasText(selectedOrderLineId) === normalizeCanvasText(item.line_id);
+                                        const hasActualOverride = hasActualOrderProductOverride(item);
+                                        const isEditingName = normalizeCanvasText(editingOrderLineName.lineId) === normalizeCanvasText(item.line_id);
+                                        const originalNameLabel = getOrderLineOriginalNameLabel(item);
+                                        const sourceBadgeLabel = getCrossSellSourceBadgeLabel(item);
 
-                                    return (
-                                        <div
-                                            key={item.line_id || `${item.product_id}-${index}`}
-                                            onClick={() => handleSelectOrderLine(item.line_id)}
-                                            className={`rounded-[18px] border px-2.5 py-2 shadow-[0_18px_45px_-38px_rgba(15,23,42,0.35)] ${
-                                                hasActualOverride
-                                                    ? 'border-rose-200 bg-rose-50/70'
-                                                    : isPendingOrderAiItem(item)
-                                                    ? 'border-amber-200 bg-amber-50/70'
-                                                    : isOrderAiItem(item)
-                                                        ? 'border-sky-200 bg-sky-50/70'
-                                                        : 'border-primary/10 bg-white'
-                                            } ${isSelectedLine ? 'ring-2 ring-primary/15' : ''}`}
-                                        >
+                                        return (
+                                            <MobileOrderItemReorderCard
+                                                key={item.line_id || `${item.product_id}-${index}`}
+                                                item={item}
+                                                onSelect={() => handleSelectOrderLine(item.line_id)}
+                                                className={`rounded-[18px] border px-2.5 py-2 shadow-[0_18px_45px_-38px_rgba(15,23,42,0.35)] ${
+                                                    hasActualOverride
+                                                        ? 'border-rose-200 bg-rose-50/70'
+                                                        : isPendingOrderAiItem(item)
+                                                        ? 'border-amber-200 bg-amber-50/70'
+                                                        : isOrderAiItem(item)
+                                                            ? 'border-sky-200 bg-sky-50/70'
+                                                            : 'border-primary/10 bg-white'
+                                                } ${isSelectedLine ? 'ring-2 ring-primary/15' : ''}`}
+                                            >
+                                                {({ dragHandleProps }) => (
                                             <div className="flex items-start gap-2">
                                                 <div
                                                     className="relative flex-none size-12 rounded bg-primary/[0.05] overflow-hidden group cursor-pointer border border-primary/10"
@@ -18692,6 +18856,15 @@ const OrderForm = () => {
                                                                 </div>
                                                             ) : (
                                                                 <div className="group/name-actions flex min-w-0 items-start gap-1.5">
+                                                                    <button
+                                                                        type="button"
+                                                                        {...dragHandleProps}
+                                                                        className="inline-flex size-7 shrink-0 cursor-grab items-center justify-center rounded-[10px] border border-primary/10 bg-white text-primary/35 transition-all hover:border-primary/25 hover:text-primary active:cursor-grabbing"
+                                                                        title="Giữ kéo để sắp xếp"
+                                                                        aria-label="Giữ kéo để sắp xếp sản phẩm"
+                                                                    >
+                                                                        <span className="material-symbols-outlined text-[15px]">drag_indicator</span>
+                                                                    </button>
                                                                     <div className={`min-w-0 flex-1 text-[14px] font-black leading-[1.35] ${hasActualOverride ? 'text-rose-700' : 'text-primary'}`}>{item.name || 'Sản phẩm'}</div>
                                                                     <button
                                                                         type="button"
@@ -18838,9 +19011,11 @@ const OrderForm = () => {
                                                     </div>
                                                 </div>
                                             </div>
-                                        </div>
-                                    );
-                                })
+                                                )}
+                                            </MobileOrderItemReorderCard>
+                                        );
+                                    })}
+                                </Reorder.Group>
                             )}
 
                         </div>

@@ -4,7 +4,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:BridgeVersion = '2026.09.08.2'
+$script:BridgeVersion = '2026.09.08.3'
 
 function Write-BridgeLog {
     param([string] $Message)

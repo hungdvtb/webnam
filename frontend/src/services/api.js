@@ -26,18 +26,26 @@ const RETRYABLE_NETWORK_MESSAGE_FRAGMENTS = [
     'timeout',
 ];
 const IDEMPOTENT_HTTP_METHODS = new Set(['get', 'head', 'options']);
+const DEFAULT_LOCAL_QUICK_REPLY_BRIDGE_BASE_URLS = [
+    'http://127.0.0.1:8003/api',
+    'http://localhost:8003/api',
+];
+const LOCAL_DEV_QUICK_REPLY_BRIDGE_BASE_URLS = [
+    ...DEFAULT_LOCAL_QUICK_REPLY_BRIDGE_BASE_URLS,
+    'http://127.0.0.1:8000/api',
+    'http://localhost:8000/api',
+    'http://127.0.0.1/webnam/backend/public/api',
+    'http://localhost/webnam/backend/public/api',
+    'http://127.0.0.1/webnam/backend/public/index.php/api',
+    'http://localhost/webnam/backend/public/index.php/api',
+];
+const currentWindowHostname = typeof window !== 'undefined' ? String(window.location?.hostname || '') : '';
 const LOCAL_QUICK_REPLY_BRIDGE_BASE_URLS = String(
     import.meta.env.VITE_QUICK_REPLY_LOCAL_BRIDGE_URLS
-    || [
-        'http://127.0.0.1:8003/api',
-        'http://localhost:8003/api',
-        'http://127.0.0.1:8000/api',
-        'http://localhost:8000/api',
-        'http://127.0.0.1/webnam/backend/public/api',
-        'http://localhost/webnam/backend/public/api',
-        'http://127.0.0.1/webnam/backend/public/index.php/api',
-        'http://localhost/webnam/backend/public/index.php/api',
-    ].join(',')
+    || (LOOPBACK_HOST_PATTERN.test(currentWindowHostname)
+        ? LOCAL_DEV_QUICK_REPLY_BRIDGE_BASE_URLS
+        : DEFAULT_LOCAL_QUICK_REPLY_BRIDGE_BASE_URLS
+    ).join(',')
 )
     .split(',')
     .map((url) => trimTrailingSlash(url))

@@ -25,8 +25,9 @@ echo.
 if defined DRY_RUN (
     echo [DRY RUN] se tao thu muc "%INSTALL_ROOT%".
     echo [DRY RUN] se ghi script bridge tu trong file cai dat nay.
-    echo [DRY RUN] se tao task "%TASK_NAME%" chay cung Windows.
-    echo [DRY RUN] se bat bridge va kiem tra http://127.0.0.1:%PORT%.
+    echo [DRY RUN] se tao runner tu khoi dong lai neu bridge bi tat.
+    echo [DRY RUN] se tao file chay cung Windows trong Startup.
+    echo [DRY RUN] se bat bridge truc tiep va kiem tra http://127.0.0.1:%PORT%.
     exit /b 0
 )
 
@@ -49,20 +50,11 @@ call :stop_existing_bridge
 call :write_runner_files
 if errorlevel 1 exit /b 1
 
-set "TASK_COMMAND=wscript.exe //B //Nologo ""%RUNNER%"""
-schtasks /Create /F /TN "%TASK_NAME%" /SC ONLOGON /TR "%TASK_COMMAND%" >nul
-if errorlevel 1 (
-    echo Khong tao duoc task tu dong chay cung Windows.
-    echo Thu chay file nay bang quyen Administrator roi cai lai.
-    pause
-    exit /b 1
-)
+call :write_startup_file
+if errorlevel 1 exit /b 1
 
-schtasks /Run /TN "%TASK_NAME%" >nul 2>nul
-if errorlevel 1 (
-    echo Da tao task, nhung chua chay ngay duoc. Dang bat bridge truc tiep...
-    start "" wscript.exe //B //Nologo "%RUNNER%"
-)
+schtasks /Delete /F /TN "%TASK_NAME%" >nul 2>nul
+start "" wscript.exe //B //Nologo "%RUNNER%"
 
 call :wait_bridge
 if errorlevel 1 (
@@ -78,6 +70,7 @@ if errorlevel 1 (
 
 echo.
 echo Xong. Bridge lite da duoc cai vao "%INSTALL_ROOT%" va dang chay tai http://127.0.0.1:%PORT%.
+echo Bridge se tu khoi dong lai neu bi tat va tu chay cung Windows bang Startup.
 echo Tu gio vao web chinh roi bam Panel phai / gui tin nhu binh thuong.
 echo Log neu can xem: "%LOG_FILE%"
 echo.
@@ -89,6 +82,8 @@ set "PS_SCRIPT=%INSTALL_ROOT%\zalo-bridge-lite-8003.ps1"
 set "RUNNER_CMD=%INSTALL_ROOT%\zalo-bridge-lite-runner.cmd"
 set "RUNNER=%INSTALL_ROOT%\zalo-bridge-lite-runner.vbs"
 set "LOG_FILE=%INSTALL_ROOT%\zalo-bridge-lite.log"
+set "STARTUP_DIR=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
+set "STARTUP_RUNNER=%STARTUP_DIR%\Webnam Zalo Bridge Lite 8003.vbs"
 exit /b 0
 
 :ensure_install_root
@@ -125,15 +120,20 @@ if errorlevel 1 (
 exit /b 0
 
 :stop_existing_bridge
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$current=$PID; Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $current -and ($_.Name -eq 'powershell.exe' -or $_.Name -eq 'pwsh.exe') -and $_.CommandLine -like '*zalo-bridge-lite-8003.ps1*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>nul
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$current=$PID; Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $current -and $_.CommandLine -and ($_.CommandLine -like '*zalo-bridge-lite-8003.ps1*' -or $_.CommandLine -like '*zalo-bridge-lite-runner.cmd*' -or $_.CommandLine -like '*zalo-bridge-lite-runner.vbs*') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>nul
 exit /b 0
 
 :write_runner_files
 (
     echo @echo off
     echo cd /d "%INSTALL_ROOT%"
+    echo :bridge_loop
     echo echo %%date%% %%time%% Starting Webnam Zalo Bridge Lite on port %PORT% ^>^> "%LOG_FILE%"
     echo powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -File "%PS_SCRIPT%" -Port %PORT% ^>^> "%LOG_FILE%" 2^>^&1
+    echo set "EXIT_CODE=%%ERRORLEVEL%%"
+    echo echo %%date%% %%time%% Bridge stopped with code %%EXIT_CODE%%. Restarting in 3 seconds. ^>^> "%LOG_FILE%"
+    echo timeout /t 3 /nobreak ^>nul
+    echo goto bridge_loop
 ) > "%RUNNER_CMD%"
 if errorlevel 1 (
     echo Khong tao duoc file runner cmd: "%RUNNER_CMD%".
@@ -155,6 +155,16 @@ if errorlevel 1 (
 )
 exit /b 0
 
+:write_startup_file
+if not exist "%STARTUP_DIR%" mkdir "%STARTUP_DIR%" >nul 2>nul
+copy /Y "%RUNNER%" "%STARTUP_RUNNER%" >nul
+if errorlevel 1 (
+    echo Khong tao duoc file chay cung Windows trong Startup: "%STARTUP_RUNNER%".
+    pause
+    exit /b 1
+)
+exit /b 0
+
 :wait_bridge
 set "BRIDGE_HEALTH_URL=http://127.0.0.1:%PORT%/api/quick-replies/local-window-bridge/health"
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$url=$env:BRIDGE_HEALTH_URL; $ok=$false; for($i=0; $i -lt 30; $i++){ try { $res=Invoke-WebRequest -UseBasicParsing -Uri $url -TimeoutSec 2; if($res.StatusCode -eq 200 -and $res.Content -match 'Webnam Zalo Bridge Lite'){ $ok=$true; break } } catch {}; Start-Sleep -Milliseconds 500 }; if($ok){ exit 0 }; exit 1"
@@ -164,15 +174,16 @@ exit /b %errorlevel%
 echo.
 echo Dang go cai dat Webnam Zalo Bridge Lite...
 if defined DRY_RUN (
-    echo [DRY RUN] se xoa task "%TASK_NAME%" va cac file runner trong "%INSTALL_ROOT%".
+    echo [DRY RUN] se xoa task cu "%TASK_NAME%", file Startup va cac file runner trong "%INSTALL_ROOT%".
     exit /b 0
 )
 
 schtasks /Delete /F /TN "%TASK_NAME%" >nul 2>nul
 call :stop_existing_bridge
+if exist "%STARTUP_RUNNER%" del /f /q "%STARTUP_RUNNER%" >nul 2>nul
 if exist "%RUNNER%" del /f /q "%RUNNER%" >nul 2>nul
 if exist "%RUNNER_CMD%" del /f /q "%RUNNER_CMD%" >nul 2>nul
-echo Da go task tu dong chay cung Windows. File script/log se duoc giu lai trong "%INSTALL_ROOT%".
+echo Da go file tu dong chay cung Windows. File script/log se duoc giu lai trong "%INSTALL_ROOT%".
 pause
 exit /b 0
 
@@ -183,7 +194,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:BridgeVersion = '2026.09.08.2'
+$script:BridgeVersion = '2026.09.08.3'
 
 function Write-BridgeLog {
     param([string] $Message)

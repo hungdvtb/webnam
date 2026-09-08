@@ -62,7 +62,9 @@ const sidebarWindowNameForTarget = (value) => `quick-reply-zalo-sidebar-${normal
 const sidebarBrowserKeywordsForTarget = (value) => [sidebarTitleForTarget(value)];
 const ZALO_WEB_URL = 'https://chat.zalo.me/';
 const ZALO_WEB_POPUP_WINDOW_NAME = 'quick-reply-zalo-web-target';
-const ZALO_BRIDGE_INSTALLER_URL = '/downloads/install-zalo-bridge-lite-8003.bat';
+const ZALO_BRIDGE_VERSION = '2026.09.08.3';
+const ZALO_BRIDGE_INSTALLER_FILE = `install-zalo-bridge-lite-8003-${ZALO_BRIDGE_VERSION}.bat`;
+const ZALO_BRIDGE_INSTALLER_URL = `/downloads/${ZALO_BRIDGE_INSTALLER_FILE}`;
 const SIDEBAR_ACTION_COLUMN_WIDTH = 37;
 const SIDEBAR_COLUMN_WIDTHS_STORAGE_KEY = 'quick_reply_sidebar_column_widths_v1';
 const SIDEBAR_COLUMN_WIDTH_LIMITS = {
@@ -1359,12 +1361,12 @@ function QuickReplies() {
     const downloadZaloBridgeInstaller = () => {
         const link = document.createElement('a');
         link.href = `${ZALO_BRIDGE_INSTALLER_URL}?v=${Date.now()}`;
-        link.download = 'install-zalo-bridge-lite-8003.bat';
+        link.download = ZALO_BRIDGE_INSTALLER_FILE;
         document.body.appendChild(link);
         link.click();
         link.remove();
         setError('');
-        setMessage('Đã tải file cài Zalo Bridge bản mới. Mở file install-zalo-bridge-lite-8003.bat vừa tải bằng quyền Administrator một lần; nếu máy có ổ D thì file sẽ tự cài vào D:\\WebnamZaloBridge, nếu không có ổ D thì cài vào AppData và bật chạy nền.');
+        setMessage(`Đã tải file cài Zalo Bridge ${ZALO_BRIDGE_VERSION}. Mở file ${ZALO_BRIDGE_INSTALLER_FILE} vừa tải một lần; nếu máy có ổ D thì file sẽ tự cài vào D:\\WebnamZaloBridge, nếu không có ổ D thì cài vào AppData và bật chạy nền.`);
     };
 
     const cancelGalleryUpload = (notify = true) => {

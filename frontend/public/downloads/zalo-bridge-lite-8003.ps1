@@ -603,6 +603,8 @@ function Handle-Request {
         $origin = $Request.Headers['origin']
     }
 
+    $pathOnly = ($Request.Path -split '\?')[0]
+
     if (-not (Test-OriginAllowed $origin)) {
         Write-HttpResponse $Request.Stream 403 'Forbidden' @{ message = 'Origin is not allowed.' } ''
         return
@@ -610,6 +612,15 @@ function Handle-Request {
 
     if ($Request.Method -eq 'OPTIONS') {
         Write-HttpResponse $Request.Stream 204 'No Content' $null $origin
+        return
+    }
+
+    if ($Request.Method -eq 'GET' -and ($pathOnly -eq '/' -or $pathOnly -eq '/api/quick-replies/local-window-bridge/health')) {
+        Write-HttpResponse $Request.Stream 200 'OK' @{
+            message = 'Webnam Zalo Bridge Lite is running.'
+            ok = $true
+            port = $Port
+        } $origin
         return
     }
 
@@ -623,7 +634,6 @@ function Handle-Request {
         return
     }
 
-    $pathOnly = ($Request.Path -split '\?')[0]
     $payload = @{}
     if (-not [string]::IsNullOrWhiteSpace($Request.Body)) {
         $payload = $Request.Body | ConvertFrom-Json

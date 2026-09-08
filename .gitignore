@@ -3,6 +3,7 @@
 .tmp-appdata/
 zalo-bridge-runner.vbs
 zalo-bridge-lite-runner.vbs
+zalo-bridge-lite-runner.cmd
 .env
 backend/.env
 frontend/.env

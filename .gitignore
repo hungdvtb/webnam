@@ -2,6 +2,7 @@
 *.log
 .tmp-appdata/
 zalo-bridge-runner.vbs
+zalo-bridge-lite-runner.vbs
 .env
 backend/.env
 frontend/.env

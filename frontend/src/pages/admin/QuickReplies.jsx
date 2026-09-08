@@ -297,6 +297,10 @@ const bridgeClipboardUrl = (url) => {
     }
 };
 
+const bridgeClipboardUrls = (items = []) => items
+    .map((item) => bridgeClipboardUrl(item?.src || item))
+    .filter(Boolean);
+
 const focusZaloWebPopup = () => {
     let zaloWindow = null;
 
@@ -558,6 +562,13 @@ const isLocalBridgeNetworkError = (error) => {
         || message.includes('timeout')
         || message.includes('connection refused');
 };
+
+const localBridgePayloadMediaCount = (data = {}) => [
+    data?.image_urls,
+    data?.media_urls,
+    data?.video_urls,
+    data?.file_paths,
+].reduce((total, items) => total + (Array.isArray(items) ? items.length : 0), 0);
 
 const localBridgeUnavailableMessage = (targetAppName) => (
     `Không thấy backend local tại 127.0.0.1:8003, nên web chính chưa kéo được ${targetAppName}. Bấm Cài Bridge rồi chạy file cài một lần trên máy này, sau đó bấm Panel phải lại.`
@@ -1347,13 +1358,13 @@ function QuickReplies() {
 
     const downloadZaloBridgeInstaller = () => {
         const link = document.createElement('a');
-        link.href = ZALO_BRIDGE_INSTALLER_URL;
+        link.href = `${ZALO_BRIDGE_INSTALLER_URL}?v=${Date.now()}`;
         link.download = 'install-zalo-bridge-lite-8003.bat';
         document.body.appendChild(link);
         link.click();
         link.remove();
         setError('');
-        setMessage('Đã tải file cài Zalo Bridge. Mở file install-zalo-bridge-lite-8003.bat vừa tải; nếu máy có ổ D thì file sẽ tự cài vào D:\\WebnamZaloBridge, nếu không có ổ D thì cài vào AppData và bật chạy nền. Chrome không cho web tự chạy file tải về, nên cần bấm mở file đó một lần.');
+        setMessage('Đã tải file cài Zalo Bridge bản mới. Mở file install-zalo-bridge-lite-8003.bat vừa tải bằng quyền Administrator một lần; nếu máy có ổ D thì file sẽ tự cài vào D:\\WebnamZaloBridge, nếu không có ổ D thì cài vào AppData và bật chạy nền.');
     };
 
     const cancelGalleryUpload = (notify = true) => {
@@ -2430,14 +2441,22 @@ function QuickReplies() {
                             throw bridgeErr;
                         }
 
+                        const mediaCount = localBridgePayloadMediaCount(data);
+                        if (mediaCount > 0) {
+                            throw new Error(`Backend local không phản hồi khi đang tải/dán ${mediaCount} ảnh/video cho Zalo Web. Nếu vừa cài bridge bằng file cũ, bấm Cài Bridge tải lại bản mới rồi chạy Admin một lần.`);
+                        }
+
                         await failBecauseLocalBridgeUnavailable();
                         return null;
                     }
                 };
 
                 for (const content of contents) {
+                    const mediaUrls = bridgeClipboardUrls(content.images);
+                    manualImages += Math.max((content.images?.length || 0) - mediaUrls.length, 0);
+
                     let pastedInStep = false;
-                    let pastedImagesInStep = 0;
+                    let mediaCountInStep = 0;
 
                     if (content.body) {
                         const pasteResponse = await pasteToZaloWeb({
@@ -2450,41 +2469,36 @@ function QuickReplies() {
                         }
                         pastedInStep = true;
                         sentText += 1;
-                        await sleep(260);
+                        await sleep(280);
                     }
 
-                    for (const item of content.images) {
-                        const imageUrl = bridgeClipboardUrl(item.src);
-                        if (!imageUrl) {
-                            manualImages += 1;
-                            continue;
-                        }
-
+                    if (mediaUrls.length > 0) {
                         const pasteResponse = await pasteToZaloWeb({
-                            image_urls: [imageUrl],
+                            image_urls: mediaUrls,
                             paste: true,
                             enter: false,
+                            bridge_timeout_ms: Math.max(180000, mediaUrls.length * 45000),
                         });
                         if (!pasteResponse) {
                             return;
                         }
                         pastedInStep = true;
-                        pastedImagesInStep += 1;
-                        sentImages += 1;
-                        await sleep(650);
+                        mediaCountInStep = mediaUrls.length;
+                        sentImages += mediaUrls.length;
+                        await sleep(Math.min(8000, 1400 + mediaUrls.length * 900));
                     }
 
                     if (pastedInStep) {
                         const sendResponse = await pasteToZaloWeb({
                             paste: false,
                             enter: true,
-                            before_enter_delay_ms: pastedImagesInStep > 0 ? 1500 : 280,
+                            before_enter_delay_ms: mediaCountInStep > 0 ? Math.min(5000, 1700 + mediaCountInStep * 550) : 280,
                         });
                         if (!sendResponse) {
                             return;
                         }
                         sentSteps += 1;
-                        await sleep(760);
+                        await sleep(mediaCountInStep > 0 ? 1050 : 760);
                     }
                 }
 
@@ -2544,14 +2558,22 @@ function QuickReplies() {
                             throw bridgeErr;
                         }
 
+                        const mediaCount = localBridgePayloadMediaCount(data);
+                        if (mediaCount > 0) {
+                            throw new Error(`Backend local không phản hồi khi đang tải/dán ${mediaCount} ảnh/video cho Zalo PC. Nếu vừa cài bridge bằng file cũ, bấm Cài Bridge tải lại bản mới rồi chạy Admin một lần.`);
+                        }
+
                         await failBecauseLocalBridgeUnavailable();
                         return null;
                     }
                 };
 
                 for (const content of contents) {
+                    const mediaUrls = bridgeClipboardUrls(content.images);
+                    manualImages += Math.max((content.images?.length || 0) - mediaUrls.length, 0);
+
                     let pastedInStep = false;
-                    let pastedImagesInStep = 0;
+                    let mediaCountInStep = 0;
 
                     if (content.body) {
                         const pasteResponse = await pasteToZaloPc({
@@ -2564,41 +2586,36 @@ function QuickReplies() {
                         }
                         pastedInStep = true;
                         sentText += 1;
-                        await sleep(260);
+                        await sleep(280);
                     }
 
-                    for (const item of content.images) {
-                        const imageUrl = bridgeClipboardUrl(item.src);
-                        if (!imageUrl) {
-                            manualImages += 1;
-                            continue;
-                        }
-
+                    if (mediaUrls.length > 0) {
                         const pasteResponse = await pasteToZaloPc({
-                            image_urls: [imageUrl],
+                            image_urls: mediaUrls,
                             paste: true,
                             enter: false,
+                            bridge_timeout_ms: Math.max(180000, mediaUrls.length * 45000),
                         });
                         if (!pasteResponse) {
                             return;
                         }
                         pastedInStep = true;
-                        pastedImagesInStep += 1;
-                        sentImages += 1;
-                        await sleep(650);
+                        mediaCountInStep = mediaUrls.length;
+                        sentImages += mediaUrls.length;
+                        await sleep(Math.min(8000, 1400 + mediaUrls.length * 900));
                     }
 
                     if (pastedInStep) {
                         const sendResponse = await pasteToZaloPc({
                             paste: false,
                             enter: true,
-                            before_enter_delay_ms: pastedImagesInStep > 0 ? 1500 : 280,
+                            before_enter_delay_ms: mediaCountInStep > 0 ? Math.min(5000, 1700 + mediaCountInStep * 550) : 280,
                         });
                         if (!sendResponse) {
                             return;
                         }
                         sentSteps += 1;
-                        await sleep(760);
+                        await sleep(mediaCountInStep > 0 ? 1050 : 760);
                     }
                 }
 

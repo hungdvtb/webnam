@@ -183,6 +183,13 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$script:BridgeVersion = '2026.09.08.2'
+
+function Write-BridgeLog {
+    param([string] $Message)
+
+    Write-Host ("[{0}] {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Message)
+}
 
 if (-not ('Win32LiteBridge' -as [type])) {
     Add-Type @"
@@ -446,18 +453,58 @@ function Save-BridgeUrlToFile {
         throw "Invalid media URL: $Url"
     }
 
-    $client = New-Object System.Net.WebClient
+    $request = [System.Net.HttpWebRequest] [System.Net.WebRequest]::Create($Url)
+    $request.Method = 'GET'
+    $request.UserAgent = 'Mozilla/5.0 WebnamZaloBridge/1.0'
+    $request.Timeout = 45000
+    $request.ReadWriteTimeout = 45000
+    $request.AllowAutoRedirect = $true
+    $response = $null
+
     try {
-        $client.Headers.Set('User-Agent', 'Mozilla/5.0 WebnamZaloBridge/1.0')
-        $bytes = $client.DownloadData($Url)
-        $contentType = "$($client.ResponseHeaders['Content-Type'])"
+        Write-BridgeLog ("Downloading media #{0}: {1}" -f $Index, $Url)
+        $response = [System.Net.HttpWebResponse] $request.GetResponse()
+        $statusCode = [int] $response.StatusCode
+        if ($statusCode -lt 200 -or $statusCode -ge 300) {
+            throw "HTTP $statusCode"
+        }
+
+        $contentType = "$($response.ContentType)"
         $extension = Resolve-BridgeDownloadExtension $Url $contentType
         $path = Join-Path $Directory ('zalo-bridge-media-{0:D2}{1}' -f $Index, $extension)
-        [System.IO.File]::WriteAllBytes($path, $bytes)
+        $inputStream = $response.GetResponseStream()
+        $outputStream = [System.IO.File]::Open($path, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write)
+        try {
+            $buffer = New-Object byte[] 81920
+            while ($true) {
+                $read = $inputStream.Read($buffer, 0, $buffer.Length)
+                if ($read -le 0) {
+                    break
+                }
+                $outputStream.Write($buffer, 0, $read)
+            }
+        } finally {
+            if ($null -ne $outputStream) {
+                $outputStream.Dispose()
+            }
+            if ($null -ne $inputStream) {
+                $inputStream.Dispose()
+            }
+        }
 
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or (Get-Item -LiteralPath $path).Length -le 0) {
+            throw 'Downloaded media file is empty.'
+        }
+
+        Write-BridgeLog ("Saved media #{0}: {1}" -f $Index, $path)
         return $path
+    } catch {
+        $shortUrl = if ($Url.Length -gt 160) { $Url.Substring(0, 160) + '...' } else { $Url }
+        throw ("Cannot download media #{0}: {1}. {2}" -f $Index, $shortUrl, $_.Exception.Message)
     } finally {
-        $client.Dispose()
+        if ($null -ne $response) {
+            $response.Dispose()
+        }
     }
 }
 
@@ -499,12 +546,14 @@ function Set-BridgeClipboardPayload {
 
     if ($mediaUrls.Count -gt 0) {
         $tempDirectory = New-BridgeTempDirectory
+        Write-BridgeLog ("Preparing {0} media file(s) for clipboard." -f $mediaUrls.Count)
         for ($index = 0; $index -lt $mediaUrls.Count; $index += 1) {
             $filePaths += Save-BridgeUrlToFile $mediaUrls[$index] $tempDirectory ($index + 1)
         }
     }
 
     if ($filePaths.Count -gt 0) {
+        Write-BridgeLog ("Writing {0} file(s) to clipboard." -f $filePaths.Count)
         return @{
             type = 'files'
             count = Set-BridgeClipboardFiles ([string[]] $filePaths)
@@ -513,6 +562,7 @@ function Set-BridgeClipboardPayload {
 
     $textValue = Get-BridgeValue $Payload 'text' $null
     if ($null -ne $textValue -and "$textValue" -ne '') {
+        Write-BridgeLog ("Writing text to clipboard. Length: {0}" -f "$textValue".Length)
         [void] (Set-BridgeClipboardText "$textValue")
         return @{
             type = 'text'
@@ -749,6 +799,7 @@ function Invoke-PasteZalo {
     param($Payload)
 
     $target = Normalize-ZaloTarget $Payload.zalo_target
+    Write-BridgeLog ("Paste request target={0} paste={1} enter={2}" -f $target, (Get-BridgeValue $Payload 'paste' $true), (Get-BridgeValue $Payload 'enter' $false))
     $keywords = ConvertTo-StringArray $Payload.window_keywords (Get-ZaloKeywords $target)
     $window = Find-ZaloWindow $target $keywords
     if ($null -eq $window) {
@@ -998,6 +1049,7 @@ function Handle-Request {
             message = 'Webnam Zalo Bridge Lite is running.'
             ok = $true
             port = $Port
+            version = $script:BridgeVersion
         } $origin
         return
     }
@@ -1038,14 +1090,14 @@ function Handle-Request {
 
 if ($SelfTest) {
     $windows = @(Get-TopLevelWindows)
-    Write-Host "OK: Zalo bridge lite script loaded. Visible windows: $($windows.Count). Port: $Port."
+    Write-Host "OK: Zalo bridge lite script loaded. Version: $script:BridgeVersion. Visible windows: $($windows.Count). Port: $Port."
     exit 0
 }
 
 $listener = New-Object System.Net.Sockets.TcpListener -ArgumentList ([System.Net.IPAddress]::Parse('127.0.0.1')), $Port
 $listener.Server.SetSocketOption([System.Net.Sockets.SocketOptionLevel]::Socket, [System.Net.Sockets.SocketOptionName]::ReuseAddress, $true)
 $listener.Start()
-Write-Host "Webnam Zalo Bridge Lite listening on http://127.0.0.1:$Port"
+Write-BridgeLog "Webnam Zalo Bridge Lite $script:BridgeVersion listening on http://127.0.0.1:$Port"
 
 while ($true) {
     $client = $listener.AcceptTcpClient()

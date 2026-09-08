@@ -2330,6 +2330,20 @@ function QuickReplies() {
             : buildSendDraftPayload(createSendDraftFromReply(reply));
         const useBrowserClipboardForWeb = shouldUseBrowserOnlyZaloWebDock(zaloTarget);
         const useLocalBridgeForPc = shouldUseLocalWindowBridge(zaloTarget);
+        const copyTextOnlyWhenLocalBridgeUnavailable = async (targetName) => {
+            const text = sendPayloadClipboardText(preparedPayload);
+            if (sendPayloadImageCount(preparedPayload) > 0 || !normalizeText(text)) {
+                return false;
+            }
+
+            await copyTextFallback(text);
+            await recordUse(reply);
+            setCopiedState({ id: replyId, mode: 'all' });
+            setZaloPasteFlow(null);
+            setSendDraft(null);
+            setMessage(`Chưa thấy backend local trên máy này nên đã copy nội dung vào clipboard. Bấm Ctrl+V rồi Enter trong ${targetName}. Muốn tự gửi trực tiếp thì bật file start-backend-8003.bat trên máy này rồi gửi lại.`);
+            return true;
+        };
 
         setCopyingId(replyId);
         setError('');
@@ -2353,9 +2367,13 @@ function QuickReplies() {
                 let sentImages = 0;
                 let manualImages = 0;
 
-                const failBecauseLocalBridgeUnavailable = () => {
+                const failBecauseLocalBridgeUnavailable = async () => {
                     if (sentSteps > 0) {
                         throw new Error('Backend local bị ngắt khi đang gửi Zalo Web. Có thể đã gửi một phần, kiểm tra lại khung chat trước khi gửi lại.');
+                    }
+
+                    if (await copyTextOnlyWhenLocalBridgeUnavailable('Zalo Web')) {
+                        return;
                     }
 
                     throw new Error(imageCount > 0
@@ -2375,7 +2393,7 @@ function QuickReplies() {
                             throw bridgeErr;
                         }
 
-                        failBecauseLocalBridgeUnavailable();
+                        await failBecauseLocalBridgeUnavailable();
                         return null;
                     }
                 };
@@ -2470,9 +2488,13 @@ function QuickReplies() {
                 let sentImages = 0;
                 let manualImages = 0;
 
-                const failBecauseLocalBridgeUnavailable = () => {
+                const failBecauseLocalBridgeUnavailable = async () => {
                     if (sentSteps > 0) {
                         throw new Error('Backend local bị ngắt khi đang gửi Zalo PC. Có thể đã gửi một phần, kiểm tra lại khung chat trước khi gửi lại.');
+                    }
+
+                    if (await copyTextOnlyWhenLocalBridgeUnavailable('Zalo PC')) {
+                        return;
                     }
 
                     throw new Error(imageCount > 0
@@ -2492,7 +2514,7 @@ function QuickReplies() {
                             throw bridgeErr;
                         }
 
-                        failBecauseLocalBridgeUnavailable();
+                        await failBecauseLocalBridgeUnavailable();
                         return null;
                     }
                 };

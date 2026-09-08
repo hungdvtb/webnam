@@ -4,7 +4,8 @@ title Webnam Backend API :8003
 
 cd /d "%~dp0backend"
 
-set "PHP_EXE=C:\xampp\htdocs\webnam\php84\php.exe"
+set "PHP_EXE=%~dp0php84\php.exe"
+if not exist "%PHP_EXE%" set "PHP_EXE=C:\xampp\htdocs\webnam\php84\php.exe"
 if not exist "%PHP_EXE%" set "PHP_EXE=C:\xampp\php\php.exe"
 if not exist "%PHP_EXE%" set "PHP_EXE=php"
 if not exist ".tmp-appdata" mkdir ".tmp-appdata" >nul 2>nul
@@ -13,8 +14,9 @@ set "APPDATA=%CD%\.tmp-appdata"
 "%PHP_EXE%" artisan db:seed --class=LocalAdminAccessSeeder --force
 if errorlevel 1 (
 echo.
-echo Khong the sua tai khoan admin local.
-exit /b 1
+echo Khong the sua tai khoan admin local. Van tiep tuc bat local bridge Zalo.
+echo Neu chi dung Panel phai / gui Zalo tu web chinh thi co the bo qua dong nay.
+echo.
 )
 
 echo.

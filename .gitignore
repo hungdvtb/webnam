@@ -1,6 +1,7 @@
 # Workspace runtime artifacts
 *.log
 .tmp-appdata/
+zalo-bridge-runner.vbs
 .env
 backend/.env
 frontend/.env

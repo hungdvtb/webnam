@@ -62,7 +62,7 @@ const sidebarWindowNameForTarget = (value) => `quick-reply-zalo-sidebar-${normal
 const sidebarBrowserKeywordsForTarget = (value) => [sidebarTitleForTarget(value)];
 const ZALO_WEB_URL = 'https://chat.zalo.me/';
 const ZALO_WEB_POPUP_WINDOW_NAME = 'quick-reply-zalo-web-target';
-const ZALO_BRIDGE_VERSION = '2026.09.09.1';
+const ZALO_BRIDGE_VERSION = '2026.09.09.2';
 const ZALO_BRIDGE_INSTALLER_FILE = `install-zalo-bridge-lite-8003-${ZALO_BRIDGE_VERSION}.bat`;
 const ZALO_BRIDGE_INSTALLER_URL = `/downloads/${ZALO_BRIDGE_INSTALLER_FILE}`;
 const SIDEBAR_ACTION_COLUMN_WIDTH = 37;

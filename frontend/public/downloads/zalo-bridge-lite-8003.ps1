@@ -4,7 +4,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:BridgeVersion = '2026.09.09.1'
+$script:BridgeVersion = '2026.09.09.2'
 $script:BridgeStartedAt = Get-Date
 
 function Write-BridgeLog {
@@ -752,21 +752,50 @@ function Test-OriginAllowed {
 function Read-HttpRequest {
     param([System.Net.Sockets.TcpClient] $Client)
 
-    $Client.ReceiveTimeout = 10000
+    $Client.ReceiveTimeout = 30000
     $stream = $Client.GetStream()
-    $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8, $false, 8192, $true)
-    $requestLine = $reader.ReadLine()
+
+    $headerBytes = New-Object 'System.Collections.Generic.List[byte]'
+    while ($true) {
+        $byteValue = $stream.ReadByte()
+        if ($byteValue -lt 0) {
+            break
+        }
+
+        [void] $headerBytes.Add([byte] $byteValue)
+        $count = $headerBytes.Count
+        if ($count -gt 65536) {
+            throw 'HTTP request headers are too large.'
+        }
+
+        if (
+            $count -ge 4 -and
+            $headerBytes[$count - 4] -eq 13 -and
+            $headerBytes[$count - 3] -eq 10 -and
+            $headerBytes[$count - 2] -eq 13 -and
+            $headerBytes[$count - 1] -eq 10
+        ) {
+            break
+        }
+    }
+
+    if ($headerBytes.Count -eq 0) {
+        return $null
+    }
+
+    $headerText = [System.Text.Encoding]::ASCII.GetString($headerBytes.ToArray())
+    $headerLines = @($headerText -split "`r?`n" | Where-Object { $_ -ne '' })
+    if ($headerLines.Count -eq 0) {
+        return $null
+    }
+
+    $requestLine = $headerLines[0]
     if ([string]::IsNullOrWhiteSpace($requestLine)) {
         return $null
     }
 
     $headers = @{}
-    while ($true) {
-        $line = $reader.ReadLine()
-        if ($null -eq $line -or $line -eq '') {
-            break
-        }
-
+    foreach ($line in @($headerLines | Select-Object -Skip 1)) {
         $colon = $line.IndexOf(':')
         if ($colon -gt 0) {
             $name = $line.Substring(0, $colon).Trim().ToLowerInvariant()
@@ -782,11 +811,22 @@ function Read-HttpRequest {
     }
 
     if ($contentLength -gt 0) {
-        $buffer = New-Object char[] $contentLength
-        $read = $reader.ReadBlock($buffer, 0, $contentLength)
-        if ($read -gt 0) {
-            $body = -join $buffer[0..($read - 1)]
+        $bodyBytes = New-Object byte[] $contentLength
+        $offset = 0
+        while ($offset -lt $contentLength) {
+            $read = $stream.Read($bodyBytes, $offset, $contentLength - $offset)
+            if ($read -le 0) {
+                break
+            }
+
+            $offset += $read
         }
+
+        if ($offset -lt $contentLength) {
+            throw "HTTP request body ended early. Expected $contentLength byte(s), got $offset."
+        }
+
+        $body = [System.Text.Encoding]::UTF8.GetString($bodyBytes, 0, $offset)
     }
 
     $parts = $requestLine.Split(' ')

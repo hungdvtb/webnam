@@ -4,7 +4,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:BridgeVersion = '2026.09.09.2'
+$script:BridgeVersion = '2026.09.09.3'
 $script:BridgeStartedAt = Get-Date
 
 function Write-BridgeLog {
@@ -632,6 +632,8 @@ function Invoke-PasteZalo {
     $enter = ConvertTo-BridgeBool $Payload.enter $false
     $defaultDelay = if ($enter) { 250 } else { 0 }
     $delay = Limit-Number ([int] (Get-BridgeValue $Payload 'before_enter_delay_ms' $defaultDelay)) 0 5000
+    $afterPasteDelay = Limit-Number ([int] (Get-BridgeValue $Payload 'after_paste_delay_ms' 180)) 0 2000
+    $afterEnterDelay = Limit-Number ([int] (Get-BridgeValue $Payload 'after_enter_delay_ms' 120)) 0 2000
     $clipboardPayload = Set-BridgeClipboardPayload $Payload
 
     Activate-Window $window
@@ -639,7 +641,7 @@ function Invoke-PasteZalo {
 
     if ($paste) {
         $shell.SendKeys('^v')
-        Start-Sleep -Milliseconds 280
+        Start-Sleep -Milliseconds $afterPasteDelay
     }
 
     if ($enter) {
@@ -647,7 +649,7 @@ function Invoke-PasteZalo {
             Start-Sleep -Milliseconds $delay
         }
         $shell.SendKeys('~')
-        Start-Sleep -Milliseconds 180
+        Start-Sleep -Milliseconds $afterEnterDelay
     }
 
     return @{

@@ -22,6 +22,7 @@ const workStatusOptions = [
 ];
 const workStatusValues = new Set(workStatusOptions.map((option) => option.value));
 const queueValues = new Set(queueTabs.map((tab) => tab.value));
+const toastAutoHideMs = 4500;
 const returnStateParamKeys = [
     'crm_restore',
     'return_lead_id',
@@ -682,6 +683,16 @@ const TelesalesCrm = () => {
             setErrorMessage(resolveApiMessage(error, 'Không tải được cấu hình telesales.'));
         });
     }, [fetchBootstrap]);
+
+    useEffect(() => {
+        if (!toast) return undefined;
+
+        const timeoutId = window.setTimeout(() => {
+            setToast('');
+        }, toastAutoHideMs);
+
+        return () => window.clearTimeout(timeoutId);
+    }, [toast]);
 
     useEffect(() => {
         const controller = new AbortController();
@@ -2235,8 +2246,17 @@ const TelesalesCrm = () => {
                 ) : null}
 
                 {toast ? (
-                    <div className="rounded-sm border border-emerald-200 bg-emerald-50 px-4 py-3 text-[13px] font-semibold text-emerald-700">
-                        {toast}
+                    <div className="flex items-center justify-between gap-3 rounded-sm border border-emerald-200 bg-emerald-50 px-4 py-3 text-[13px] font-semibold text-emerald-700">
+                        <span className="min-w-0">{toast}</span>
+                        <button
+                            type="button"
+                            onClick={() => setToast('')}
+                            className="inline-flex size-7 shrink-0 items-center justify-center rounded-sm text-emerald-700 hover:bg-emerald-100"
+                            title="Đóng"
+                            aria-label="Đóng thông báo"
+                        >
+                            <span className="material-symbols-outlined text-[18px]">close</span>
+                        </button>
                     </div>
                 ) : null}
 

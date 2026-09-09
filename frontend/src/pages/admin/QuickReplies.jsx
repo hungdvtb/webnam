@@ -62,16 +62,16 @@ const sidebarWindowNameForTarget = (value) => `quick-reply-zalo-sidebar-${normal
 const sidebarBrowserKeywordsForTarget = (value) => [sidebarTitleForTarget(value)];
 const ZALO_WEB_URL = 'https://chat.zalo.me/';
 const ZALO_WEB_POPUP_WINDOW_NAME = 'quick-reply-zalo-web-target';
-const ZALO_BRIDGE_VERSION = '2026.09.09.3';
+const ZALO_BRIDGE_VERSION = '2026.09.09.4';
 const ZALO_BRIDGE_INSTALLER_FILE = `install-zalo-bridge-lite-8003-${ZALO_BRIDGE_VERSION}.bat`;
 const ZALO_BRIDGE_INSTALLER_URL = `/downloads/${ZALO_BRIDGE_INSTALLER_FILE}`;
-const ZALO_SEND_TEXT_PASTE_DELAY_MS = 100;
-const ZALO_SEND_TEXT_SETTLE_MS = 90;
-const ZALO_SEND_TEXT_ENTER_DELAY_MS = 120;
-const ZALO_SEND_AFTER_TEXT_STEP_MS = 260;
-const ZALO_SEND_MEDIA_PASTE_DELAY_MS = 180;
-const ZALO_SEND_AFTER_MEDIA_STEP_MS = 450;
-const zaloSendMediaEnterDelay = (mediaCount) => Math.min(3000, 1000 + Math.max(0, Number(mediaCount) || 0) * 450);
+const ZALO_SEND_TEXT_PASTE_DELAY_MS = 60;
+const ZALO_SEND_TEXT_SETTLE_MS = 35;
+const ZALO_SEND_TEXT_ENTER_DELAY_MS = 60;
+const ZALO_SEND_AFTER_TEXT_STEP_MS = 90;
+const ZALO_SEND_MEDIA_PASTE_DELAY_MS = 70;
+const ZALO_SEND_AFTER_MEDIA_STEP_MS = 55;
+const zaloSendMediaEnterDelay = (mediaCount) => Math.min(1200, 340 + Math.max(0, Number(mediaCount) || 0) * 130);
 const SIDEBAR_ACTION_COLUMN_WIDTH = 37;
 const SIDEBAR_COLUMN_WIDTHS_STORAGE_KEY = 'quick_reply_sidebar_column_widths_v1';
 const SIDEBAR_COLUMN_WIDTH_LIMITS = {
@@ -582,6 +582,51 @@ const localBridgePayloadMediaCount = (data = {}) => [
     data?.video_urls,
     data?.file_paths,
 ].reduce((total, items) => total + (Array.isArray(items) ? items.length : 0), 0);
+
+const isLocalBridgeEndpointMissingError = (error) => {
+    const status = Number(error?.response?.status);
+    const message = String(error?.response?.data?.message || error?.message || '').toLowerCase();
+
+    return [404, 405].includes(status)
+        || message.includes('bridge endpoint not found')
+        || message.includes('endpoint not found');
+};
+
+const buildZaloBatchSendPayload = (contents = []) => {
+    let manualImages = 0;
+    let textCount = 0;
+    let mediaCount = 0;
+
+    const steps = contents.reduce((result, content) => {
+        const mediaUrls = bridgeClipboardUrls(content.images);
+        const body = content.body || '';
+        const hasText = Boolean(normalizeText(body));
+
+        manualImages += Math.max((content.images?.length || 0) - mediaUrls.length, 0);
+        textCount += hasText ? 1 : 0;
+        mediaCount += mediaUrls.length;
+
+        if (!hasText && mediaUrls.length === 0) {
+            return result;
+        }
+
+        result.push({
+            text: hasText ? body : '',
+            image_urls: mediaUrls,
+            text_after_paste_delay_ms: ZALO_SEND_TEXT_PASTE_DELAY_MS,
+            text_before_enter_delay_ms: ZALO_SEND_TEXT_ENTER_DELAY_MS,
+            after_text_delay_ms: ZALO_SEND_TEXT_SETTLE_MS,
+            media_after_paste_delay_ms: ZALO_SEND_MEDIA_PASTE_DELAY_MS,
+            media_before_enter_delay_ms: zaloSendMediaEnterDelay(mediaUrls.length),
+            after_enter_delay_ms: 45,
+            after_step_delay_ms: mediaUrls.length > 0 ? ZALO_SEND_AFTER_MEDIA_STEP_MS : ZALO_SEND_AFTER_TEXT_STEP_MS,
+        });
+
+        return result;
+    }, []);
+
+    return { steps, manualImages, textCount, mediaCount };
+};
 
 const localBridgeUnavailableMessage = (targetAppName) => (
     `Không thấy backend local tại 127.0.0.1:8003, nên web chính chưa kéo được ${targetAppName}. Bấm Cài Bridge rồi chạy file cài một lần trên máy này, sau đó bấm Panel phải lại.`
@@ -2454,6 +2499,46 @@ function QuickReplies() {
                 let sentImages = 0;
                 let manualImages = 0;
 
+                const batchPayload = buildZaloBatchSendPayload(contents);
+                if (batchPayload.steps.length > 0) {
+                    manualImages = batchPayload.manualImages;
+
+                    try {
+                        const batchResponse = await quickReplyApi.localWindowBridgeSendZaloBatch({
+                            zalo_target: 'web',
+                            steps: batchPayload.steps,
+                            bridge_timeout_ms: Math.max(180000, batchPayload.mediaCount * 45000),
+                        });
+                        const batchResult = batchResponse?.data?.result || {};
+                        sentSteps = Number(batchResult.steps_sent || batchPayload.steps.length);
+                        sentText = Number(batchResult.text_count || batchPayload.textCount);
+                        sentImages = Number(batchResult.media_count || batchPayload.mediaCount);
+
+                        if (sentSteps === 0) {
+                            throw new Error(manualImages > 0
+                                ? 'Không copy được ảnh sang clipboard để gửi Zalo Web. Hãy dùng Zalo PC hoặc gửi ảnh thủ công.'
+                                : 'Mẫu này chưa có nội dung để gửi.');
+                        }
+
+                        await recordUse(reply);
+                        setCopiedState({ id: replyId, mode: 'sent' });
+                        setZaloPasteFlow(null);
+                        setSendDraft(null);
+                        setMessage(manualImages > 0
+                            ? `Đã gửi ${sentSteps} tin sang Zalo Web. Đã gửi ${sentText} chữ, ${sentImages} ảnh; còn ${manualImages} ảnh trình duyệt không copy được.`
+                            : `Đã gửi ${sentSteps} tin sang Zalo Web.`
+                        );
+                        return;
+                    } catch (bridgeErr) {
+                        if (!isLocalBridgeEndpointMissingError(bridgeErr)
+                            && !bridgeErr?.isLocalQuickReplyBridgeUnavailable
+                            && bridgeErr?.code !== 'ERR_LOCAL_QUICK_REPLY_BRIDGE_UNAVAILABLE') {
+                            throw bridgeErr;
+                        }
+                    }
+
+                    manualImages = 0;
+                }
 
                 const pasteToZaloWeb = async (data = {}) => {
                     try {
@@ -2558,6 +2643,46 @@ function QuickReplies() {
                 let sentImages = 0;
                 let manualImages = 0;
 
+                const batchPayload = buildZaloBatchSendPayload(contents);
+                if (batchPayload.steps.length > 0) {
+                    manualImages = batchPayload.manualImages;
+
+                    try {
+                        const batchResponse = await quickReplyApi.localWindowBridgeSendZaloBatch({
+                            zalo_target: 'pc',
+                            steps: batchPayload.steps,
+                            bridge_timeout_ms: Math.max(180000, batchPayload.mediaCount * 45000),
+                        });
+                        const batchResult = batchResponse?.data?.result || {};
+                        sentSteps = Number(batchResult.steps_sent || batchPayload.steps.length);
+                        sentText = Number(batchResult.text_count || batchPayload.textCount);
+                        sentImages = Number(batchResult.media_count || batchPayload.mediaCount);
+
+                        if (sentSteps === 0) {
+                            throw new Error(manualImages > 0
+                                ? 'Không copy được ảnh sang clipboard để gửi Zalo PC. Hãy gửi ảnh thủ công hoặc thử lại bằng backend local.'
+                                : 'Mẫu này chưa có nội dung để gửi.');
+                        }
+
+                        await recordUse(reply);
+                        setCopiedState({ id: replyId, mode: 'sent' });
+                        setZaloPasteFlow(null);
+                        setSendDraft(null);
+                        setMessage(manualImages > 0
+                            ? `Đã gửi ${sentSteps} tin sang Zalo PC. Đã gửi ${sentText} chữ, ${sentImages} ảnh; còn ${manualImages} ảnh trình duyệt không copy được.`
+                            : `Đã gửi ${sentSteps} tin sang Zalo PC.`
+                        );
+                        return;
+                    } catch (bridgeErr) {
+                        if (!isLocalBridgeEndpointMissingError(bridgeErr)
+                            && !bridgeErr?.isLocalQuickReplyBridgeUnavailable
+                            && bridgeErr?.code !== 'ERR_LOCAL_QUICK_REPLY_BRIDGE_UNAVAILABLE') {
+                            throw bridgeErr;
+                        }
+                    }
+
+                    manualImages = 0;
+                }
 
                 const pasteToZaloPc = async (data = {}) => {
                     try {

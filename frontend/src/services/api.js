@@ -966,6 +966,7 @@ export const quickReplyApi = {
     splitZalo: (data = {}) => api.post('/quick-replies/split-zalo', data),
     localWindowBridgeSplitZalo: (data = {}) => postLocalQuickReplyBridge('/quick-replies/local-window-bridge/split-zalo', data),
     localWindowBridgePasteZalo: (data = {}) => postLocalQuickReplyBridge('/quick-replies/local-window-bridge/paste-zalo', data),
+    localWindowBridgeSendZaloBatch: (data = {}) => postLocalQuickReplyBridge('/quick-replies/local-window-bridge/send-zalo-batch', data),
     getZaloMirrorScreenshot: (params = {}) => api.get('/quick-replies/zalo-mirror/screenshot', { params, responseType: 'blob' }),
     clickZaloMirror: (data = {}) => api.post('/quick-replies/zalo-mirror/click', data),
     typeZaloMirror: (data = {}) => api.post('/quick-replies/zalo-mirror/type', data),

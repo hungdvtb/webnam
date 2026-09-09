@@ -194,7 +194,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:BridgeVersion = '2026.09.09.3'
+$script:BridgeVersion = '2026.09.09.4'
 $script:BridgeStartedAt = Get-Date
 
 function Write-BridgeLog {
@@ -807,17 +807,15 @@ function Activate-Window {
     Start-Sleep -Milliseconds 160
 }
 
-function Invoke-PasteZalo {
-    param($Payload)
+function Invoke-ZaloPasteAction {
+    param(
+        $Payload,
+        $Window,
+        $Shell,
+        [bool] $ShouldActivate = $true
+    )
 
     $target = Normalize-ZaloTarget $Payload.zalo_target
-    Write-BridgeLog ("Paste request target={0} paste={1} enter={2}" -f $target, (Get-BridgeValue $Payload 'paste' $true), (Get-BridgeValue $Payload 'enter' $false))
-    $keywords = ConvertTo-StringArray $Payload.window_keywords (Get-ZaloKeywords $target)
-    $window = Find-ZaloWindow $target $keywords
-    if ($null -eq $window) {
-        throw "Cannot find Zalo $target window. Open the Zalo chat window and try again."
-    }
-
     $paste = ConvertTo-BridgeBool $Payload.paste $true
     $enter = ConvertTo-BridgeBool $Payload.enter $false
     $defaultDelay = if ($enter) { 250 } else { 0 }
@@ -826,11 +824,16 @@ function Invoke-PasteZalo {
     $afterEnterDelay = Limit-Number ([int] (Get-BridgeValue $Payload 'after_enter_delay_ms' 120)) 0 2000
     $clipboardPayload = Set-BridgeClipboardPayload $Payload
 
-    Activate-Window $window
-    $shell = New-Object -ComObject WScript.Shell
+    if ($ShouldActivate) {
+        Activate-Window $Window
+    }
+
+    if ($null -eq $Shell) {
+        $Shell = New-Object -ComObject WScript.Shell
+    }
 
     if ($paste) {
-        $shell.SendKeys('^v')
+        $Shell.SendKeys('^v')
         Start-Sleep -Milliseconds $afterPasteDelay
     }
 
@@ -838,7 +841,7 @@ function Invoke-PasteZalo {
         if ($delay -gt 0) {
             Start-Sleep -Milliseconds $delay
         }
-        $shell.SendKeys('~')
+        $Shell.SendKeys('~')
         Start-Sleep -Milliseconds $afterEnterDelay
     }
 
@@ -850,8 +853,168 @@ function Invoke-PasteZalo {
         enter = $enter
         clipboard_type = $clipboardPayload.type
         clipboard_count = $clipboardPayload.count
+        window_title = $Window.Title
+        process = $Window.ProcessName
+    }
+}
+
+function Invoke-PasteZalo {
+    param($Payload)
+
+    $target = Normalize-ZaloTarget $Payload.zalo_target
+    Write-BridgeLog ("Paste request target={0} paste={1} enter={2}" -f $target, (Get-BridgeValue $Payload 'paste' $true), (Get-BridgeValue $Payload 'enter' $false))
+    $keywords = ConvertTo-StringArray $Payload.window_keywords (Get-ZaloKeywords $target)
+    $window = Find-ZaloWindow $target $keywords
+    if ($null -eq $window) {
+        throw "Cannot find Zalo $target window. Open the Zalo chat window and try again."
+    }
+
+    $shell = New-Object -ComObject WScript.Shell
+    return Invoke-ZaloPasteAction $Payload $window $shell $true
+}
+
+function Invoke-ZaloBatchSend {
+    param($Payload)
+
+    $target = Normalize-ZaloTarget $Payload.zalo_target
+    $keywords = ConvertTo-StringArray $Payload.window_keywords (Get-ZaloKeywords $target)
+    $steps = @(Get-BridgeValue $Payload 'steps' @())
+    if ($steps.Count -eq 0) {
+        throw 'Batch contains no Zalo send steps.'
+    }
+
+    Write-BridgeLog ("Batch send target={0} steps={1}" -f $target, $steps.Count)
+
+    $preparedMediaByStep = @()
+    $downloadedUrls = @{}
+    $batchTempDirectory = $null
+    $downloadIndex = 0
+
+    for ($index = 0; $index -lt $steps.Count; $index += 1) {
+        $step = $steps[$index]
+        $stepUrls = @()
+        $stepUrls += ConvertTo-StringArray (Get-BridgeValue $step 'image_urls' @()) @()
+        $stepUrls += ConvertTo-StringArray (Get-BridgeValue $step 'media_urls' @()) @()
+        $stepUrls += ConvertTo-StringArray (Get-BridgeValue $step 'video_urls' @()) @()
+
+        $stepPaths = @()
+        $providedPaths = ConvertTo-StringArray (Get-BridgeValue $step 'file_paths' @()) @()
+        foreach ($path in $providedPaths) {
+            if (Test-Path -LiteralPath $path -PathType Leaf) {
+                $stepPaths += (Resolve-Path -LiteralPath $path).Path
+            }
+        }
+
+        if ($stepUrls.Count -gt 0 -and $null -eq $batchTempDirectory) {
+            $batchTempDirectory = New-BridgeTempDirectory
+        }
+
+        foreach ($url in $stepUrls) {
+            $cacheKey = "$url"
+            if ($downloadedUrls.ContainsKey($cacheKey)) {
+                $stepPaths += $downloadedUrls[$cacheKey]
+                continue
+            }
+
+            $downloadIndex += 1
+            $savedPath = Save-BridgeUrlToFile $url $batchTempDirectory $downloadIndex
+            $downloadedUrls[$cacheKey] = $savedPath
+            $stepPaths += $savedPath
+        }
+
+        $preparedMediaByStep += ,([pscustomobject] @{
+            paths = [string[]] $stepPaths
+            count = $stepPaths.Count
+        })
+    }
+
+    $window = Find-ZaloWindow $target $keywords
+    if ($null -eq $window) {
+        throw "Cannot find Zalo $target window. Open the Zalo chat window and try again."
+    }
+
+    Activate-Window $window
+    $shell = New-Object -ComObject WScript.Shell
+    $sentSteps = 0
+    $sentText = 0
+    $sentMedia = 0
+    $stepResults = @()
+
+    for ($index = 0; $index -lt $steps.Count; $index += 1) {
+        $step = $steps[$index]
+        $text = Get-BridgeValue $step 'text' ''
+        $preparedMedia = $preparedMediaByStep[$index]
+        $filePaths = ConvertTo-StringArray (Get-BridgeValue $preparedMedia 'paths' @()) @()
+        $mediaCount = [int] $preparedMedia.count
+        $hasText = -not [string]::IsNullOrWhiteSpace("$text")
+        $hasMedia = $mediaCount -gt 0
+
+        if (-not $hasText -and -not $hasMedia) {
+            continue
+        }
+
+        try {
+            if ($hasText) {
+                $textPayload = [pscustomobject] @{
+                    zalo_target = $target
+                    text = "$text"
+                    paste = $true
+                    enter = (-not $hasMedia)
+                    after_paste_delay_ms = Get-BridgeValue $step 'text_after_paste_delay_ms' 80
+                    before_enter_delay_ms = Get-BridgeValue $step 'text_before_enter_delay_ms' 100
+                    after_enter_delay_ms = Get-BridgeValue $step 'after_enter_delay_ms' 80
+                }
+                $textResult = Invoke-ZaloPasteAction $textPayload $window $shell $false
+                $sentText += 1
+
+                if ($hasMedia) {
+                    $afterTextDelay = Limit-Number ([int] (Get-BridgeValue $step 'after_text_delay_ms' 40)) 0 1000
+                    if ($afterTextDelay -gt 0) {
+                        Start-Sleep -Milliseconds $afterTextDelay
+                    }
+                }
+            }
+
+            if ($hasMedia) {
+                $mediaPayload = [pscustomobject] @{
+                    zalo_target = $target
+                    file_paths = $filePaths
+                    paste = $true
+                    enter = $true
+                    after_paste_delay_ms = Get-BridgeValue $step 'media_after_paste_delay_ms' 120
+                    before_enter_delay_ms = Get-BridgeValue $step 'media_before_enter_delay_ms' 900
+                    after_enter_delay_ms = Get-BridgeValue $step 'after_enter_delay_ms' 80
+                }
+                $mediaResult = Invoke-ZaloPasteAction $mediaPayload $window $shell $false
+                $sentMedia += $mediaResult.clipboard_count
+            }
+
+            $sentSteps += 1
+            $afterStepDelay = Limit-Number ([int] (Get-BridgeValue $step 'after_step_delay_ms' 120)) 0 2000
+            if ($afterStepDelay -gt 0 -and $index -lt ($steps.Count - 1)) {
+                Start-Sleep -Milliseconds $afterStepDelay
+            }
+
+            $stepResults += [pscustomobject] @{
+                index = $index + 1
+                text = $hasText
+                media_count = $mediaCount
+            }
+        } catch {
+            throw ("Batch failed at step #{0} after sending {1} step(s): {2}" -f ($index + 1), $sentSteps, $_.Exception.Message)
+        }
+    }
+
+    return @{
+        ok = $true
+        action = 'batch-send'
+        target = $target
+        steps_sent = $sentSteps
+        text_count = $sentText
+        media_count = $sentMedia
         window_title = $window.Title
         process = $window.ProcessName
+        steps = $stepResults
     }
 }
 
@@ -1129,6 +1292,12 @@ function Handle-Request {
         if ($pathOnly -eq '/api/quick-replies/local-window-bridge/paste-zalo') {
             $result = Invoke-PasteZalo $payload
             Write-HttpResponse $Request.Stream 200 'OK' @{ message = 'Lite bridge pasted to Zalo.'; result = $result } $origin
+            return
+        }
+
+        if ($pathOnly -eq '/api/quick-replies/local-window-bridge/send-zalo-batch') {
+            $result = Invoke-ZaloBatchSend $payload
+            Write-HttpResponse $Request.Stream 200 'OK' @{ message = 'Lite bridge sent Zalo batch.'; result = $result } $origin
             return
         }
 

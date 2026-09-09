@@ -678,6 +678,72 @@ class OrderBatchReturnSlipTest extends TestCase
         $this->assertSame('0.000', (string) $returnedProduct->fresh()->stock_quantity);
     }
 
+    public function test_pending_return_quantity_and_drilldown_ignore_orders_before_rollout_cutoff(): void
+    {
+        [$account, $user] = $this->authenticate();
+
+        DB::table('system_settings')->updateOrInsert(
+            ['key' => 'orders.auto_return_slip_start_at'],
+            [
+                'value' => now()->toDateTimeString(),
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]
+        );
+
+        $product = $this->createProduct($account, [
+            'name' => 'San pham cho hoan tinh tu don moi',
+            'sku' => 'ROLLOUT-PENDING-RETURN-001',
+        ]);
+
+        $oldCreatedAt = now()->subDay();
+        $oldOrder = $this->createOfficialOrder($account, $user, $product, 4, 'OR-OLD-PENDING-RETURN-0001', [
+            'status' => 'pending_return',
+        ]);
+        $oldOrder->forceFill([
+            'created_at' => $oldCreatedAt,
+            'updated_at' => $oldCreatedAt,
+            'officialized_at' => $oldCreatedAt,
+        ])->save();
+
+        $newOrder = $this->createOfficialOrder($account, $user, $product, 2, 'OR-NEW-PENDING-RETURN-0001', [
+            'status' => 'pending_return',
+        ]);
+
+        $inventoryResponse = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/inventory/products?' . http_build_query([
+                'per_page' => 20,
+            ]));
+
+        $inventoryResponse->assertOk();
+
+        $row = collect($inventoryResponse->json('data'))->firstWhere('id', $product->id);
+        $summary = $inventoryResponse->json('summary');
+
+        $this->assertNotNull($row);
+        $this->assertSame(2, (int) ($row['pending_return_quantity'] ?? 0));
+        $this->assertSame(2, (int) ($summary['total_pending_return'] ?? 0));
+
+        $ordersResponse = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/orders?' . http_build_query([
+                'inventory_stock_scope' => 'pending_return',
+                'inventory_product_ids' => $product->id,
+                'per_page' => 100,
+            ]));
+
+        $ordersResponse->assertOk();
+
+        $returnedIds = collect($ordersResponse->json('data'))
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        $this->assertContains($newOrder->id, $returnedIds);
+        $this->assertNotContains($oldOrder->id, $returnedIds);
+    }
+
     public function test_returned_status_auto_creates_return_slip_for_exported_order_items(): void
     {
         [$account, $user] = $this->authenticate();

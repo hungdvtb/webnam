@@ -85,6 +85,8 @@ class OrderController extends Controller
     private const RETURN_FOLLOWUP_CATEGORY_PENDING_RETURN = 'pending_return';
     private const RETURN_FOLLOWUP_CATEGORY_EXCHANGE_RETURN = self::ORDER_TYPE_EXCHANGE_RETURN;
     private const RETURN_FOLLOWUP_CATEGORY_PARTIAL_DELIVERY = self::ORDER_TYPE_PARTIAL_DELIVERY;
+    private const INVENTORY_ORDER_SCOPE_PENDING_EXPORT = 'pending_export';
+    private const INVENTORY_ORDER_SCOPE_PENDING_RETURN = 'pending_return';
     private const RETURN_FOLLOWUP_FILTERS = [
         self::RETURN_FOLLOWUP_FILTER_ALL,
         self::RETURN_FOLLOWUP_CATEGORY_PENDING_RETURN,
@@ -3872,6 +3874,8 @@ class OrderController extends Controller
             }
         }
 
+        $this->applyInventoryOrderDrilldownFilters($query, $request);
+
         $query
             ->when(!empty($searchTerms), function ($q) use ($searchTerms, $accountId, $searchScope) {
                 $q->where(function ($searchQuery) use ($searchTerms, $accountId, $searchScope) {
@@ -3993,6 +3997,228 @@ class OrderController extends Controller
                     ]);
             });
         }
+    }
+
+    private function extractInventoryOrderProductIds(Request $request): array
+    {
+        $rawValue = $request->input('inventory_product_ids', []);
+        if (!is_array($rawValue)) {
+            $rawValue = explode(',', (string) $rawValue);
+        }
+
+        return collect($rawValue)
+            ->map(fn ($value) => (int) $value)
+            ->filter(fn (int $id) => $id > 0)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    private function normalizeInventoryOrderScope(mixed $scope): string
+    {
+        $normalized = Str::lower(trim((string) $scope));
+
+        return in_array($normalized, [
+            self::INVENTORY_ORDER_SCOPE_PENDING_EXPORT,
+            self::INVENTORY_ORDER_SCOPE_PENDING_RETURN,
+        ], true)
+            ? $normalized
+            : '';
+    }
+
+    private function orderItemInventoryProductExpression(string $table = 'order_items'): string
+    {
+        return "COALESCE({$table}.actual_product_id, {$table}.product_id)";
+    }
+
+    private function applyInventoryOrderDrilldownFilters($query, Request $request): void
+    {
+        $productIds = $this->extractInventoryOrderProductIds($request);
+        $scope = $this->normalizeInventoryOrderScope($request->input('inventory_stock_scope'));
+
+        if ($scope === self::INVENTORY_ORDER_SCOPE_PENDING_EXPORT) {
+            $this->applyPendingExportInventoryOrderScope($query, $productIds, $request);
+            return;
+        }
+
+        if ($scope === self::INVENTORY_ORDER_SCOPE_PENDING_RETURN) {
+            $this->applyPendingReturnInventoryOrderScope($query, $productIds);
+            return;
+        }
+
+        if (!empty($productIds)) {
+            $this->whereOrderHasInventoryProducts($query, $productIds);
+        }
+    }
+
+    private function whereOrderHasInventoryProducts($query, array $productIds): void
+    {
+        if (empty($productIds)) {
+            return;
+        }
+
+        $productExpression = $this->orderItemInventoryProductExpression('order_items');
+
+        $query->whereExists(function ($itemQuery) use ($productExpression, $productIds) {
+            $itemQuery
+                ->select(DB::raw(1))
+                ->from('order_items')
+                ->whereColumn('order_items.order_id', 'orders.id')
+                ->where(function ($builder) {
+                    $builder
+                        ->whereNotNull('order_items.actual_product_id')
+                        ->orWhereNotNull('order_items.product_id');
+                })
+                ->whereIn(DB::raw($productExpression), $productIds);
+        });
+    }
+
+    private function applyInventoryOfficialOrderScope($query): void
+    {
+        if ($this->orderTableHasColumn('deleted_at')) {
+            $query->whereNull('orders.deleted_at');
+        }
+
+        $query->where(function ($builder) {
+            $builder
+                ->where('orders.order_kind', self::ORDER_KIND_OFFICIAL)
+                ->orWhereNull('orders.order_kind')
+                ->orWhere('orders.order_kind', '');
+        });
+    }
+
+    private function applyInventoryOrderNotSyntheticExportScope($query): void
+    {
+        $query->where(function ($builder) {
+            $builder
+                ->whereNull('orders.type')
+                ->orWhere('orders.type', '!=', 'inventory_export');
+        });
+    }
+
+    private function applyActiveShipmentFiltersForInventory($query, string $shipmentTable = 'shipments'): void
+    {
+        if (Schema::hasColumn('shipments', 'deleted_at')) {
+            $query->whereNull("{$shipmentTable}.deleted_at");
+        }
+
+        $query->whereNotIn("{$shipmentTable}.shipment_status", ['canceled']);
+    }
+
+    private function applyPendingOutboundInvalidStatusFilter($query, string $column): void
+    {
+        $statusExpression = "LOWER(COALESCE({$column}, ''))";
+
+        foreach ([
+            'cancel',
+            'canceled',
+            'cancelled',
+            'return',
+            'returned',
+            'returning',
+            'pending return',
+            'pending_return',
+            'completed',
+            'draft',
+            'nhap',
+            'huy',
+            'hoan',
+            'void',
+        ] as $keyword) {
+            $query->whereRaw($statusExpression . ' NOT LIKE ?', ['%' . $keyword . '%']);
+        }
+    }
+
+    private function applyPendingOutboundInventoryOrderScope($query): void
+    {
+        $this->applyInventoryOfficialOrderScope($query);
+        $this->applyInventoryOrderNotSyntheticExportScope($query);
+        $this->applyPendingOutboundInvalidStatusFilter($query, 'orders.status');
+
+        $query
+            ->where(function ($builder) {
+                $builder
+                    ->whereNull('orders.shipping_tracking_code')
+                    ->orWhere('orders.shipping_tracking_code', '');
+            })
+            ->whereNotExists(function ($shipmentQuery) {
+                $shipmentQuery
+                    ->select(DB::raw(1))
+                    ->from('shipments')
+                    ->whereColumn('shipments.order_id', 'orders.id');
+
+                $this->applyActiveShipmentFiltersForInventory($shipmentQuery, 'shipments');
+            });
+    }
+
+    private function applyPendingExportInventoryOrderScope($query, array $productIds, Request $request): void
+    {
+        $this->applyPendingOutboundInventoryOrderScope($query);
+
+        $accountId = $this->resolveAccountId($request);
+        $productExpression = $this->orderItemInventoryProductExpression('order_items');
+        $deletedDocumentSql = Schema::hasColumn('inventory_documents', 'deleted_at')
+            ? ' AND inventory_documents.deleted_at IS NULL'
+            : '';
+        $accountDocumentSql = $accountId > 0
+            ? ' AND inventory_documents.account_id = ?'
+            : '';
+        $bindings = ['export', 'draft', 'completed', 'order'];
+        if ($accountId > 0) {
+            $bindings[] = $accountId;
+        }
+
+        $exportedQuantitySql = "
+            SELECT COALESCE(SUM(inventory_document_items.quantity), 0)
+            FROM inventory_document_items
+            INNER JOIN inventory_documents
+                ON inventory_documents.id = inventory_document_items.inventory_document_id
+            WHERE inventory_documents.type = ?
+                AND inventory_documents.status IN (?, ?)
+                AND inventory_documents.reference_type = ?
+                AND inventory_documents.reference_id = orders.id
+                AND inventory_document_items.product_id = {$productExpression}
+                {$accountDocumentSql}
+                {$deletedDocumentSql}
+        ";
+
+        $query->whereExists(function ($itemQuery) use ($bindings, $exportedQuantitySql, $productExpression, $productIds) {
+            $itemQuery
+                ->select(DB::raw(1))
+                ->from('order_items')
+                ->whereColumn('order_items.order_id', 'orders.id')
+                ->where(function ($builder) {
+                    $builder
+                        ->whereNotNull('order_items.actual_product_id')
+                        ->orWhereNotNull('order_items.product_id');
+                })
+                ->groupBy('order_items.order_id')
+                ->groupByRaw($productExpression)
+                ->havingRaw(
+                    "COALESCE(SUM(order_items.quantity), 0) > COALESCE(({$exportedQuantitySql}), 0)",
+                    $bindings
+                );
+
+            if (!empty($productIds)) {
+                $itemQuery->whereIn(DB::raw($productExpression), $productIds);
+            }
+        });
+    }
+
+    private function applyPendingReturnInventoryOrderScope($query, array $productIds): void
+    {
+        $this->applyInventoryOfficialOrderScope($query);
+        $this->applyInventoryOrderNotSyntheticExportScope($query);
+        $this->whereOrderHasInventoryProducts($query, $productIds);
+
+        $query->whereIn('orders.status', [
+            'pending_return',
+            'returned',
+            OrderStatusCatalog::PARTIAL_DELIVERY_CODE,
+        ]);
+
+        $this->orderInventorySlipService->applyAutomaticReturnSlipStartScope($query, 'orders');
+        $this->orderInventorySlipService->applyReturnSlipStateFilter($query, 'missing');
     }
 
     private function emptyOrderListSummary(): array

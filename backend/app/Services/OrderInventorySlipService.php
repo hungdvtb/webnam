@@ -822,6 +822,32 @@ class OrderInventorySlipService
         };
     }
 
+    public function applyAutomaticReturnSlipStartScope($query, string $ordersTable = 'orders'): void
+    {
+        $startAt = $this->automaticReturnSlipStartAt();
+        if (!$startAt) {
+            return;
+        }
+
+        $createdAtColumn = "{$ordersTable}.created_at";
+
+        if (!Schema::hasColumn('orders', 'officialized_at')) {
+            $query->where($createdAtColumn, '>=', $startAt->toDateTimeString());
+            return;
+        }
+
+        $officializedAtColumn = "{$ordersTable}.officialized_at";
+        $query->where(function ($builder) use ($createdAtColumn, $officializedAtColumn, $startAt) {
+            $builder
+                ->where($officializedAtColumn, '>=', $startAt->toDateTimeString())
+                ->orWhere(function ($fallback) use ($createdAtColumn, $officializedAtColumn, $startAt) {
+                    $fallback
+                        ->whereNull($officializedAtColumn)
+                        ->where($createdAtColumn, '>=', $startAt->toDateTimeString());
+                });
+        });
+    }
+
     public function createAutomaticExchangeReturnSlip(
         Order $order,
         ?int $userId = null,

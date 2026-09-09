@@ -21,6 +21,7 @@ import {
     normalizeWholeMoneyNumber,
     parseWholeMoneyValue,
 } from '../../utils/money';
+import { saveOrderReportDrilldownScope } from '../../utils/orderReportDrilldown';
 
 const emptyPagination = { current_page: 1, last_page: 1, total: 0, per_page: 20 };
 const todayValue = new Date().toISOString().slice(0, 10);
@@ -106,6 +107,12 @@ const trashSlipTypeLabels = {
 };
 
 const INVENTORY_TRACKING_WINDOW_DAYS = 15;
+const INVENTORY_ORDER_SCOPE_PENDING_EXPORT = 'pending_export';
+const INVENTORY_ORDER_SCOPE_PENDING_RETURN = 'pending_return';
+const INVENTORY_ORDER_SCOPE_LABELS = {
+    [INVENTORY_ORDER_SCOPE_PENDING_EXPORT]: 'SL chờ xuất',
+    [INVENTORY_ORDER_SCOPE_PENDING_RETURN]: 'SL hoàn chờ về',
+};
 const PRODUCT_FILTER_PRESETS_STORAGE_KEY = 'inventory_product_filter_presets_v1';
 const PRODUCT_SEARCH_HISTORY_STORAGE_KEY = 'inventory_product_search_history_v1';
 const productMultiFilterKeys = ['status', 'cost_source', 'stock_alert', 'type', 'category_id'];
@@ -6692,6 +6699,71 @@ const InventoryMovement = () => {
         setDailyOutboundDrawer({ open: true, product });
     };
 
+    const openInventoryOrderDrilldown = (product, scope) => {
+        const productId = Number(product?.id || 0);
+        if (!productId || !INVENTORY_ORDER_SCOPE_LABELS[scope]) return;
+
+        const quantityField = scope === INVENTORY_ORDER_SCOPE_PENDING_RETURN
+            ? 'pending_return_quantity'
+            : 'pending_export_quantity';
+        const quantity = Number(product?.[quantityField] || 0);
+
+        if (quantity <= 0) {
+            showToast({ type: 'info', message: 'Dòng này chưa có đơn đang tính vào số lượng đó.' });
+            return;
+        }
+
+        const productSku = String(product?.sku || '').trim();
+        const productName = String(product?.name || '').trim();
+        const productLabel = [productSku, productName].filter(Boolean).join(' - ') || `Sản phẩm #${productId}`;
+        const scopeKey = saveOrderReportDrilldownScope({
+            source_label: 'Tồn kho',
+            scope_label: `${INVENTORY_ORDER_SCOPE_LABELS[scope]} ${formatNumber(quantity)} - ${productLabel}`,
+            filters: {
+                inventory_product_ids: [productId],
+                inventory_stock_scope: scope,
+                ...(productFilters.date_from ? { created_at_from: productFilters.date_from } : {}),
+                ...(productFilters.date_to ? { created_at_to: productFilters.date_to } : {}),
+            },
+        });
+
+        if (!scopeKey) {
+            showToast({ type: 'error', message: 'Không thể mở bộ lọc đơn hàng cho số liệu này.' });
+            return;
+        }
+
+        navigate(`/admin/orders?report_scope_key=${encodeURIComponent(scopeKey)}`);
+    };
+
+    const renderInventoryOrderDrilldownQuantity = (product, scope, quantity, activeTextClass) => {
+        const numericQuantity = Number(quantity || 0);
+        const textClass = numericQuantity > 0 ? activeTextClass : 'text-primary/45';
+
+        if (numericQuantity <= 0) {
+            return (
+                <span className={`text-[14px] font-black ${textClass}`}>
+                    {formatNumber(numericQuantity)}
+                </span>
+            );
+        }
+
+        return (
+            <button
+                type="button"
+                onClick={(event) => event.stopPropagation()}
+                onDoubleClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openInventoryOrderDrilldown(product, scope);
+                }}
+                title="Bấm đúp để xem các đơn đang tính vào số này"
+                className={`inline-flex max-w-full items-center justify-end rounded-sm px-1.5 py-0.5 text-[14px] font-black transition hover:bg-primary/[0.06] hover:underline hover:decoration-dotted hover:underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary/30 ${textClass}`}
+            >
+                {formatNumber(numericQuantity)}
+            </button>
+        );
+    };
+
     const closeProductDailyOutboundDrawer = () => {
         setDailyOutboundDrawer({ open: false, product: null });
     };
@@ -9370,18 +9442,20 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         }
         if (columnId === 'pending_export_quantity') {
             const waitingQuantity = Number(row.pending_export_quantity || 0);
-            return (
-                <span className={`text-[14px] font-black ${waitingQuantity > 0 ? 'text-amber-600' : 'text-primary/45'}`}>
-                    {formatNumber(waitingQuantity)}
-                </span>
+            return renderInventoryOrderDrilldownQuantity(
+                row,
+                INVENTORY_ORDER_SCOPE_PENDING_EXPORT,
+                waitingQuantity,
+                'text-amber-600',
             );
         }
         if (columnId === 'pending_return_quantity') {
             const pendingReturnQuantity = Number(row.pending_return_quantity || 0);
-            return (
-                <span className={`text-[14px] font-black ${pendingReturnQuantity > 0 ? 'text-sky-600' : 'text-primary/45'}`}>
-                    {formatNumber(pendingReturnQuantity)}
-                </span>
+            return renderInventoryOrderDrilldownQuantity(
+                row,
+                INVENTORY_ORDER_SCOPE_PENDING_RETURN,
+                pendingReturnQuantity,
+                'text-sky-600',
             );
         }
         if (columnId === 'recent_outbound_quantity') {

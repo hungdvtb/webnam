@@ -5189,6 +5189,7 @@ class ProductController extends Controller
                 OrderStatusCatalog::PARTIAL_DELIVERY_CODE,
             ]);
 
+        $this->orderInventorySlipService->applyAutomaticReturnSlipStartScope($query, 'orders');
         $this->orderInventorySlipService->applyReturnSlipStateFilter($query, 'missing');
     }
 

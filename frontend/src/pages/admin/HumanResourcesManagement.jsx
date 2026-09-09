@@ -842,6 +842,75 @@ function Panel({ title, icon, onOpen, children, footer }) {
     );
 }
 
+function MobileMetricCard({ icon, label, value, tone = 'gray' }) {
+    const toneClass = {
+        teal: 'border-teal-100 bg-teal-50 text-teal-700',
+        green: 'border-emerald-100 bg-emerald-50 text-emerald-700',
+        amber: 'border-amber-100 bg-amber-50 text-amber-700',
+        blue: 'border-blue-100 bg-blue-50 text-blue-700',
+        gray: 'border-gray-200 bg-white text-gray-800',
+    }[tone] || 'border-gray-200 bg-white text-gray-800';
+
+    return (
+        <div className={`rounded-lg border p-3 ${toneClass}`}>
+            <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.08em] opacity-80">
+                <span className="material-symbols-outlined text-[18px]">{icon}</span>
+                {label}
+            </div>
+            <div className="mt-2 break-words text-[18px] font-extrabold leading-6 text-gray-950">{value}</div>
+        </div>
+    );
+}
+
+function MobileEmptyState({ icon, title, message }) {
+    return (
+        <section className="rounded-lg border border-dashed border-gray-200 bg-white px-4 py-10 text-center">
+            <span className="material-symbols-outlined text-[34px] text-gray-300">{icon}</span>
+            <h2 className="mt-2 text-[15px] font-bold text-gray-800">{title}</h2>
+            <p className="mt-1 text-[12px] font-semibold leading-5 text-gray-500">{message}</p>
+        </section>
+    );
+}
+
+const payrollRowKey = (row = {}) => String(row.payroll_employee_id || row.employee_code || row.full_name || '');
+
+const mobileAttendanceStatus = (entry = {}) => {
+    const status = entry.record?.attendance_status || '';
+    if (safeNumber(entry.workUnits) <= 0 || status === 'Nghỉ') {
+        return { label: status || 'Nghỉ', className: 'border-red-100 bg-red-50 text-red-700' };
+    }
+    if (entry.isFull) {
+        return { label: 'Đủ ca', className: 'border-emerald-100 bg-emerald-50 text-emerald-700' };
+    }
+    return { label: status || 'Làm lẻ', className: 'border-amber-100 bg-amber-50 text-amber-700' };
+};
+
+const buildMobileAttendanceDays = (entries = []) => {
+    const days = new Map();
+
+    entries.forEach((entry) => {
+        const dayKey = dateValue(entry.record?.work_date);
+        if (!dayKey) return;
+
+        if (!days.has(dayKey)) {
+            days.set(dayKey, {
+                work_date: dayKey,
+                entries: [],
+                totalHours: 0,
+                totalWorkUnits: 0,
+                totalAmount: 0,
+            });
+        }
+
+        const day = days.get(dayKey);
+        day.entries.push(entry);
+        day.totalHours += safeNumber(entry.hours);
+        day.totalWorkUnits += safeNumber(entry.workUnits);
+        day.totalAmount += safeNumber(entry.amount);
+    });
+
+    return Array.from(days.values()).sort((left, right) => left.work_date.localeCompare(right.work_date));
+};
 function SaveButton({ saving, disabled, onClick, children = 'Lưu' }) {
     return (
         <button
@@ -987,6 +1056,7 @@ export default function HumanResourcesManagement() {
     const [employeeProfileKey, setEmployeeProfileKey] = useState('');
     const [zoomImage, setZoomImage] = useState({ url: '', title: '' });
     const [showShiftModal, setShowShiftModal] = useState(false);
+    const [mobileEmployeeId, setMobileEmployeeId] = useState('');
 
     useEffect(() => {
         let active = true;
@@ -1191,6 +1261,57 @@ export default function HumanResourcesManagement() {
     const attendanceMonthWorkUnits = attendanceFilterRecords.reduce((sum, record) => sum + safeNumber(record.work_units), 0);
     const manualCount = monthAttendance.filter((record) => !isFullAttendance(record)).length;
     const partialAttendanceCount = attendanceFilterRecords.filter((record) => safeNumber(record.work_units) > 0 && !isFullAttendance(record)).length;
+    const mobileScheduleCountByEmployee = new Map();
+    monthSchedules.forEach((schedule) => {
+        const employeeId = String(schedule.payroll_employee_id || '');
+        if (!employeeId) return;
+        mobileScheduleCountByEmployee.set(employeeId, (mobileScheduleCountByEmployee.get(employeeId) || 0) + 1);
+    });
+
+    const mobileAttendanceByEmployee = new Map();
+    monthAttendance.forEach((record) => {
+        const employeeId = String(record.payroll_employee_id || '');
+        if (!employeeId) return;
+
+        const employee = employeeById.get(employeeId) || record.employee || {};
+        const shift = shiftById.get(String(record.payroll_work_shift_id)) || record.shift || {};
+        const defaultWorkUnits = safeNumber(shift?.default_work_units || 1) || 1;
+        const workUnits = safeNumber(record.work_units);
+        const hours = defaultWorkUnits > 0 ? (workUnits / defaultWorkUnits) * safeNumber(shift?.standard_hours) : 0;
+        const isFull = record?.attendance_status === 'Đi làm' && workUnits >= defaultWorkUnits;
+        const amount = canViewSalary ? (record.calculated_amount ?? calculateAttendanceAmount(record, employee, shift)) : null;
+        const entry = { record, shift, hours, workUnits, isFull, amount };
+
+        if (!mobileAttendanceByEmployee.has(employeeId)) {
+            mobileAttendanceByEmployee.set(employeeId, []);
+        }
+        mobileAttendanceByEmployee.get(employeeId).push(entry);
+    });
+
+    mobileAttendanceByEmployee.forEach((entries) => {
+        entries.sort((left, right) => (
+            dateValue(left.record?.work_date).localeCompare(dateValue(right.record?.work_date))
+            || formatTime(left.shift?.start_time).localeCompare(formatTime(right.shift?.start_time))
+            || String(left.shift?.shift_code || '').localeCompare(String(right.shift?.shift_code || ''))
+        ));
+    });
+
+    const mobilePayrollRows = payrollSummary
+        .map((row) => {
+            const employeeId = String(row.payroll_employee_id || '');
+            const employee = employeeById.get(employeeId) || {};
+            return {
+                key: payrollRowKey(row),
+                employeeId,
+                employee,
+                summary: row,
+                scheduleCount: mobileScheduleCountByEmployee.get(employeeId) || 0,
+                attendanceEntries: mobileAttendanceByEmployee.get(employeeId) || [],
+            };
+        })
+        .filter((item) => item.key);
+    const defaultMobilePayrollRow = mobilePayrollRows.find((item) => item.employeeId && item.employeeId === selfEmployeeId) || mobilePayrollRows[0] || null;
+    const selectedMobilePayrollRow = mobilePayrollRows.find((item) => item.key === mobileEmployeeId || item.employeeId === mobileEmployeeId) || defaultMobilePayrollRow;
 
     function reloadData() {
         setLoading(true);
@@ -1746,6 +1867,170 @@ export default function HumanResourcesManagement() {
         URL.revokeObjectURL(url);
     }
 
+    function renderMobilePayrollDemo() {
+        const selected = selectedMobilePayrollRow;
+        const summary = selected?.summary || {};
+        const employee = selected?.employee || {};
+        const employeeName = summary.full_name || employee.full_name || 'Nhân sự';
+        const salaryType = summary.salary_type || employee.salary_type || 'theo_gio';
+        const salaryBasis = summary.salary_basis || (canViewSalary ? formatSalary(employee.salary_amount, salaryType) : 'Ẩn lương');
+        const attendanceDays = buildMobileAttendanceDays(selected?.attendanceEntries || []);
+        const status = employee.status || 'Đang làm';
+        const statusTone = status === 'Đang làm' ? 'green' : 'amber';
+        const remainingSalary = formatMoney(summary.remaining_salary);
+        const grossSalary = formatMoney(summary.total_salary);
+
+        return (
+            <section className="min-h-[calc(100vh-4rem)] bg-gray-50 lg:hidden">
+                <div className="sticky top-0 z-30 border-b border-gray-200 bg-white/95 px-4 py-3 shadow-sm backdrop-blur">
+                    <div className="flex items-center justify-between gap-3">
+                        <button type="button" onClick={() => setActiveView('overview')} className="inline-flex size-10 items-center justify-center rounded border border-gray-200 bg-white text-gray-700 shadow-sm" title="Tổng quan">
+                            <span className="material-symbols-outlined text-[22px]">groups</span>
+                        </button>
+                        <span className="rounded-full border border-teal-100 bg-teal-50 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.08em] text-teal-700">Demo mobile</span>
+                    </div>
+                    <div className="mt-3 flex items-end justify-between gap-3">
+                        <div className="min-w-0">
+                            <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-gray-500">Quản lí nhân sự</p>
+                            <h1 className="mt-1 text-[23px] font-extrabold leading-7 text-gray-950">Phiếu lương tháng</h1>
+                        </div>
+                        <label className="grid shrink-0 gap-1 text-right">
+                            <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-gray-500">Tháng</span>
+                            <input type="month" value={month} onChange={(event) => changeMonth(event.target.value)} className="h-10 w-[136px] rounded border border-gray-200 bg-white px-2 text-center text-[13px] font-bold text-gray-800 outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-100" />
+                        </label>
+                    </div>
+                    {mobilePayrollRows.length > 1 && (
+                        <label className="mt-3 grid gap-1">
+                            <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-gray-500">Nhân sự</span>
+                            <select
+                                value={selected?.key || ''}
+                                onChange={(event) => setMobileEmployeeId(event.target.value)}
+                                className="h-11 w-full rounded border border-gray-200 bg-white px-3 text-[14px] font-bold text-gray-800 outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-100"
+                            >
+                                {mobilePayrollRows.map((item) => (
+                                    <option key={item.key} value={item.key}>{item.summary.full_name || item.employee.full_name || item.summary.employee_code || 'Nhân sự'}</option>
+                                ))}
+                            </select>
+                        </label>
+                    )}
+                </div>
+
+                <div className="space-y-3 px-3 py-3">
+                    {message && <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-[13px] font-semibold text-emerald-800">{message}</div>}
+                    {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-[13px] font-semibold text-red-700">{error}</div>}
+
+                    {!selected ? (
+                        <MobileEmptyState icon="badge" title="Chưa có dữ liệu nhân sự" message="Chọn tháng khác hoặc kiểm tra quyền xem bảng công lương." />
+                    ) : (
+                        <>
+                            <section className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+                                <div className="flex items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                        <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-gray-500">{employee.department || employee.position || employeeTypeLabel(salaryType)}</p>
+                                        <h2 className="mt-1 break-words text-[22px] font-extrabold leading-7 text-gray-950">{employeeName}</h2>
+                                        <p className="mt-1 text-[12px] font-semibold text-gray-500">{employee.employee_code || summary.employee_code || employeeTypeLabel(salaryType)}</p>
+                                    </div>
+                                    <StatusBadge tone={statusTone}>{status}</StatusBadge>
+                                </div>
+                                <div className="mt-4 border-t border-gray-100 pt-4">
+                                    <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-gray-500">Tổng lương tháng</p>
+                                    <div className="mt-1 break-words text-[28px] font-extrabold leading-9 text-teal-700">{grossSalary}</div>
+                                </div>
+                            </section>
+
+                            <section className="rounded-lg border border-blue-100 bg-blue-50 p-4">
+                                <div className="flex items-start gap-3">
+                                    <span className="material-symbols-outlined flex size-10 shrink-0 items-center justify-center rounded bg-white text-blue-700 shadow-sm">payments</span>
+                                    <div className="min-w-0">
+                                        <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-blue-700">Mức lương đang áp dụng</p>
+                                        <p className="mt-1 break-words text-[17px] font-extrabold leading-6 text-gray-950">{salaryBasis}</p>
+                                    </div>
+                                </div>
+                            </section>
+
+                            <div className="grid grid-cols-2 gap-3">
+                                <MobileMetricCard icon="account_balance_wallet" label="Còn nhận" value={remainingSalary} tone="green" />
+                                <MobileMetricCard icon="event_available" label="Tổng công" value={formatWorkUnit(summary.total_work_units)} tone="teal" />
+                                <MobileMetricCard icon="schedule" label="Tổng giờ" value={`${formatDecimal(summary.total_hours)}h`} tone="blue" />
+                                <MobileMetricCard icon="receipt_long" label="Tạm ứng" value={formatMoney(summary.total_advance)} tone="amber" />
+                            </div>
+
+                            <section className="rounded-lg border border-gray-200 bg-white px-4 py-3">
+                                <div className="flex items-center justify-between gap-3">
+                                    <div>
+                                        <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-gray-500">Tóm tắt tháng</p>
+                                        <p className="mt-1 text-[14px] font-bold text-gray-900">{selected.scheduleCount} ca lịch, {selected.attendanceEntries.length} dòng công</p>
+                                    </div>
+                                    <button type="button" onClick={() => reloadData()} className="inline-flex size-10 items-center justify-center rounded border border-gray-200 bg-white text-gray-600" title="Tải lại">
+                                        <span className="material-symbols-outlined text-[20px]">refresh</span>
+                                    </button>
+                                </div>
+                            </section>
+
+                            <section className="space-y-2">
+                                <div className="flex items-end justify-between gap-3 px-1">
+                                    <div>
+                                        <h3 className="text-[17px] font-extrabold text-gray-950">Bảng chấm công</h3>
+                                        <p className="mt-1 text-[12px] font-semibold text-gray-500">{attendanceDays.length} ngày có dữ liệu trong tháng {month.replace('-', '/')}</p>
+                                    </div>
+                                </div>
+
+                                {attendanceDays.length === 0 ? (
+                                    <MobileEmptyState icon="fact_check" title="Chưa có chấm công" message="Khi có lịch hoặc dòng chấm công, dữ liệu sẽ hiện theo từng ngày tại đây." />
+                                ) : attendanceDays.map((day) => (
+                                    <article key={day.work_date} className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div className="flex min-w-0 items-center gap-3">
+                                                <div className="flex size-12 shrink-0 flex-col items-center justify-center rounded border border-gray-200 bg-gray-50 text-center">
+                                                    <span className="text-[11px] font-extrabold text-teal-700">{weekday(day.work_date)}</span>
+                                                    <span className="text-[12px] font-bold text-gray-800">{shortDate(day.work_date)}</span>
+                                                </div>
+                                                <div className="min-w-0">
+                                                    <p className="text-[14px] font-extrabold text-gray-900">{formatDecimal(day.totalHours)}h • {formatWorkUnit(day.totalWorkUnits)} công</p>
+                                                    <p className="mt-0.5 text-[12px] font-semibold text-gray-500">{day.entries.length} ca trong ngày</p>
+                                                </div>
+                                            </div>
+                                            <div className="shrink-0 text-right">
+                                                <p className="text-[13px] font-extrabold text-teal-700">{canViewSalary ? formatMoney(day.totalAmount) : 'Ẩn'}</p>
+                                                <p className="mt-0.5 text-[10px] font-bold uppercase tracking-[0.08em] text-gray-400">Lương ngày</p>
+                                            </div>
+                                        </div>
+                                        <div className="mt-3 divide-y divide-gray-100 border-t border-gray-100">
+                                            {day.entries.map((entry) => {
+                                                const badge = mobileAttendanceStatus(entry);
+                                                return (
+                                                    <div key={entry.record.id || entry.record.uid || `${day.work_date}-${entry.shift?.id}`} className="flex items-center justify-between gap-3 py-2">
+                                                        <div className="min-w-0">
+                                                            <div className="flex min-w-0 items-center gap-2">
+                                                                <span className="inline-flex size-8 shrink-0 items-center justify-center rounded border border-teal-100 bg-teal-50 text-[12px] font-extrabold text-teal-700">{shiftDisplayCode(entry.shift)}</span>
+                                                                <span className="truncate text-[13px] font-bold text-gray-800">{entry.shift?.shift_name || 'Ca làm'}</span>
+                                                            </div>
+                                                            <p className="mt-0.5 text-[11px] font-semibold text-gray-500">{formatTime(entry.shift?.start_time)}-{formatTime(entry.shift?.end_time)}</p>
+                                                        </div>
+                                                        <div className="shrink-0 text-right">
+                                                            <span className={`inline-flex rounded-full border px-2 py-1 text-[11px] font-bold ${badge.className}`}>{badge.label}</span>
+                                                            <p className="mt-1 text-[11px] font-bold text-gray-500">{formatWorkUnit(entry.workUnits)} công</p>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </article>
+                                ))}
+                            </section>
+                        </>
+                    )}
+
+                    {loading && (
+                        <div className="fixed inset-x-3 bottom-3 z-40 flex items-center justify-center rounded-lg border border-gray-200 bg-white px-4 py-3 text-[13px] font-bold text-gray-700 shadow-lg">
+                            <span className="mr-3 size-4 animate-spin rounded-full border-b-2 border-teal-700" />
+                            Đang tải dữ liệu...
+                        </div>
+                    )}
+                </div>
+            </section>
+        );
+    }
     function renderOverview() {
         return (
             <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
@@ -2421,7 +2706,8 @@ export default function HumanResourcesManagement() {
 
     return (
         <>
-            <div className="h-full min-h-[calc(100vh-4rem)] overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
+            {renderMobilePayrollDemo()}
+            <div className="hidden h-full min-h-[calc(100vh-4rem)] overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm lg:block">
                 <div className="flex h-full min-h-[calc(100vh-4rem)]">
                     <aside className="hidden w-[244px] shrink-0 border-r border-gray-200 bg-white lg:block">
                         <button type="button" onClick={() => setActiveView('overview')} className="flex w-full items-center gap-3 border-b border-gray-200 px-5 py-5 text-left">

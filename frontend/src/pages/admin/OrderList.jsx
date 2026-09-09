@@ -258,6 +258,12 @@ const INVENTORY_SLIP_FILTERS = [
     { key: 'return_slip_state', label: 'Phiếu hoàn', options: RETURN_SLIP_FILTER_OPTIONS },
 ];
 
+const INVENTORY_ORDER_SCOPE_PENDING_EXPORT = 'pending_export';
+const INVENTORY_ORDER_SCOPE_PENDING_RETURN = 'pending_return';
+const INVENTORY_ORDER_SCOPE_VALUES = new Set([
+    INVENTORY_ORDER_SCOPE_PENDING_EXPORT,
+    INVENTORY_ORDER_SCOPE_PENDING_RETURN,
+]);
 const ORDER_CUSTOMER_NAME_SEARCH_SCOPE = 'customer_name';
 const CUSTOMER_NAME_HONORIFIC_TOKENS = new Set(['anh', 'chi', 'co', 'chu', 'bac', 'em', 'ba']);
 const CUSTOMER_NAME_PREFIX_TOKENS = new Set([
@@ -3475,6 +3481,8 @@ const createDefaultOrderFilters = (search = '', orderIds = []) => ({
     [OUTSIDE_DELIVERY_UNPAID_FILTER_KEY]: false,
     attributes: {},
     order_ids: parseOrderIdList(orderIds),
+    inventory_product_ids: [],
+    inventory_stock_scope: '',
 });
 
 const normalizeOrderListFilterValues = (value) => {
@@ -3497,6 +3505,11 @@ const normalizeOrderListFilterValues = (value) => {
         result.push(normalized);
         return result;
     }, []);
+};
+
+const normalizeInventoryOrderScope = (value) => {
+    const normalized = String(value || '').trim();
+    return INVENTORY_ORDER_SCOPE_VALUES.has(normalized) ? normalized : '';
 };
 
 const normalizeOrderListAttributeFilters = (value) => {
@@ -3543,6 +3556,8 @@ const normalizeStoredOrderFilters = (value, fallbackSearch = '', orderIds = []) 
         [OUTSIDE_DELIVERY_UNPAID_FILTER_KEY]: Boolean(value[OUTSIDE_DELIVERY_UNPAID_FILTER_KEY]),
         attributes: normalizeOrderListAttributeFilters(value.attributes),
         order_ids: orderIds.length ? parseOrderIdList(orderIds) : parseOrderIdList(value.order_ids),
+        inventory_product_ids: parseOrderIdList(value.inventory_product_ids),
+        inventory_stock_scope: normalizeInventoryOrderScope(value.inventory_stock_scope),
     };
 };
 
@@ -3629,6 +3644,8 @@ const removeOrderListFilterValue = (sourceFilters, key, value = null) => {
         status_exclude: normalizeOrderListFilterValues(sourceFilters?.status_exclude),
         order_type: normalizeOrderTypeFilterValues(sourceFilters?.order_type),
         order_ids: parseOrderIdList(sourceFilters?.order_ids),
+        inventory_product_ids: parseOrderIdList(sourceFilters?.inventory_product_ids),
+        inventory_stock_scope: normalizeInventoryOrderScope(sourceFilters?.inventory_stock_scope),
         attributes: { ...(sourceFilters?.attributes || {}) },
     };
 
@@ -3670,6 +3687,12 @@ const removeOrderListFilterValue = (sourceFilters, key, value = null) => {
 
     if (key === 'order_ids') {
         nextFilters.order_ids = [];
+        return nextFilters;
+    }
+
+    if (key === 'inventory_drilldown') {
+        nextFilters.inventory_product_ids = [];
+        nextFilters.inventory_stock_scope = '';
         return nextFilters;
     }
 
@@ -3985,6 +4008,10 @@ const buildOrderListRequestParams = ({
     if (filters.return_slip_state) params.return_slip_state = filters.return_slip_state;
     if (filters.shipping_dispatched_from) params.shipping_dispatched_from = filters.shipping_dispatched_from;
     if (filters.shipping_dispatched_to) params.shipping_dispatched_to = filters.shipping_dispatched_to;
+    const inventoryProductIds = parseOrderIdList(filters.inventory_product_ids);
+    const inventoryStockScope = normalizeInventoryOrderScope(filters.inventory_stock_scope);
+    if (inventoryProductIds.length) params.inventory_product_ids = inventoryProductIds.join(',');
+    if (inventoryStockScope) params.inventory_stock_scope = inventoryStockScope;
 
     if (filters.attributes) {
         Object.entries(filters.attributes).forEach(([id, value]) => {
@@ -5366,6 +5393,10 @@ const OrderList = () => {
             ? normalizeStoredOrderFilters(routeReportScope.filters, '', routeScopedOrderIds)
             : null
     ), [routeOrderIdsKey, routeReportScope?.filters]);
+    const routeScopedFiltersKey = routeReportScope?.filters
+        ? `report:${routeOrderScope.reportScopeKey}`
+        : (routeOrderIdsKey ? `orders:${routeOrderIdsKey}` : '');
+    const hasRouteScopedFilters = Boolean(routeScopedFiltersKey);
     const initialView = useMemo(() => getOrderListViewFromParams(initialListParams), [initialListParams]);
     const initialStoredListState = useMemo(() => readPersistedOrderListState({
         expectedView: initialView,
@@ -5559,7 +5590,7 @@ const OrderList = () => {
     const isReturnWorkbenchView = currentView === RETURN_WORKBENCH_VIEW;
     const isOutsideDeliveryUnpaidFilterActive = isMainView && Boolean(filters[OUTSIDE_DELIVERY_UNPAID_FILTER_KEY]);
     const outsideDeliveryUnpaidCount = Number(outsideDeliveryUnpaidSummary.order_count || 0);
-    const canQuickSelect = (isMainView || isReturnWorkbenchView) && !routeOrderIdsKey;
+    const canQuickSelect = (isMainView || isReturnWorkbenchView) && !hasRouteScopedFilters;
     const canCreateBatchReturn = isMainView || isReturnWorkbenchView;
     const currentViewMeta = LIST_VIEW_META[currentView] || LIST_VIEW_META.main;
     const workbenchOrderCount = returnWorkbenchIds.length;
@@ -6247,11 +6278,21 @@ const OrderList = () => {
             return;
         }
 
-        if (!routeOrderIdsKey) {
-            if (filters.order_ids?.length) {
-                const nextFilters = { ...filters, order_ids: [] };
+        if (!hasRouteScopedFilters) {
+            if (filters.order_ids?.length || filters.inventory_product_ids?.length || filters.inventory_stock_scope) {
+                const nextFilters = {
+                    ...filters,
+                    order_ids: [],
+                    inventory_product_ids: [],
+                    inventory_stock_scope: '',
+                };
                 setFilters(nextFilters);
-                setTempFilters((prev) => (prev ? { ...prev, order_ids: [] } : prev));
+                setTempFilters((prev) => (prev ? {
+                    ...prev,
+                    order_ids: [],
+                    inventory_product_ids: [],
+                    inventory_stock_scope: '',
+                } : prev));
                 fetchOrders(1, nextFilters);
             }
             return;
@@ -6270,6 +6311,7 @@ const OrderList = () => {
                 && !prev.shipping_carrier_code && !prev.export_slip_state && !prev.return_slip_state
                 && !prev.shipping_dispatched_from && !prev.shipping_dispatched_to
                 && !prev[OUTSIDE_DELIVERY_UNPAID_FILTER_KEY]
+                && !prev.inventory_product_ids?.length && !prev.inventory_stock_scope
                 && Object.keys(prev.attributes || {}).length === 0
                 ? prev
                 : nextFilters
@@ -6280,10 +6322,10 @@ const OrderList = () => {
         setProductPopupOrderId(null);
         setInventorySlipOrderId(null);
         fetchOrders(1, nextFilters);
-    }, [fetchOrders, filters, isActiveAccountReady, routeOrderIdsKey, routeScopedFilters, routeScopedOrderIds]);
+    }, [fetchOrders, filters, hasRouteScopedFilters, isActiveAccountReady, routeScopedFilters, routeScopedFiltersKey, routeScopedOrderIds]);
 
     useEffect(() => {
-        if (!pendingPersistedStateHydrationRef.current || routeOrderIdsKey) {
+        if (!pendingPersistedStateHydrationRef.current || hasRouteScopedFilters) {
             return;
         }
 
@@ -6297,7 +6339,7 @@ const OrderList = () => {
         }
 
         pendingPersistedStateHydrationRef.current = false;
-    }, [initialStoredListState.filters, routeOrderIdsKey]);
+    }, [hasRouteScopedFilters, initialStoredListState.filters]);
 
     useEffect(() => {
         if (suppressSearchSyncRef.current) {
@@ -6335,22 +6377,32 @@ const OrderList = () => {
             return;
         }
 
-        if (!routeOrderIdsKey) {
-            const nextFilters = { ...filters, order_ids: [] };
+        if (!hasRouteScopedFilters) {
+            const nextFilters = {
+                ...filters,
+                order_ids: [],
+                inventory_product_ids: [],
+                inventory_stock_scope: '',
+            };
             const targetPage = hasInitializedCurrentViewRef.current ? 1 : initialRestoredPageRef.current;
             hasInitializedCurrentViewRef.current = true;
 
-            if (filters.order_ids?.length) {
+            if (filters.order_ids?.length || filters.inventory_product_ids?.length || filters.inventory_stock_scope) {
                 setFilters(nextFilters);
-                setTempFilters((prev) => (prev ? { ...prev, order_ids: [] } : prev));
+                setTempFilters((prev) => (prev ? {
+                    ...prev,
+                    order_ids: [],
+                    inventory_product_ids: [],
+                    inventory_stock_scope: '',
+                } : prev));
             }
 
             fetchOrders(targetPage, nextFilters);
         }
-    }, [currentView, fetchOrders, filters, isActiveAccountReady, routeOrderIdsKey]);
+    }, [currentView, fetchOrders, filters, hasRouteScopedFilters, isActiveAccountReady]);
 
     useEffect(() => {
-        if (routeOrderIdsKey) {
+        if (hasRouteScopedFilters) {
             return;
         }
 
@@ -6359,7 +6411,7 @@ const OrderList = () => {
             filters,
             pagination,
         });
-    }, [currentView, filters, pagination, routeOrderIdsKey]);
+    }, [currentView, filters, hasRouteScopedFilters, pagination]);
 
     useEffect(() => {
         return () => {
@@ -6541,12 +6593,14 @@ const OrderList = () => {
     };
 
     const removeFilter = (key, value = null) => {
-        if (key === 'order_ids') {
+        if (key === 'order_ids' || key === 'inventory_drilldown') {
             const nextFilters = removeOrderListFilterValue(filters, key);
             setFilters(nextFilters);
             setTempFilters((prev) => (prev ? removeOrderListFilterValue(prev, key) : prev));
             fetchOrders(1, nextFilters);
-            clearRouteOrderScopeFromUrl();
+            if (key === 'order_ids' || hasRouteScopedFilters) {
+                clearRouteOrderScopeFromUrl();
+            }
             return;
         }
 
@@ -6567,7 +6621,7 @@ const OrderList = () => {
         clearPersistedOrderListState();
         localStorage.removeItem('order_list_search_current');
         fetchOrders(1, rf);
-        if (routeOrderIdsKey) {
+        if (hasRouteScopedFilters || routeOrderScope.reportScopeKey) {
             clearRouteOrderScopeFromUrl();
         }
     };
@@ -7791,7 +7845,7 @@ const OrderList = () => {
 
     const currentListUrl = useMemo(() => `${location.pathname}${location.search}`, [location.pathname, location.search]);
     const persistCurrentOrderListState = useCallback((overrides = {}) => {
-        if (routeOrderIdsKey) {
+        if (hasRouteScopedFilters) {
             return;
         }
 
@@ -7800,7 +7854,7 @@ const OrderList = () => {
             filters: overrides.filters || filters,
             pagination: overrides.pagination || pagination,
         });
-    }, [currentView, filters, pagination, routeOrderIdsKey]);
+    }, [currentView, filters, hasRouteScopedFilters, pagination]);
 
     const navigateToListView = useCallback((nextView = 'main') => {
         navigate(buildOrderListUrl(nextView));
@@ -7817,6 +7871,8 @@ const OrderList = () => {
         params.delete('focus_order_id');
         params.delete('batch_return_document_number');
         params.delete('report_scope_key');
+        params.delete('inventory_product_ids');
+        params.delete('inventory_stock_scope');
         removeOrderReportDrilldownScope(routeOrderScope.reportScopeKey);
         const nextSearch = params.toString();
         navigate(`${location.pathname}${nextSearch ? `?${nextSearch}` : ''}`, { replace: true });
@@ -8241,6 +8297,7 @@ const OrderList = () => {
     const activeCount = () => {
         let c = 0;
         if (filters.order_ids?.length) c++;
+        if (filters.inventory_product_ids?.length || filters.inventory_stock_scope) c++;
         if (filters.status?.length) c++;
         if (filters.status_exclude?.length) c++;
         if (filters.customer_name) c++;
@@ -9234,7 +9291,7 @@ const OrderList = () => {
                             <span className="text-[13px] font-bold text-primary px-1 mr-1 border-r border-primary/20 flex items-center gap-1.5"><span className="material-symbols-outlined text-[16px]">filter_list</span>Đang lọc:</span>
                             {routeReportScope?.scope_label && (
                                 <div className="bg-white border border-emerald-300 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
-                                    <span className="text-[11px] text-emerald-700/70">Báo cáo tháng:</span>
+                                    <span className="text-[11px] text-emerald-700/70">{routeReportScope.source_label || 'Báo cáo tháng'}:</span>
                                     <span className="text-[13px] font-bold text-emerald-900">{routeReportScope.scope_label}</span>
                                     <button onClick={handleReset} className="text-emerald-700/60 hover:text-brick">
                                         <span className="material-symbols-outlined text-[14px]">close</span>

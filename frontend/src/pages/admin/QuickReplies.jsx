@@ -62,7 +62,7 @@ const sidebarWindowNameForTarget = (value) => `quick-reply-zalo-sidebar-${normal
 const sidebarBrowserKeywordsForTarget = (value) => [sidebarTitleForTarget(value)];
 const ZALO_WEB_URL = 'https://chat.zalo.me/';
 const ZALO_WEB_POPUP_WINDOW_NAME = 'quick-reply-zalo-web-target';
-const ZALO_BRIDGE_VERSION = '2026.09.08.3';
+const ZALO_BRIDGE_VERSION = '2026.09.09.1';
 const ZALO_BRIDGE_INSTALLER_FILE = `install-zalo-bridge-lite-8003-${ZALO_BRIDGE_VERSION}.bat`;
 const ZALO_BRIDGE_INSTALLER_URL = `/downloads/${ZALO_BRIDGE_INSTALLER_FILE}`;
 const SIDEBAR_ACTION_COLUMN_WIDTH = 37;
@@ -551,6 +551,10 @@ const sidebarWindowMetrics = () => {
 };
 
 const isLocalBridgeNetworkError = (error) => {
+    if (error?.isLocalQuickReplyBridgeUnavailable || error?.code === 'ERR_LOCAL_QUICK_REPLY_BRIDGE_UNAVAILABLE') {
+        return true;
+    }
+
     if (error?.response) {
         return false;
     }
@@ -2395,6 +2399,32 @@ function QuickReplies() {
             return true;
         };
 
+        const failBecauseLocalBridgeUnavailable = async ({
+            targetName,
+            bridgeErr,
+            imageCount,
+            sentSteps = 0,
+            sentText = 0,
+            sentImages = 0,
+        }) => {
+            if (sentSteps > 0 || sentText > 0 || sentImages > 0) {
+                throw new Error(`${await apiErrorMessage(bridgeErr, `Backend local bị ngắt khi đang gửi ${targetName}.`)} Có thể đã dán một phần, kiểm tra lại khung chat trước khi gửi lại.`);
+            }
+
+            if (await copyTextOnlyWhenLocalBridgeUnavailable(targetName)) {
+                return false;
+            }
+
+            const bridgeMessage = await apiErrorMessage(
+                bridgeErr,
+                `Không kết nối được Zalo Bridge local để gửi ${targetName}.`
+            );
+            throw new Error(imageCount > 0
+                ? `${bridgeMessage} Mẫu này có ${imageCount} ảnh/video nên không gửi bằng chế độ copy thủ công được.`
+                : bridgeMessage
+            );
+        };
+
         setCopyingId(replyId);
         setError('');
         setMessage(useBrowserClipboardForWeb
@@ -2417,20 +2447,6 @@ function QuickReplies() {
                 let sentImages = 0;
                 let manualImages = 0;
 
-                const failBecauseLocalBridgeUnavailable = async () => {
-                    if (sentSteps > 0 || sentText > 0 || sentImages > 0) {
-                        throw new Error('Backend local bị ngắt hoặc xử lý ảnh/video quá lâu khi đang gửi Zalo Web. Có thể đã dán một phần, kiểm tra lại khung chat trước khi gửi lại.');
-                    }
-
-                    if (await copyTextOnlyWhenLocalBridgeUnavailable('Zalo Web')) {
-                        return;
-                    }
-
-                    throw new Error(imageCount > 0
-                        ? `Chưa thấy backend local nên chưa tự gửi được Zalo Web. Bấm Cài Bridge và chạy file cài một lần rồi bấm gửi lại; mẫu này có ${imageCount} ảnh nên không gửi bằng chế độ copy thủ công.`
-                        : 'Chưa thấy backend local nên chưa tự gửi được Zalo Web. Bấm Cài Bridge và chạy file cài một lần rồi bấm gửi lại.'
-                    );
-                };
 
                 const pasteToZaloWeb = async (data = {}) => {
                     try {
@@ -2445,11 +2461,17 @@ function QuickReplies() {
 
                         const mediaCount = localBridgePayloadMediaCount(data);
                         if (mediaCount > 0) {
-                            throw new Error(`Backend local không phản hồi khi đang tải/dán ${mediaCount} ảnh/video cho Zalo Web. Nếu vừa cài bridge bằng file cũ, bấm Cài Bridge tải lại bản mới rồi chạy Admin một lần.`);
+                            throw new Error(`${await apiErrorMessage(bridgeErr, `Backend local không phản hồi khi đang tải/dán ${mediaCount} ảnh/video cho Zalo Web.`)} Nếu vừa cài bridge bằng file cũ, bấm Cài Bridge tải lại bản mới rồi chạy Admin một lần.`);
                         }
 
-                        await failBecauseLocalBridgeUnavailable();
-                        return null;
+                        return await failBecauseLocalBridgeUnavailable({
+                            targetName: 'Zalo Web',
+                            bridgeErr,
+                            imageCount,
+                            sentSteps,
+                            sentText,
+                            sentImages,
+                        });
                     }
                 };
 
@@ -2534,20 +2556,6 @@ function QuickReplies() {
                 let sentImages = 0;
                 let manualImages = 0;
 
-                const failBecauseLocalBridgeUnavailable = async () => {
-                    if (sentSteps > 0 || sentText > 0 || sentImages > 0) {
-                        throw new Error('Backend local bị ngắt hoặc xử lý ảnh/video quá lâu khi đang gửi Zalo PC. Có thể đã dán một phần, kiểm tra lại khung chat trước khi gửi lại.');
-                    }
-
-                    if (await copyTextOnlyWhenLocalBridgeUnavailable('Zalo PC')) {
-                        return;
-                    }
-
-                    throw new Error(imageCount > 0
-                        ? `Chưa thấy backend local nên chưa tự gửi được Zalo PC. Bấm Cài Bridge và chạy file cài một lần rồi bấm gửi lại; mẫu này có ${imageCount} ảnh nên không gửi bằng chế độ copy thủ công.`
-                        : 'Chưa thấy backend local nên chưa tự gửi được Zalo PC. Bấm Cài Bridge và chạy file cài một lần rồi bấm gửi lại.'
-                    );
-                };
 
                 const pasteToZaloPc = async (data = {}) => {
                     try {
@@ -2562,11 +2570,17 @@ function QuickReplies() {
 
                         const mediaCount = localBridgePayloadMediaCount(data);
                         if (mediaCount > 0) {
-                            throw new Error(`Backend local không phản hồi khi đang tải/dán ${mediaCount} ảnh/video cho Zalo PC. Nếu vừa cài bridge bằng file cũ, bấm Cài Bridge tải lại bản mới rồi chạy Admin một lần.`);
+                            throw new Error(`${await apiErrorMessage(bridgeErr, `Backend local không phản hồi khi đang tải/dán ${mediaCount} ảnh/video cho Zalo PC.`)} Nếu vừa cài bridge bằng file cũ, bấm Cài Bridge tải lại bản mới rồi chạy Admin một lần.`);
                         }
 
-                        await failBecauseLocalBridgeUnavailable();
-                        return null;
+                        return await failBecauseLocalBridgeUnavailable({
+                            targetName: 'Zalo PC',
+                            bridgeErr,
+                            imageCount,
+                            sentSteps,
+                            sentText,
+                            sentImages,
+                        });
                     }
                 };
 

@@ -56,6 +56,8 @@ const LOCAL_QUICK_REPLY_BRIDGE_TIMEOUT_MS = Number(
 const LOCAL_QUICK_REPLY_BRIDGE_MEDIA_TIMEOUT_MS = Number(
     import.meta.env.VITE_QUICK_REPLY_LOCAL_BRIDGE_MEDIA_TIMEOUT_MS || 180000
 );
+const LOCAL_QUICK_REPLY_BRIDGE_HEALTH_PATH = '/quick-replies/local-window-bridge/health';
+let cachedLocalQuickReplyBridgeBaseUrl = '';
 
 const normalizeHostname = (value) => String(value || '').trim().replace(/^\[|\]$/g, '').toLowerCase();
 const isLoopbackHostname = (value) => LOOPBACK_HOST_PATTERN.test(normalizeHostname(value));
@@ -134,31 +136,91 @@ const localQuickReplyBridgeTimeout = (data = {}) => {
         : 6500;
 };
 
-const postLocalQuickReplyBridge = async (path, data = {}) => {
-    let lastError = null;
-    const timeout = localQuickReplyBridgeTimeout(data);
+const describeLocalQuickReplyBridgeError = (error) => {
+    const status = error?.response?.status ? `HTTP ${error.response.status}` : '';
+    const responseMessage = error?.response?.data?.message || error?.response?.data?.error;
+    const code = error?.code ? String(error.code) : '';
+    const message = responseMessage || error?.message || 'Không rõ lỗi';
 
+    return [status, code, message].filter(Boolean).join(' - ');
+};
+
+const createLocalQuickReplyBridgeUnavailableError = (attempts = []) => {
+    const summary = attempts
+        .map((item) => `${item.baseURL}: ${item.detail}`)
+        .join(' | ');
+    const error = new Error(
+        summary
+            ? `Không kết nối được Zalo Bridge local. Đã thử ${summary}.`
+            : 'Không kết nối được Zalo Bridge local.'
+    );
+    error.code = 'ERR_LOCAL_QUICK_REPLY_BRIDGE_UNAVAILABLE';
+    error.bridgeAttempts = attempts;
+    error.isLocalQuickReplyBridgeUnavailable = true;
+
+    return error;
+};
+
+const resolveLocalQuickReplyBridgeBaseUrl = async ({ force = false } = {}) => {
+    if (!force && cachedLocalQuickReplyBridgeBaseUrl) {
+        return cachedLocalQuickReplyBridgeBaseUrl;
+    }
+
+    const attempts = [];
     for (const baseURL of LOCAL_QUICK_REPLY_BRIDGE_BASE_URLS) {
         try {
-            return await axios.post(`${baseURL}${path}`, data, {
-                timeout,
+            const response = await axios.get(`${baseURL}${LOCAL_QUICK_REPLY_BRIDGE_HEALTH_PATH}`, {
+                timeout: LOCAL_QUICK_REPLY_BRIDGE_TIMEOUT_MS,
                 withCredentials: false,
                 headers: {
                     'Accept': 'application/json',
-                    'Content-Type': 'application/json',
-                    'X-Quick-Reply-Local-Bridge': '1',
                 },
             });
-        } catch (error) {
-            lastError = error;
 
-            if (error?.response && ![404, 405].includes(Number(error.response.status))) {
-                throw error;
+            if (response?.data?.ok !== false) {
+                cachedLocalQuickReplyBridgeBaseUrl = baseURL;
+                return baseURL;
             }
+
+            attempts.push({
+                baseURL,
+                detail: response?.data?.message || `Health trả về HTTP ${response?.status || 'không rõ'} nhưng ok=false`,
+            });
+        } catch (error) {
+            attempts.push({
+                baseURL,
+                detail: describeLocalQuickReplyBridgeError(error),
+            });
         }
     }
 
-    throw lastError || new Error('Không kết nối được local bridge trả lời nhanh.');
+    throw createLocalQuickReplyBridgeUnavailableError(attempts);
+};
+
+const getLocalQuickReplyBridgeBaseUrl = async (options = {}) => {
+    return resolveLocalQuickReplyBridgeBaseUrl(options);
+};
+
+const postLocalQuickReplyBridge = async (path, data = {}) => {
+    const timeout = localQuickReplyBridgeTimeout(data);
+    const baseURL = await getLocalQuickReplyBridgeBaseUrl();
+
+    try {
+        return await axios.post(`${baseURL}${path}`, data, {
+            timeout,
+            withCredentials: false,
+            headers: {
+                'Accept': 'application/json',
+                'Content-Type': 'application/json',
+                'X-Quick-Reply-Local-Bridge': '1',
+            },
+        });
+    } catch (error) {
+        cachedLocalQuickReplyBridgeBaseUrl = '';
+        error.localQuickReplyBridgeBaseURL = baseURL;
+        error.message = `Zalo Bridge ${baseURL} đã chạy health OK nhưng POST lỗi: ${describeLocalQuickReplyBridgeError(error)}. Không tự thử endpoint khác để tránh dán trùng vào Zalo.`;
+        throw error;
+    }
 };
 
 const normalizeRequestMethod = (method) => String(method || 'get').trim().toLowerCase();

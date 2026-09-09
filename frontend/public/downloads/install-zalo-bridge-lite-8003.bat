@@ -194,7 +194,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:BridgeVersion = '2026.09.08.3'
+$script:BridgeVersion = '2026.09.09.1'
+$script:BridgeStartedAt = Get-Date
 
 function Write-BridgeLog {
     param([string] $Message)
@@ -1061,6 +1062,8 @@ function Handle-Request {
             ok = $true
             port = $Port
             version = $script:BridgeVersion
+            pid = $PID
+            started_at = $script:BridgeStartedAt.ToString('yyyy-MM-dd HH:mm:ss')
         } $origin
         return
     }
@@ -1095,7 +1098,24 @@ function Handle-Request {
 
         Write-HttpResponse $Request.Stream 404 'Not Found' @{ message = 'Bridge endpoint not found.' } $origin
     } catch {
-        Write-HttpResponse $Request.Stream 422 'Unprocessable Entity' @{ message = $_.Exception.Message } $origin
+        $errorMessage = $_.Exception.Message
+        $errorCode = 'BRIDGE_ACTION_FAILED'
+        if ($errorMessage -like 'Cannot find Zalo*') {
+            $errorCode = 'ZALO_WINDOW_NOT_FOUND'
+        } elseif ($errorMessage -like 'Cannot download media*') {
+            $errorCode = 'MEDIA_DOWNLOAD_FAILED'
+        } elseif ($errorMessage -like 'Cannot write Windows clipboard*') {
+            $errorCode = 'CLIPBOARD_WRITE_FAILED'
+        }
+
+        Write-BridgeLog ("ERROR {0} {1}: {2}" -f $Request.Method, $pathOnly, $errorMessage)
+        Write-HttpResponse $Request.Stream 422 'Unprocessable Entity' @{
+            ok = $false
+            code = $errorCode
+            message = $errorMessage
+            path = $pathOnly
+            version = $script:BridgeVersion
+        } $origin
     }
 }
 

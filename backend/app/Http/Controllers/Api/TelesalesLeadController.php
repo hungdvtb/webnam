@@ -322,6 +322,7 @@ class TelesalesLeadController extends Controller
             'do_not_call' => 'nullable|boolean',
             'note' => 'nullable|string|max:5000',
             'activity_type' => ['nullable', Rule::in($this->activityTypeValues())],
+            'suppress_note' => 'nullable|boolean',
             'complete_current_task' => 'nullable|boolean',
             'customer_name' => 'nullable|string|max:255',
             'phone' => 'nullable|string|max:20',
@@ -422,6 +423,7 @@ class TelesalesLeadController extends Controller
         $lead->save();
 
         $noteContent = trim((string) ($validated['note'] ?? ''));
+        $suppressDefaultNote = (bool) ($validated['suppress_note'] ?? false);
         $shouldCompleteTask = (bool) ($validated['complete_current_task'] ?? false)
             || in_array($activityType, ['status', 'schedule'], true);
 
@@ -442,7 +444,7 @@ class TelesalesLeadController extends Controller
             }
         }
 
-        if ($noteContent !== '' || $activityType !== 'note') {
+        if ($noteContent !== '' || (!$suppressDefaultNote && $activityType !== 'note')) {
             $this->createLeadNote($lead, $request, $noteContent ?: $this->defaultActivityContent($activityType), $activityType);
         }
 

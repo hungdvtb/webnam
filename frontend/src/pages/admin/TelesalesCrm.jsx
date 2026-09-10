@@ -1051,6 +1051,7 @@ const TelesalesCrm = () => {
         handleInlineLeadUpdate(lead, {
             assigned_staff_id: nextStaffId || null,
             activity_type: 'note',
+            suppress_note: true,
         }, 'Đã cập nhật sale phụ trách.');
     };
 
@@ -1064,6 +1065,7 @@ const TelesalesCrm = () => {
             lead_status_id: nextStatusId || null,
             do_not_call: shouldStopFollowUp,
             activity_type: 'status',
+            suppress_note: true,
         }, {
             silent: true,
             refreshList: false,
@@ -1080,6 +1082,7 @@ const TelesalesCrm = () => {
         handleInlineLeadUpdate(lead, {
             potential_level: nextPotential || null,
             activity_type: 'note',
+            suppress_note: true,
         }, 'Đã cập nhật mức tiềm năng.');
     };
 

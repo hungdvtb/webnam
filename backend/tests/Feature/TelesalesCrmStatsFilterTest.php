@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\Account;
 use App\Models\Lead;
+use App\Models\LeadNote;
 use App\Models\LeadStatus;
 use App\Models\User;
 use Carbon\Carbon;
@@ -60,6 +61,57 @@ class TelesalesCrmStatsFilterTest extends TestCase
         $this->assertSame(1, $unfilteredResponse->json('stats.today_due'));
         $this->assertSame(1, $unfilteredResponse->json('stats.new_today'));
         $this->assertSame(1, $unfilteredResponse->json('stats.overdue'));
+    }
+
+    public function test_inline_status_update_can_skip_default_history_note(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-09-10 09:00:00'));
+
+        [$account] = $this->authenticate();
+        $statuses = LeadStatus::ensureDefaultsForAccount($account->id);
+        $defaultStatus = $statuses->firstWhere('is_default', true);
+        $nextStatus = $statuses->firstWhere('code', 'hen-goi-lai');
+
+        $this->assertNotNull($nextStatus);
+
+        $lead = $this->createLead($account, [
+            'lead_status_id' => $defaultStatus?->id,
+            'status' => $defaultStatus?->code ?? 'don-moi',
+            'customer_name' => 'Khach khong tu sinh note',
+            'phone' => '0912222222',
+        ]);
+
+        $this
+            ->withHeaders($this->headers($account))
+            ->putJson("/api/telesales/leads/{$lead->id}", [
+                'lead_status_id' => $nextStatus->id,
+                'do_not_call' => false,
+                'activity_type' => 'status',
+                'suppress_note' => true,
+            ])
+            ->assertOk()
+            ->assertJsonPath('lead.lead_status_id', $nextStatus->id);
+
+        $this->assertSame(
+            0,
+            LeadNote::withoutGlobalScopes()->where('lead_id', $lead->id)->count()
+        );
+
+        $this
+            ->withHeaders($this->headers($account))
+            ->putJson("/api/telesales/leads/{$lead->id}", [
+                'note' => 'Khach hen goi lai sau',
+                'activity_type' => 'note',
+                'suppress_note' => true,
+            ])
+            ->assertOk();
+
+        $this->assertDatabaseHas('lead_notes', [
+            'account_id' => $account->id,
+            'lead_id' => $lead->id,
+            'content' => 'Khach hen goi lai sau',
+            'activity_type' => 'note',
+        ]);
     }
 
     protected function tearDown(): void

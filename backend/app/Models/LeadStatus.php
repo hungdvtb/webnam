@@ -61,13 +61,13 @@ class LeadStatus extends Model
             ->get()
             ->keyBy('code');
 
-        $legacyNames = ['Don moi', 'Da tao don', 'KNM1', 'KNM2', 'KNM3', 'Huy don', 'Sai sdt', 'Cho xem lai', 'Hen goi lai', 'Da chot'];
+        $legacyNames = ['Don nhap', 'Don moi', 'Da tao don', 'KNM1', 'KNM2', 'KNM3', 'Huy don', 'Sai sdt', 'Cho xem lai', 'Hen goi lai', 'Da chot'];
 
         foreach (static::defaultDefinitions() as $definition) {
             if ($existing->has($definition['code'])) {
                 $existingStatus = $existing->get($definition['code']);
 
-                if ($definition['code'] === 'don-nhap' || in_array($existingStatus->name, $legacyNames, true)) {
+                if (in_array($existingStatus->name, $legacyNames, true)) {
                     $existingStatus->forceFill([
                         'name' => $definition['name'],
                         'color' => $definition['color'],

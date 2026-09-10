@@ -399,6 +399,26 @@ const normalizePotentialDraft = (potential) => ({
     is_active: potential.is_active !== false,
 });
 
+const applyDraftSortOrder = (items) => items.map((item, index) => ({
+    ...item,
+    sort_order: index + 1,
+}));
+
+const moveDraftItem = (items, sourceId, targetId) => {
+    const fromIndex = items.findIndex((item) => String(item.id) === String(sourceId));
+    const toIndex = items.findIndex((item) => String(item.id) === String(targetId));
+
+    if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) {
+        return items;
+    }
+
+    const nextItems = [...items];
+    const [movedItem] = nextItems.splice(fromIndex, 1);
+    nextItems.splice(toIndex, 0, movedItem);
+
+    return applyDraftSortOrder(nextItems);
+};
+
 const columnOptions = [
     { key: 'customer', label: 'Khách hàng' },
     { key: 'phone', label: 'SĐT / Zalo' },
@@ -478,6 +498,7 @@ const TelesalesCrm = () => {
     const [statusSavingIds, setStatusSavingIds] = useState({});
     const [potentialDrafts, setPotentialDrafts] = useState([]);
     const [potentialSavingIds, setPotentialSavingIds] = useState({});
+    const [draggingConfigItem, setDraggingConfigItem] = useState(null);
     const [columnSettingsOpen, setColumnSettingsOpen] = useState(false);
     const [visibleColumns, setVisibleColumns] = useState(() => (
         columnOptions.reduce((result, column) => ({ ...result, [column.key]: true }), {})
@@ -1432,19 +1453,19 @@ const TelesalesCrm = () => {
 
         try {
             await Promise.all([
-                ...statusDrafts.map((status) => telesalesApi.updateStatus(status.id, {
+                ...statusDrafts.map((status, index) => telesalesApi.updateStatus(status.id, {
                     name: status.name.trim(),
                     code: status.code,
                     color: status.color || '#64748b',
-                    sort_order: status.sort_order,
+                    sort_order: index + 1,
                     is_default: status.is_default,
                     is_active: status.is_active,
                     blocks_order_create: status.blocks_order_create,
                 })),
-                ...potentialDrafts.map((potential) => telesalesApi.updatePotential(potential.id, {
+                ...potentialDrafts.map((potential, index) => telesalesApi.updatePotential(potential.id, {
                     name: potential.name.trim(),
                     color: potential.color || '#16a34a',
-                    sort_order: potential.sort_order,
+                    sort_order: index + 1,
                     is_default: potential.is_default,
                     counts_as_potential: potential.counts_as_potential,
                     is_active: potential.is_active,
@@ -1515,11 +1536,44 @@ const TelesalesCrm = () => {
         }
     };
 
+    const handleConfigDragStart = (event, type, itemId) => {
+        const id = String(itemId || '');
+        if (!id) return;
+
+        setDraggingConfigItem({ type, id });
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', id);
+    };
+
+    const handleConfigDragOver = (event, type) => {
+        if (draggingConfigItem?.type !== type) return;
+
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+    };
+
+    const handleConfigDrop = (event, type, targetId) => {
+        if (draggingConfigItem?.type !== type) return;
+
+        event.preventDefault();
+        const sourceId = draggingConfigItem.id;
+        setDraggingConfigItem(null);
+
+        if (type === 'status') {
+            setStatusDrafts((prev) => moveDraftItem(prev, sourceId, targetId));
+            return;
+        }
+
+        setPotentialDrafts((prev) => moveDraftItem(prev, sourceId, targetId));
+    };
+
     const renderStatusManager = () => {
         if (!statusManagerOpen) return null;
         const isStatusTab = statusManagerTab === 'statuses';
         const configurationSaving = Boolean(statusSavingIds.bulk || potentialSavingIds.bulk);
         const tabClassName = (active) => `inline-flex h-10 items-center justify-center gap-2 rounded-sm border px-4 text-[13px] font-black transition ${active ? 'border-teal-600 bg-teal-50 text-teal-800' : 'border-slate-200 bg-white text-slate-600 hover:border-teal-300 hover:text-teal-700'}`;
+        const statusGridClassName = 'grid min-w-[900px] grid-cols-[48px_70px_minmax(180px,1fr)_120px_100px_100px_120px_90px]';
+        const potentialGridClassName = 'grid min-w-[900px] grid-cols-[48px_70px_minmax(180px,1fr)_120px_100px_100px_140px_90px]';
 
         return (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4">
@@ -1555,7 +1609,10 @@ const TelesalesCrm = () => {
                         {isStatusTab ? (
                             <>
                                 <div className="overflow-hidden rounded-sm border border-slate-200">
-                                    <div className="grid min-w-[860px] grid-cols-[70px_minmax(180px,1fr)_120px_100px_100px_120px_120px] border-b border-slate-200 bg-slate-50 text-[12px] font-black text-slate-500">
+                                    <div className={`${statusGridClassName} border-b border-slate-200 bg-slate-50 text-[12px] font-black text-slate-500`}>
+                                        <div className="border-r border-slate-200 px-3 py-2 text-center">
+                                            <span className="material-symbols-outlined text-[18px] text-slate-400" title="Kéo thả sắp xếp">drag_indicator</span>
+                                        </div>
                                         <div className="border-r border-slate-200 px-3 py-2">Màu</div>
                                         <div className="border-r border-slate-200 px-3 py-2">Tên trạng thái</div>
                                         <div className="border-r border-slate-200 px-3 py-2">Mã</div>
@@ -1568,9 +1625,29 @@ const TelesalesCrm = () => {
                                     <div className="overflow-x-auto">
                                         {statusDrafts.map((status) => {
                                             const savingStatus = Boolean(statusSavingIds[status.id] || configurationSaving);
+                                            const draggingThisStatus = draggingConfigItem?.type === 'status' && String(draggingConfigItem.id) === String(status.id);
 
                                             return (
-                                                <div key={status.id} className="grid min-w-[860px] grid-cols-[70px_minmax(180px,1fr)_120px_100px_100px_120px_120px] border-b border-slate-200 text-[13px] last:border-b-0">
+                                                <div
+                                                    key={status.id}
+                                                    onDragOver={(event) => handleConfigDragOver(event, 'status')}
+                                                    onDrop={(event) => handleConfigDrop(event, 'status', status.id)}
+                                                    className={`${statusGridClassName} border-b border-slate-200 text-[13px] transition last:border-b-0 ${draggingThisStatus ? 'bg-teal-50 opacity-70' : 'bg-white'}`}
+                                                >
+                                                    <div className="flex items-center justify-center border-r border-slate-200 px-2 py-2">
+                                                        <button
+                                                            type="button"
+                                                            draggable={!savingStatus}
+                                                            onDragStart={(event) => handleConfigDragStart(event, 'status', status.id)}
+                                                            onDragEnd={() => setDraggingConfigItem(null)}
+                                                            disabled={savingStatus}
+                                                            className="inline-flex size-8 cursor-grab items-center justify-center rounded-sm border border-slate-200 bg-white text-slate-500 shadow-sm hover:border-teal-300 hover:text-teal-700 active:cursor-grabbing disabled:cursor-wait disabled:opacity-50"
+                                                            title="Kéo thả sắp xếp"
+                                                            aria-label={`Kéo ${status.name || status.code} để sắp xếp`}
+                                                        >
+                                                            <span className="material-symbols-outlined text-[18px]">drag_indicator</span>
+                                                        </button>
+                                                    </div>
                                                     <div className="flex items-center border-r border-slate-200 px-3 py-2">
                                                         <input
                                                             type="color"
@@ -1666,7 +1743,10 @@ const TelesalesCrm = () => {
                         ) : (
                             <>
                                 <div className="overflow-hidden rounded-sm border border-slate-200">
-                                    <div className="grid min-w-[860px] grid-cols-[70px_minmax(180px,1fr)_120px_100px_100px_140px_120px] border-b border-slate-200 bg-slate-50 text-[12px] font-black text-slate-500">
+                                    <div className={`${potentialGridClassName} border-b border-slate-200 bg-slate-50 text-[12px] font-black text-slate-500`}>
+                                        <div className="border-r border-slate-200 px-3 py-2 text-center">
+                                            <span className="material-symbols-outlined text-[18px] text-slate-400" title="Kéo thả sắp xếp">drag_indicator</span>
+                                        </div>
                                         <div className="border-r border-slate-200 px-3 py-2">Màu</div>
                                         <div className="border-r border-slate-200 px-3 py-2">Tên tiềm năng</div>
                                         <div className="border-r border-slate-200 px-3 py-2">Mã</div>
@@ -1679,9 +1759,29 @@ const TelesalesCrm = () => {
                                     <div className="overflow-x-auto">
                                         {potentialDrafts.map((potential) => {
                                             const savingPotential = Boolean(potentialSavingIds[potential.id] || configurationSaving);
+                                            const draggingThisPotential = draggingConfigItem?.type === 'potential' && String(draggingConfigItem.id) === String(potential.id);
 
                                             return (
-                                                <div key={potential.id} className="grid min-w-[860px] grid-cols-[70px_minmax(180px,1fr)_120px_100px_100px_140px_120px] border-b border-slate-200 text-[13px] last:border-b-0">
+                                                <div
+                                                    key={potential.id}
+                                                    onDragOver={(event) => handleConfigDragOver(event, 'potential')}
+                                                    onDrop={(event) => handleConfigDrop(event, 'potential', potential.id)}
+                                                    className={`${potentialGridClassName} border-b border-slate-200 text-[13px] transition last:border-b-0 ${draggingThisPotential ? 'bg-teal-50 opacity-70' : 'bg-white'}`}
+                                                >
+                                                    <div className="flex items-center justify-center border-r border-slate-200 px-2 py-2">
+                                                        <button
+                                                            type="button"
+                                                            draggable={!savingPotential}
+                                                            onDragStart={(event) => handleConfigDragStart(event, 'potential', potential.id)}
+                                                            onDragEnd={() => setDraggingConfigItem(null)}
+                                                            disabled={savingPotential}
+                                                            className="inline-flex size-8 cursor-grab items-center justify-center rounded-sm border border-slate-200 bg-white text-slate-500 shadow-sm hover:border-teal-300 hover:text-teal-700 active:cursor-grabbing disabled:cursor-wait disabled:opacity-50"
+                                                            title="Kéo thả sắp xếp"
+                                                            aria-label={`Kéo ${potential.name || potential.code} để sắp xếp`}
+                                                        >
+                                                            <span className="material-symbols-outlined text-[18px]">drag_indicator</span>
+                                                        </button>
+                                                    </div>
                                                     <div className="flex items-center border-r border-slate-200 px-3 py-2">
                                                         <input
                                                             type="color"

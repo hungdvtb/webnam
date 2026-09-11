@@ -229,6 +229,30 @@ const formatSalary = (amount, type) => {
     return `${moneyFormatter.format(Math.ceil(safeNumber(amount)))} ${salaryUnitLabel(type)}`;
 };
 const isFullTime = (employee) => employee?.salary_type === 'theo_thang';
+const hasCustomDefaultScheduleShifts = (value) => value !== null && value !== undefined && !(typeof value === 'string' && value.trim() === '');
+const normalizeScheduleShiftIds = (value) => {
+    let source = value;
+
+    if (typeof source === 'string') {
+        const trimmed = source.trim();
+        if (!trimmed) return [];
+
+        try {
+            source = JSON.parse(trimmed);
+        } catch {
+            source = trimmed.split(',');
+        }
+    }
+
+    if (!Array.isArray(source)) return [];
+
+    return source
+        .map((id) => String(id ?? '').trim())
+        .filter(Boolean);
+};
+const scheduleShiftIdsPayload = (value) => normalizeScheduleShiftIds(value)
+    .map((id) => Number(id))
+    .filter((id) => Number.isInteger(id) && id > 0);
 const normalizeId = (value) => (value === '' || value === null || value === undefined ? null : value);
 const employeeRowKey = (employee) => String(employee?.id || employee?.uid || '');
 const scheduleKey = (row) => [
@@ -333,6 +357,9 @@ const normalizeEmployee = (row = {}) => {
         salary_effective_from: salaryEffectiveFrom,
         salary_rates: salaryRatesForEmployee({ ...row, salary_effective_from: salaryEffectiveFrom }),
         deleted_salary_rate_ids: row.deleted_salary_rate_ids || [],
+        default_schedule_shift_ids: hasCustomDefaultScheduleShifts(row.default_schedule_shift_ids)
+            ? normalizeScheduleShiftIds(row.default_schedule_shift_ids)
+            : null,
     };
 };
 
@@ -589,6 +616,9 @@ const employeePayload = (rows) => rows.map((row) => ({
     raise_plan: row.raise_plan || '',
     bank_account_note: row.bank_account_note || '',
     bank_qr_image_url: row.bank_qr_image_url || '',
+    default_schedule_shift_ids: hasCustomDefaultScheduleShifts(row.default_schedule_shift_ids)
+        ? scheduleShiftIdsPayload(row.default_schedule_shift_ids)
+        : null,
     status: row.status || 'Đang làm',
     notes: row.notes || '',
 }));
@@ -973,6 +1003,35 @@ function ScheduleShiftButton({ shift, checked, disabled, defaulted, onClick }) {
     );
 }
 
+function DefaultScheduleShiftPicker({ shifts, selectedIds, disabled, onToggle }) {
+    if (shifts.length === 0) return null;
+
+    const selectedSet = new Set(selectedIds);
+
+    return (
+        <div className="mt-2 flex flex-wrap items-center justify-center gap-1.5">
+            <span className="material-symbols-outlined text-[16px] text-teal-700" title="Ca mặc định">event_repeat</span>
+            {shifts.map((shift) => {
+                const code = shiftDisplayCode(shift);
+                const selected = selectedSet.has(String(shift.id));
+
+                return (
+                    <button
+                        key={shift.id}
+                        type="button"
+                        disabled={disabled}
+                        onClick={() => onToggle(shift)}
+                        title={`Ca mặc định: ${shift?.shift_name || code}`}
+                        className={`inline-flex size-7 items-center justify-center rounded border text-[11px] font-extrabold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${selected ? 'border-teal-600 bg-teal-700 text-white shadow-sm' : 'border-gray-200 bg-white text-gray-500 hover:border-teal-300 hover:bg-teal-50'}`}
+                    >
+                        {code}
+                    </button>
+                );
+            })}
+        </div>
+    );
+}
+
 function AttendanceShiftControl({ shift, record, disabled, onToggle, onHoursChange }) {
     const code = shiftDisplayCode(shift);
     const standardHours = safeNumber(shift?.standard_hours);
@@ -1111,7 +1170,6 @@ export default function HumanResourcesManagement() {
     const activeShifts = useMemo(() => shifts.filter((shift) => shift.id && shift.is_active !== false).slice().sort(activeShiftSorter), [shifts]);
     const primaryFullTimeShifts = activeShifts.filter((shift) => isPrimaryFullTimeShift(shift));
     const fullTimeDefaultShifts = primaryFullTimeShifts.length > 0 ? primaryFullTimeShifts : activeShifts.slice(0, 2);
-    const fullTimeDefaultShiftIds = new Set(fullTimeDefaultShifts.map((shift) => String(shift.id)));
     const weekDays = useMemo(() => (
         Array.from({ length: 7 }, (_, index) => isoDate(addDays(dateFromInput(weekStart), index)))
             .filter((date) => isDateInMonth(date, month))
@@ -1204,7 +1262,7 @@ export default function HumanResourcesManagement() {
             });
 
         return [...attendance, ...defaultRows];
-    }, [activeEmployees, attendance, attendanceAutoFillDays, fullTimeDefaultShifts, schedules, shiftById]);
+    }, [activeEmployees, activeShifts, attendance, attendanceAutoFillDays, fullTimeDefaultShifts, schedules, shiftById]);
     const weekAttendance = attendanceWithScheduleDefaults.filter((record) => weekDays.includes(record.work_date));
     const monthAttendance = attendanceWithScheduleDefaults.filter((record) => monthDays.includes(record.work_date));
     const attendanceFilterRecords = attendanceWithScheduleDefaults.filter((record) => attendanceFilterDays.includes(record.work_date));
@@ -1241,6 +1299,60 @@ export default function HumanResourcesManagement() {
         const user = employee?.user || {};
         return [user.name, user.email].filter(Boolean).join(' - ') || (employee?.user_id ? `User #${employee.user_id}` : 'Chưa gắn');
     };
+
+    function effectiveDefaultShiftIds(employee) {
+        if (hasCustomDefaultScheduleShifts(employee?.default_schedule_shift_ids)) {
+            return normalizeScheduleShiftIds(employee.default_schedule_shift_ids);
+        }
+
+        return isFullTime(employee)
+            ? fullTimeDefaultShifts.map((shift) => String(shift.id)).filter(Boolean)
+            : [];
+    }
+
+    function defaultScheduleShiftsForEmployee(employee) {
+        const defaultIds = new Set(effectiveDefaultShiftIds(employee));
+        return activeShifts.filter((shift) => defaultIds.has(String(shift.id)));
+    }
+
+    function isDefaultScheduleShift(employee, shift) {
+        return effectiveDefaultShiftIds(employee).includes(String(shift?.id || ''));
+    }
+
+    function patchEmployeeDefaultShiftIds(employee, shiftIds) {
+        const targetId = String(employee?.id || '');
+        const targetKey = employeeRowKey(employee);
+        const orderedIds = activeShifts
+            .map((shift) => String(shift.id))
+            .filter((id) => shiftIds.includes(id));
+        const patchRows = (rows) => rows.map((row) => {
+            const sameId = targetId && String(row?.id || '') === targetId;
+            const sameKey = targetKey && employeeRowKey(row) === targetKey;
+            return sameId || sameKey ? { ...row, default_schedule_shift_ids: orderedIds } : row;
+        });
+
+        setEmployees(patchRows);
+        setScheduleEmployees(patchRows);
+        setMessage('');
+        setError('');
+    }
+
+    function toggleEmployeeDefaultShift(employee, shift) {
+        if (!canManagePayroll || !employee?.id || !shift?.id) return;
+
+        const baseIds = effectiveDefaultShiftIds(employee);
+        const nextIds = new Set(baseIds);
+        const shiftId = String(shift.id);
+
+        if (nextIds.has(shiftId)) {
+            nextIds.delete(shiftId);
+        } else {
+            nextIds.add(shiftId);
+        }
+
+        patchEmployeeDefaultShiftIds(employee, Array.from(nextIds));
+    }
+
     const employeeProfile = employees.find((employee) => employeeRowKey(employee) === employeeProfileKey) || null;
 
     const totalHours = payrollSummary.reduce((sum, row) => sum + safeNumber(row.total_hours), 0);
@@ -1338,6 +1450,7 @@ export default function HumanResourcesManagement() {
             identity_card_front_image_url: '',
             identity_card_back_image_url: '',
             bank_qr_image_url: '',
+            default_schedule_shift_ids: null,
             user_id: '',
             department: '',
             position: '',
@@ -1455,6 +1568,24 @@ export default function HumanResourcesManagement() {
         }
     }
 
+    async function saveSchedulePlan() {
+        setSavingKey('schedules');
+        setMessage('');
+        setError('');
+        try {
+            if (canManagePayroll) {
+                await payrollApi.saveEmployees(employeePayload(employees));
+            }
+            await payrollApi.saveSchedules(schedulePayload(schedulesForSave()));
+            setMessage(canManagePayroll ? 'Đã lưu lịch làm và ca mặc định.' : 'Đã lưu lịch làm.');
+            reloadData();
+        } catch (err) {
+            setError(err?.response?.data?.message || err?.message || 'Không lưu được lịch làm.');
+        } finally {
+            setSavingKey('');
+        }
+    }
+
     function changeMonth(value) {
         const nextMonth = value || currentMonth();
 
@@ -1520,9 +1651,10 @@ export default function HumanResourcesManagement() {
                 && rosterEmployeeIds.has(String(schedule.payroll_employee_id || ''))
             )),
             ...rosterEmployees.flatMap((employee) => {
-                if (!employee.id || !isFullTime(employee)) return [];
+                const defaultShifts = defaultScheduleShiftsForEmployee(employee);
+                if (!employee.id || defaultShifts.length === 0) return [];
 
-                return dates.flatMap((date) => fullTimeDefaultShifts
+                return dates.flatMap((date) => defaultShifts
                     .filter((shift) => !schedules.some((schedule) => (
                         String(schedule.payroll_employee_id) === String(employee.id)
                         && schedule.work_date === date
@@ -1554,7 +1686,7 @@ export default function HumanResourcesManagement() {
         const existing = findSchedule(employee.id, date, shift.id);
         if (existing) return existing.status !== CANCELLED_SCHEDULE_STATUS;
 
-        return isFullTime(employee) && fullTimeDefaultShiftIds.has(String(shift.id));
+        return isDefaultScheduleShift(employee, shift);
     }
 
     function toggleScheduleShift(employee, date, shift) {
@@ -1563,7 +1695,7 @@ export default function HumanResourcesManagement() {
         const existing = findSchedule(employee.id, date, shift.id);
         if (existing) {
             const checked = existing.status !== CANCELLED_SCHEDULE_STATUS;
-            if (checked && !existing.id && !isFullTime(employee)) {
+            if (checked && !existing.id && !isDefaultScheduleShift(employee, shift)) {
                 setSchedules((rows) => rows.filter((row) => row !== existing));
                 return;
             }
@@ -1575,7 +1707,7 @@ export default function HumanResourcesManagement() {
             return;
         }
 
-        const checkedByDefault = isFullTime(employee) && fullTimeDefaultShiftIds.has(String(shift.id));
+        const checkedByDefault = isDefaultScheduleShift(employee, shift);
         setSchedules((rows) => [...rows, {
             uid: tempId(),
             work_date: date,
@@ -1587,12 +1719,13 @@ export default function HumanResourcesManagement() {
         }]);
     }
 
-    function schedulesWithFullTimeDefaults(rosterEmployees = activeEmployees) {
+    function schedulesWithAutomaticDefaults(rosterEmployees = activeEmployees) {
         const existingKeys = new Set(schedules.map(scheduleKey));
         const defaultRows = rosterEmployees.flatMap((employee) => {
-            if (!employee.id || !isFullTime(employee)) return [];
+            const defaultShifts = defaultScheduleShiftsForEmployee(employee);
+            if (!employee.id || defaultShifts.length === 0) return [];
 
-            return monthDays.flatMap((date) => fullTimeDefaultShifts
+            return monthDays.flatMap((date) => defaultShifts
                 .filter((shift) => !existingKeys.has([
                     date,
                     employee.id,
@@ -1614,7 +1747,7 @@ export default function HumanResourcesManagement() {
 
     function schedulesForSave() {
         const rosterEmployees = canEditAttendance ? activeScheduleEmployees : activeEmployees;
-        const rows = schedulesWithFullTimeDefaults(rosterEmployees);
+        const rows = schedulesWithAutomaticDefaults(rosterEmployees);
 
         if (canEditAttendance) return rows;
 
@@ -2347,7 +2480,7 @@ export default function HumanResourcesManagement() {
                             <span className="material-symbols-outlined text-[18px]">view_module</span>
                             Ca làm
                         </button>
-                        <SaveButton saving={savingKey === 'schedules'} disabled={!canSaveSchedules} onClick={() => saveRows('schedules', () => payrollApi.saveSchedules(schedulePayload(schedulesForSave())), 'Đã lưu lịch làm.')} />
+                        <SaveButton saving={savingKey === 'schedules'} disabled={!canSaveSchedules} onClick={saveSchedulePlan} />
                         <button type="button" disabled={!canEditAttendance} onClick={createAttendanceFromSchedule} className="inline-flex h-9 items-center gap-2 rounded border border-teal-200 bg-teal-50 px-3 text-[13px] font-bold text-teal-700 hover:bg-teal-100 disabled:opacity-50">
                             <span className="material-symbols-outlined text-[18px]">arrow_forward</span>
                             Tạo chấm công
@@ -2387,14 +2520,20 @@ export default function HumanResourcesManagement() {
                                     </div>
                                     {activeScheduleEmployees.map((employee) => (
                                         <div key={`${weekDaysInMonth[0]}-${employee.id || employee.uid}`} className="grid border-b border-gray-200 last:border-b-0 hover:bg-gray-50" style={weekGridStyle}>
-                                            <div className="flex min-h-[78px] flex-col items-center justify-center border-r border-gray-200 bg-white px-2 py-2 text-center">
+                                            <div className="flex min-h-[102px] flex-col items-center justify-center border-r border-gray-200 bg-white px-2 py-2 text-center">
                                                 <div className="text-[13px] font-bold text-gray-800">{employee.full_name || 'Chưa đặt tên'}</div>
                                                 <div className="text-[11px] font-semibold text-gray-400">{isFullTime(employee) ? 'Full-time' : 'Part-time'}</div>
+                                                <DefaultScheduleShiftPicker
+                                                    shifts={activeShifts}
+                                                    selectedIds={effectiveDefaultShiftIds(employee)}
+                                                    disabled={!canManagePayroll || !employee.id}
+                                                    onToggle={(shift) => toggleEmployeeDefaultShift(employee, shift)}
+                                                />
                                             </div>
                                             {weekDaysInMonth.map((date) => {
                                                 const tone = dayColumnTone(date, month);
                                                 return (
-                                                    <div key={`${employee.id}-${date}`} className={`flex min-h-[78px] items-center justify-center border-r px-1.5 py-2 text-center last:border-r-0 ${tone.cell}`}>
+                                                    <div key={`${employee.id}-${date}`} className={`flex min-h-[102px] items-center justify-center border-r px-1.5 py-2 text-center last:border-r-0 ${tone.cell}`}>
                                                         {activeShifts.length === 0 ? (
                                                             <span className="text-[12px] font-semibold text-gray-400">Chưa có ca</span>
                                                         ) : (
@@ -2406,7 +2545,7 @@ export default function HumanResourcesManagement() {
                                                                             key={shift.id}
                                                                             shift={shift}
                                                                             checked={checked}
-                                                                            defaulted={isFullTime(employee) && fullTimeDefaultShiftIds.has(String(shift.id))}
+                                                                            defaulted={isDefaultScheduleShift(employee, shift)}
                                                                             disabled={!canEditScheduleForEmployee(employee) || !employee.id}
                                                                             onClick={() => toggleScheduleShift(employee, date, shift)}
                                                                         />

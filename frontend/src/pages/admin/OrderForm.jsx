@@ -144,6 +144,7 @@ const ACTUAL_PRODUCT_PICKER_RESULT_TAB_HISTORY = 'history';
 const WAREHOUSE_PICKING_HISTORY_STORAGE_KEY_PREFIX = 'warehouse_picking_replacement_history_v1';
 const WAREHOUSE_PICKING_HISTORY_LIMIT = 6;
 const WAREHOUSE_PICKING_HISTORY_MAX_SOURCES = 400;
+const ORDER_FORM_PRODUCT_SEARCH_DEBOUNCE_MS = 140;
 const ORDER_FORM_REPLACE_PICKER_SEARCH_DELAY_MS = 140;
 const ORDER_FORM_REPLACE_PICKER_TOP = 104;
 const ORDER_FORM_REPLACE_PICKER_MIN_HEIGHT = 320;
@@ -1425,6 +1426,21 @@ const getLatestProductSnapshotForEntry = (entry, latestMap = new Map()) => {
     const productId = Number(entry?.target_product_id ?? entry?.product_id ?? entry?.bundle_parent_id ?? entry?.id ?? 0) || 0;
     return productId > 0 ? latestMap.get(productId) : undefined;
 };
+const normalizeQuickFilterOptionValue = (value) => String(value ?? '').trim();
+const PRODUCT_ATTRIBUTE_EMPTY_VALUE_KEYS = new Set(['null', 'undefined', '[]', '{}']);
+const normalizeProductAttributeDisplayValue = (value) => {
+    const normalizedValue = normalizeQuickFilterOptionValue(value);
+    return normalizedValue && !PRODUCT_ATTRIBUTE_EMPTY_VALUE_KEYS.has(normalizedValue.toLowerCase())
+        ? normalizedValue
+        : '';
+};
+const normalizeProductOptionLabel = (value) => (
+    normalizeCanvasText(value)
+        .split('/')
+        .map(normalizeProductAttributeDisplayValue)
+        .filter(Boolean)
+        .join(' / ')
+);
 const normalizeAccountId = (value) => {
     const numericValue = Number(value);
     return Number.isFinite(numericValue) && numericValue > 0 ? Math.trunc(numericValue) : null;
@@ -1678,7 +1694,7 @@ const normalizeStoredProductQuickSetupItems = (items = []) => {
                 entry_kind: entryKind,
                 parent_product_id: Number.isFinite(parentProductId) && parentProductId > 0 ? parentProductId : null,
                 parent_product_name: String(item?.parent_product_name ?? '').trim(),
-                option_label: String(item?.option_label ?? '').trim(),
+                option_label: normalizeProductOptionLabel(item?.option_label),
                 ...(entryKind === SEARCH_ENTRY_BUNDLE_OPTION ? {
                     bundle_parent_id: bundleParentId,
                     bundle_parent_name: bundleParentName,
@@ -1701,33 +1717,33 @@ const normalizeStoredProductQuickSetupItems = (items = []) => {
         })
         .filter(Boolean);
 };
-const normalizeQuickFilterOptionValue = (value) => String(value ?? '').trim();
 const parseProductAttributeValueList = (value) => {
     if (Array.isArray(value)) {
-        return value.map(normalizeQuickFilterOptionValue).filter(Boolean);
+        return value.map(normalizeProductAttributeDisplayValue).filter(Boolean);
     }
 
     if (typeof value !== 'string') {
-        return value == null ? [] : [normalizeQuickFilterOptionValue(value)].filter(Boolean);
+        return value == null ? [] : [normalizeProductAttributeDisplayValue(value)].filter(Boolean);
     }
 
     const trimmedValue = value.trim();
     if (!trimmedValue) return [];
+    if (PRODUCT_ATTRIBUTE_EMPTY_VALUE_KEYS.has(trimmedValue.toLowerCase())) return [];
 
     if ((trimmedValue.startsWith('[') && trimmedValue.endsWith(']')) || (trimmedValue.startsWith('{') && trimmedValue.endsWith('}'))) {
         try {
             const parsed = JSON.parse(trimmedValue);
             if (Array.isArray(parsed)) {
-                return parsed.map(normalizeQuickFilterOptionValue).filter(Boolean);
+                return parsed.map(normalizeProductAttributeDisplayValue).filter(Boolean);
             }
 
             if (parsed && typeof parsed === 'object') {
-                return Object.values(parsed).map(normalizeQuickFilterOptionValue).filter(Boolean);
+                return Object.values(parsed).map(normalizeProductAttributeDisplayValue).filter(Boolean);
             }
         } catch (error) { }
     }
 
-    return [trimmedValue];
+    return [normalizeProductAttributeDisplayValue(trimmedValue)].filter(Boolean);
 };
 const dedupeProductQuickFilterOptions = (options = []) => {
     const seenValues = new Set();
@@ -13447,7 +13463,9 @@ const OrderForm = () => {
         const params = {
             per_page: 200,
             picker: 1,
+            fast_picker: 1,
             light_picker: 1,
+            quick_filter_enabled: 1,
         };
         appendProductQuickFilterParams(params, activeFilterAttribute, [activeFilterValue]);
         appendCrossSellSourceParams(params);
@@ -13941,8 +13959,19 @@ const OrderForm = () => {
         && (searchTerm.trim() !== '' || isProductQuickModeActive || isManualProductQuickModeActive);
 
     useEffect(() => {
-        setDebouncedSearchTerm(searchTerm);
-    }, [searchTerm]);
+        if (!searchTerm.trim() || isProductQuickModeActive || isManualProductQuickModeActive) {
+            setDebouncedSearchTerm(searchTerm);
+            return undefined;
+        }
+
+        const timerId = setTimeout(() => {
+            setDebouncedSearchTerm(searchTerm);
+        }, ORDER_FORM_PRODUCT_SEARCH_DEBOUNCE_MS);
+
+        return () => {
+            clearTimeout(timerId);
+        };
+    }, [isManualProductQuickModeActive, isProductQuickModeActive, searchTerm]);
 
     useEffect(() => {
         const timerId = setTimeout(() => {
@@ -14046,7 +14075,7 @@ const OrderForm = () => {
         }
 
         const shouldFetchScope = Boolean(
-            showSearchDropdown
+            (isProductQuickModeActive && showSearchDropdown)
             || (showProductQuickSetupPanel && productQuickSetupMode === PRODUCT_QUICK_SETUP_MODE_ATTRIBUTE)
             || productQuickFilterAttributeId2
             || normalizedProductQuickFilterValues2[0]
@@ -14057,6 +14086,7 @@ const OrderForm = () => {
     }, [
         fetchProductQuickFilterScopeProducts,
         hasActiveProductQuickFilter,
+        isProductQuickModeActive,
         normalizedProductQuickFilterValues2,
         productQuickFilterAttributeId2,
         productQuickSetupMode,

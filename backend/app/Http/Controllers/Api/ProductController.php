@@ -8558,6 +8558,14 @@ class ProductController extends Controller
             ->all();
     }
 
+    protected function isEmptyPickerAttributeSummaryValue($value): bool
+    {
+        $normalizedValue = Str::lower(trim((string) $value));
+
+        return $normalizedValue === ''
+            || in_array($normalizedValue, ['null', 'undefined', '[]', '{}'], true);
+    }
+
     protected function pickerAttributeSummary(Product $product): string
     {
         return collect($this->pickerAttributePayload($product))
@@ -8572,14 +8580,18 @@ class ProductController extends Controller
                     )) {
                         $decoded = json_decode($trimmed, true);
                         if (is_array($decoded)) {
-                            return collect($decoded)->flatten(1)->map(fn ($value) => trim((string) $value))->filter();
+                            return collect($decoded)
+                                ->flatten(1)
+                                ->map(fn ($value) => trim((string) $value))
+                                ->reject(fn ($value) => $this->isEmptyPickerAttributeSummaryValue($value));
                         }
                     }
                 }
 
-                return [trim((string) $rawValue)];
+                return $this->isEmptyPickerAttributeSummaryValue($rawValue)
+                    ? []
+                    : [trim((string) $rawValue)];
             })
-            ->filter()
             ->unique()
             ->implode(' / ');
     }

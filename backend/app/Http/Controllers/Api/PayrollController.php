@@ -179,6 +179,8 @@ class PayrollController extends Controller
             'employees.*.raise_plan' => 'nullable|string|max:255',
             'employees.*.bank_account_note' => 'nullable|string|max:255',
             'employees.*.bank_qr_image_url' => 'nullable|string|max:1000',
+            'employees.*.default_schedule_shift_ids' => 'nullable|array',
+            'employees.*.default_schedule_shift_ids.*' => 'integer',
             'employees.*.status' => 'nullable|string|max:30',
             'employees.*.notes' => 'nullable|string',
         ])['employees'];
@@ -253,6 +255,10 @@ class PayrollController extends Controller
                     'status' => $row['status'] ?? 'Đang làm',
                     'notes' => $this->nullableTrim($row['notes'] ?? null),
                 ];
+
+                if (array_key_exists('default_schedule_shift_ids', $row)) {
+                    $payload['default_schedule_shift_ids'] = $this->defaultScheduleShiftIds($accountId, $row['default_schedule_shift_ids']);
+                }
 
                 if (!$employee) {
                     $employee = PayrollEmployee::query()
@@ -971,6 +977,7 @@ class PayrollController extends Controller
             'full_name' => $employee->full_name,
             'department' => $employee->department,
             'salary_type' => $employee->salary_type,
+            'default_schedule_shift_ids' => $employee->default_schedule_shift_ids,
             'status' => $employee->status,
         ])->values();
     }
@@ -1168,6 +1175,39 @@ class PayrollController extends Controller
         }
 
         return $salaryAmount / $standardWorkUnits * $workUnits;
+    }
+
+    private function defaultScheduleShiftIds(int $accountId, $value): ?array
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        if (!is_array($value)) {
+            return null;
+        }
+
+        $ids = collect($value)
+            ->map(fn ($id) => (int) $id)
+            ->filter(fn ($id) => $id > 0)
+            ->unique()
+            ->values();
+
+        if ($ids->isEmpty()) {
+            return [];
+        }
+
+        $validIds = PayrollWorkShift::query()
+            ->where('account_id', $accountId)
+            ->whereIn('id', $ids)
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->flip();
+
+        return $ids
+            ->filter(fn ($id) => $validIds->has($id))
+            ->values()
+            ->all();
     }
 
     private function nextEmployeeCode(int $accountId): string

@@ -31,6 +31,7 @@ class PayrollEmployee extends Model
         'raise_plan',
         'bank_account_note',
         'bank_qr_image_url',
+        'default_schedule_shift_ids',
         'status',
         'notes',
     ];
@@ -42,6 +43,7 @@ class PayrollEmployee extends Model
             'salary_effective_from' => 'date',
             'standard_work_units' => 'decimal:3',
             'lunch_allowance' => 'decimal:2',
+            'default_schedule_shift_ids' => 'array',
         ];
     }
 

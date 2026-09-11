@@ -58,6 +58,9 @@ class ProductPickerDeclarationSearchRegressionTest extends TestCase
             'Men lam',
             'Men ran',
         ]);
+        $sizeAttribute = $this->createProductAttribute($account, 'Kich thuoc', [
+            'S2',
+        ]);
 
         $parent = $this->createProduct($account, [
             'name' => 'Ong huong men LAM',
@@ -71,7 +74,8 @@ class ProductPickerDeclarationSearchRegressionTest extends TestCase
             'sku' => 'ML80-ONGHUONG-S2-20',
             'price' => 350000,
         ]);
-        $this->attachProductAttributeValue($variant, $glazeAttribute, null);
+        $this->attachProductAttributeValue($variant, $glazeAttribute, 'null');
+        $this->attachProductAttributeValue($variant, $sizeAttribute, 'S2');
         $this->attachVariation($parent, $variant);
 
         $response = $this
@@ -100,7 +104,8 @@ class ProductPickerDeclarationSearchRegressionTest extends TestCase
         $response
             ->assertJsonPath('data.0.entry_kind', 'variation')
             ->assertJsonPath('data.0.parent_product_id', $parent->id)
-            ->assertJsonPath('data.0.sku', 'ML80-ONGHUONG-S2-20');
+            ->assertJsonPath('data.0.sku', 'ML80-ONGHUONG-S2-20')
+            ->assertJsonPath('data.0.option_label', 'S2');
     }
 
     private function authenticate(): Account

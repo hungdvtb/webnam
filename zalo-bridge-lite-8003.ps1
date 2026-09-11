@@ -4,7 +4,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:BridgeVersion = '2026.09.09.4'
+$script:BridgeVersion = '2026.09.10.1'
 $script:BridgeStartedAt = Get-Date
 
 function Write-BridgeLog {
@@ -22,6 +22,15 @@ using System.Runtime.InteropServices;
 public static class Win32LiteBridge
 {
     public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RECT
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
 
     [DllImport("user32.dll")]
     public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
@@ -46,6 +55,12 @@ public static class Win32LiteBridge
 
     [DllImport("user32.dll")]
     public static extern bool MoveWindow(IntPtr hWnd, int X, int Y, int nWidth, int nHeight, bool bRepaint);
+
+    [DllImport("user32.dll")]
+    public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+    [DllImport("user32.dll")]
+    public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
 }
 "@
 }
@@ -163,6 +178,39 @@ function Limit-Number {
     )
 
     return [Math]::Min([Math]::Max($Value, $Min), $Max)
+}
+
+function Release-BridgeModifierKeys {
+    $keyUp = 0x0002
+    foreach ($key in @(0x10, 0x11, 0x12, 0x5B, 0x5C)) {
+        try {
+            [Win32LiteBridge]::keybd_event([byte] $key, [byte] 0, [uint32] $keyUp, [UIntPtr]::Zero)
+        } catch {
+            # Best-effort cleanup only.
+        }
+    }
+}
+
+function Send-BridgeKey {
+    param([byte] $VirtualKey)
+
+    $keyUp = 0x0002
+    [Win32LiteBridge]::keybd_event($VirtualKey, [byte] 0, [uint32] 0, [UIntPtr]::Zero)
+    Start-Sleep -Milliseconds 20
+    [Win32LiteBridge]::keybd_event($VirtualKey, [byte] 0, [uint32] $keyUp, [UIntPtr]::Zero)
+}
+
+function Send-BridgePaste {
+    $keyUp = 0x0002
+    Release-BridgeModifierKeys
+    [Win32LiteBridge]::keybd_event([byte] 0x11, [byte] 0, [uint32] 0, [UIntPtr]::Zero)
+    Start-Sleep -Milliseconds 20
+    [Win32LiteBridge]::keybd_event([byte] 0x56, [byte] 0, [uint32] 0, [UIntPtr]::Zero)
+    Start-Sleep -Milliseconds 20
+    [Win32LiteBridge]::keybd_event([byte] 0x56, [byte] 0, [uint32] $keyUp, [UIntPtr]::Zero)
+    Start-Sleep -Milliseconds 20
+    [Win32LiteBridge]::keybd_event([byte] 0x11, [byte] 0, [uint32] $keyUp, [UIntPtr]::Zero)
+    Release-BridgeModifierKeys
 }
 
 function Invoke-ClipboardWrite {
@@ -464,11 +512,20 @@ function Get-TopLevelWindows {
                 $processName = ''
             }
 
+            $rect = New-Object Win32LiteBridge+RECT
+            [void] [Win32LiteBridge]::GetWindowRect($Handle, [ref] $rect)
+            $windowWidth = [int] [Math]::Max(0, $rect.Right - $rect.Left)
+            $windowHeight = [int] [Math]::Max(0, $rect.Bottom - $rect.Top)
+
             $script:LiteBridgeWindows += [pscustomobject] @{
                 Handle = $Handle
                 Title = $title
                 ProcessId = [int] $processId
                 ProcessName = $processName
+                Left = [int] $rect.Left
+                Top = [int] $rect.Top
+                Width = $windowWidth
+                Height = $windowHeight
             }
         } catch {
             return $true
@@ -563,8 +620,9 @@ function Find-PanelWindow {
     $fallback = @('Sidebar', 'quick-replies', 'admin.gomdaithanh.com', 'localhost:3003')
     $keywordsToUse = ConvertTo-StringArray $Keywords $fallback
     $matches = @()
+    $windows = @(Get-TopLevelWindows)
 
-    foreach ($window in (Get-TopLevelWindows)) {
+    foreach ($window in $windows) {
         if (-not (Test-ContainsAnyText $window.Title $keywordsToUse)) {
             continue
         }
@@ -587,6 +645,42 @@ function Find-PanelWindow {
         }
 
         $matches += [pscustomobject] @{ Window = $window; Score = $score }
+    }
+
+    if ($matches.Count -gt 0) {
+        return ($matches | Sort-Object -Property Score -Descending | Select-Object -First 1).Window
+    }
+
+    $screen = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+    $rightEdgeStart = [int] ($screen.Left + [Math]::Max(0, $screen.Width - 760))
+    foreach ($window in $windows) {
+        if (-not (Test-BrowserProcess $window.ProcessName)) {
+            continue
+        }
+
+        if ((Test-ContainsText $window.Title 'Zalo -') -or (Test-ContainsText $window.Title 'chat.zalo') -or (Test-ContainsText $window.Title 'DevTools')) {
+            continue
+        }
+
+        $score = 0
+        if ($window.Width -ge 280 -and $window.Width -le 700) {
+            $score += 80
+        }
+        if ($window.Left -ge $rightEdgeStart) {
+            $score += 80
+        }
+        if ($window.Height -ge [Math]::Max(300, [int] ($screen.Height * 0.6))) {
+            $score += 20
+        }
+        foreach ($keyword in @('Trả lời nhanh', 'Tra loi nhanh', 'quick-replies', 'admin.gomdaithanh.com', 'localhost:3003')) {
+            if (Test-ContainsText $window.Title $keyword) {
+                $score += 40
+            }
+        }
+
+        if ($score -ge 120) {
+            $matches += [pscustomobject] @{ Window = $window; Score = $score }
+        }
     }
 
     return ($matches | Sort-Object -Property Score -Descending | Select-Object -First 1).Window
@@ -615,6 +709,7 @@ function Activate-Window {
     }
 
     Start-Sleep -Milliseconds 160
+    Release-BridgeModifierKeys
 }
 
 function Invoke-ZaloPasteAction {
@@ -638,21 +733,24 @@ function Invoke-ZaloPasteAction {
         Activate-Window $Window
     }
 
-    if ($null -eq $Shell) {
-        $Shell = New-Object -ComObject WScript.Shell
-    }
+    Release-BridgeModifierKeys
 
-    if ($paste) {
-        $Shell.SendKeys('^v')
-        Start-Sleep -Milliseconds $afterPasteDelay
-    }
-
-    if ($enter) {
-        if ($delay -gt 0) {
-            Start-Sleep -Milliseconds $delay
+    try {
+        if ($paste) {
+            Send-BridgePaste
+            Start-Sleep -Milliseconds $afterPasteDelay
         }
-        $Shell.SendKeys('~')
-        Start-Sleep -Milliseconds $afterEnterDelay
+
+        if ($enter) {
+            if ($delay -gt 0) {
+                Start-Sleep -Milliseconds $delay
+            }
+            Release-BridgeModifierKeys
+            Send-BridgeKey ([byte] 0x0D)
+            Start-Sleep -Milliseconds $afterEnterDelay
+        }
+    } finally {
+        Release-BridgeModifierKeys
     }
 
     return @{

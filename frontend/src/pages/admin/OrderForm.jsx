@@ -5721,19 +5721,43 @@ const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
 
 const canvasImageCache = new Map();
 const CANVAS_IMAGE_CACHE_LIMIT = 60;
-const CANVAS_IMAGE_FETCH_TIMEOUT_MS = 8000;
+const CANVAS_IMAGE_CAPTURE_WAIT_MS = 900;
+const CANVAS_IMAGE_NETWORK_TIMEOUT_MS = 8000;
 
-const loadCanvasImage = async (src) => {
-    if (!src) return null;
+const waitForCanvasImage = async (entry, timeoutMs = CANVAS_IMAGE_CAPTURE_WAIT_MS) => {
+    if (!entry) return null;
+    if (entry.image) return entry.image;
+    if (entry.failed) return null;
+
+    if (!timeoutMs || timeoutMs <= 0) {
+        return entry.promise;
+    }
+
+    return Promise.race([
+        entry.promise,
+        new Promise((resolve) => {
+            window.setTimeout(() => resolve(null), timeoutMs);
+        }),
+    ]);
+};
+
+const getCanvasImageCacheEntry = (src) => {
+    if (!src || typeof window === 'undefined') return null;
 
     const cacheKey = String(src);
     if (canvasImageCache.has(cacheKey)) {
         return canvasImageCache.get(cacheKey);
     }
 
+    const entry = {
+        image: null,
+        failed: false,
+        promise: null,
+    };
+
     const imagePromise = (async () => {
         const controller = new AbortController();
-        const timeoutId = window.setTimeout(() => controller.abort(), CANVAS_IMAGE_FETCH_TIMEOUT_MS);
+        const timeoutId = window.setTimeout(() => controller.abort(), CANVAS_IMAGE_NETWORK_TIMEOUT_MS);
 
         try {
             const normalizedSrc = cacheKey.startsWith('data:')
@@ -5757,6 +5781,7 @@ const loadCanvasImage = async (src) => {
                 image.src = dataUrl;
             });
         } catch (error) {
+            entry.failed = true;
             canvasImageCache.delete(cacheKey);
             console.error('Failed to load canvas image', src, error);
             return null;
@@ -5765,13 +5790,35 @@ const loadCanvasImage = async (src) => {
         }
     })();
 
-    canvasImageCache.set(cacheKey, imagePromise);
+    entry.promise = imagePromise.then((image) => {
+        if (image) {
+            entry.image = image;
+        } else {
+            entry.failed = true;
+        }
+
+        return image;
+    });
+
+    canvasImageCache.set(cacheKey, entry);
 
     if (canvasImageCache.size > CANVAS_IMAGE_CACHE_LIMIT) {
         canvasImageCache.delete(canvasImageCache.keys().next().value);
     }
 
-    return imagePromise;
+    return entry;
+};
+
+const loadCanvasImage = async (src, options = {}) => {
+    const entry = getCanvasImageCacheEntry(src);
+    return waitForCanvasImage(entry, options.timeoutMs ?? CANVAS_IMAGE_CAPTURE_WAIT_MS);
+};
+
+const preloadCanvasImage = (src) => {
+    const entry = getCanvasImageCacheEntry(src);
+    if (!entry) return;
+
+    entry.promise.catch(() => null);
 };
 
 const wrapCanvasText = (ctx, text, maxWidth) => {
@@ -15943,18 +15990,24 @@ const OrderForm = () => {
     const handleScreenshot = async () => {
         if (formData.items.length === 0 || isCapturing) return;
 
-        let currentSourceQuoteTemplates = sourceQuoteTemplates;
+        const availableTemplates = mergeQuoteTemplates(quoteTemplates, sourceQuoteTemplates)
+            .filter((template) => template.is_active !== false);
 
-        if (quoteTemplateSourceAccountIds.length > 0) {
-            try {
-                currentSourceQuoteTemplates = await refreshSourceQuoteTemplates();
-            } catch (error) {
-                console.error('Error refreshing source quote templates', error);
+        if (availableTemplates.length > 0 || sourceQuoteTemplatesLoading) {
+            setQuoteTemplateSearch('');
+            setShowQuoteTemplatePicker(true);
+            refreshQuoteBootstrap().catch((error) => {
+                console.error('Error refreshing quote bootstrap', error);
+            });
+            if (quoteTemplateSourceAccountIds.length > 0) {
+                refreshSourceQuoteTemplates().catch((error) => {
+                    console.error('Error refreshing source quote templates', error);
+                });
             }
+            return;
         }
 
-        const availableTemplates = mergeQuoteTemplates(quoteTemplates, currentSourceQuoteTemplates)
-            .filter((template) => template.is_active !== false);
+        let currentSourceQuoteTemplates = sourceQuoteTemplates;
 
         if (availableTemplates.length === 0) {
             let refreshedTemplates = [];
@@ -16195,7 +16248,10 @@ const OrderForm = () => {
         () => mergeQuoteTemplates(quoteTemplates, sourceQuoteTemplates),
         [quoteTemplates, sourceQuoteTemplates]
     );
-    const availableQuoteTemplates = mergedQuoteTemplates.filter((template) => template.is_active !== false);
+    const availableQuoteTemplates = useMemo(
+        () => mergedQuoteTemplates.filter((template) => template.is_active !== false),
+        [mergedQuoteTemplates]
+    );
     const orderSourceMeta = useMemo(
         () => getOrderSourceMeta(formData.source, UNKNOWN_ORDER_SOURCE),
         [formData.source]
@@ -16237,6 +16293,43 @@ const OrderForm = () => {
                     className: 'border border-sky-200 bg-sky-50 text-sky-700 hover:bg-sky-700 hover:text-white',
                 }
         );
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return undefined;
+
+        const preloadUrls = Array.from(new Set([
+            quoteSettings.quote_logo_url,
+            ...availableQuoteTemplates.slice(0, 24).map(getQuoteTemplateImageUrl),
+        ].map((url) => String(url || '').trim()).filter(Boolean)));
+
+        if (preloadUrls.length === 0) return undefined;
+
+        let disposed = false;
+        const preloadTimers = [];
+        const scheduleIdle = window.requestIdleCallback
+            ? (callback) => window.requestIdleCallback(callback, { timeout: 1200 })
+            : (callback) => window.setTimeout(callback, 80);
+        const cancelIdle = window.cancelIdleCallback || window.clearTimeout;
+
+        const idleHandle = scheduleIdle(() => {
+            if (disposed) return;
+
+            preloadUrls.forEach((url, index) => {
+                const timerId = window.setTimeout(() => {
+                    if (!disposed) {
+                        preloadCanvasImage(url);
+                    }
+                }, index * 80);
+                preloadTimers.push(timerId);
+            });
+        });
+
+        return () => {
+            disposed = true;
+            cancelIdle(idleHandle);
+            preloadTimers.forEach((timerId) => window.clearTimeout(timerId));
+        };
+    }, [availableQuoteTemplates, quoteSettings.quote_logo_url]);
     const renderOrderNotesField = () => (
         <Field label="Ghi chú" className="min-h-[100px] items-start pt-3">
             <textarea

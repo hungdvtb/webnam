@@ -12907,10 +12907,18 @@ const OrderForm = () => {
     ]);
 
     const fetchProducts = useCallback(async (term = '', filterOverrides = {}) => {
+        const skipPendingPrefetch = Boolean(filterOverrides.skipPendingPrefetch);
         const { params, cacheKey } = buildProductSearchRequest(term, filterOverrides);
         productSearchRequestKeyRef.current = cacheKey;
         productSearchAbortRef.current?.abort();
         productSearchAbortRef.current = null;
+
+        if (skipPendingPrefetch) {
+            productSearchPrefetchAbortRef.current?.abort();
+            productSearchPrefetchAbortRef.current = null;
+            productSearchPrefetchKeyRef.current = '';
+            productSearchPrefetchPromiseRef.current = null;
+        }
 
         if (productSearchCacheRef.current.has(cacheKey)) {
             const cachedProducts = productSearchCacheRef.current.get(cacheKey);
@@ -12919,6 +12927,8 @@ const OrderForm = () => {
         }
 
         if (
+            !skipPendingPrefetch
+            &&
             productSearchPrefetchKeyRef.current === cacheKey
             && productSearchPrefetchPromiseRef.current
         ) {
@@ -12953,6 +12963,13 @@ const OrderForm = () => {
             }
         }
     }, [buildProductSearchRequest]);
+    const switchToUnfilteredProductSearch = useCallback(() => {
+        setDebouncedSearchTerm(searchTerm);
+        fetchProducts(searchTerm, {
+            applyQuickFilter: false,
+            skipPendingPrefetch: true,
+        });
+    }, [fetchProducts, searchTerm]);
     const handleSelectReplacementDeclarationSource = useCallback((entry) => {
         const sourceEntry = normalizeProductPickerEntry(entry);
         if (!sourceEntry || !getProductReplacementDeclarationSku(sourceEntry)) {
@@ -13429,13 +13446,17 @@ const OrderForm = () => {
     const toggleProductQuickMode = useCallback(() => {
         if (isProductQuickModeToggleDisabled) return;
 
+        const isTurningOff = productQuickModeEnabled;
         if (!productQuickModeEnabled) {
             setManualProductQuickModeEnabled(false);
         }
         setProductQuickModeEnabled((prev) => !prev);
         setShowSearchDropdown(true);
         setShowSearchHistory(false);
-    }, [isProductQuickModeToggleDisabled, productQuickModeEnabled]);
+        if (isTurningOff) {
+            switchToUnfilteredProductSearch();
+        }
+    }, [isProductQuickModeToggleDisabled, productQuickModeEnabled, switchToUnfilteredProductSearch]);
 
     const disableProductQuickMode = useCallback((event) => {
         event?.stopPropagation?.();
@@ -13443,7 +13464,8 @@ const OrderForm = () => {
         setShowProductQuickSetupPanel(false);
         setShowSearchDropdown(true);
         setShowSearchHistory(false);
-    }, []);
+        switchToUnfilteredProductSearch();
+    }, [switchToUnfilteredProductSearch]);
 
     const toggleProductQuickSetupPanel = useCallback((event) => {
         event?.stopPropagation?.();

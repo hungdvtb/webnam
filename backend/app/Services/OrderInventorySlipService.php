@@ -1458,12 +1458,34 @@ class OrderInventorySlipService
             : self::RETURN_STATUS_NOT_RETURNED;
     }
 
+    private function suppressCoveredLegacyTrackingExports(Collection $documents, Collection $automaticExports): Collection
+    {
+        if ($automaticExports->isEmpty()) {
+            return $automaticExports;
+        }
+
+        $hasActiveExportDocument = $documents->contains(function (InventoryDocument $document) {
+            return (string) $document->type === 'export'
+                && in_array((string) $document->status, self::ACTIVE_STATUSES, true);
+        });
+
+        if (!$hasActiveExportDocument) {
+            return $automaticExports;
+        }
+
+        return $automaticExports
+            ->reject(fn (array $automaticExport) => ($automaticExport['source_kind'] ?? null) === 'legacy_tracking_export')
+            ->values();
+    }
+
     private function buildDetailPayload(
         Order $order,
         Collection $documents,
         Collection $automaticExports,
         bool $includeDocuments
     ): array {
+        $automaticExports = $this->suppressCoveredLegacyTrackingExports($documents, $automaticExports);
+
         $orderProducts = $this->appendExtraProductsForOrder(
             $this->aggregateOrderProducts($order),
             $documents,

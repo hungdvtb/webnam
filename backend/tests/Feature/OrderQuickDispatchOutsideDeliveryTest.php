@@ -95,6 +95,17 @@ class OrderQuickDispatchOutsideDeliveryTest extends TestCase
             'to_shipping_status' => 'out_for_delivery',
         ]);
 
+        $slipsResponse = $this
+            ->withHeaders($this->headers($account))
+            ->getJson("/api/orders/{$order->id}/inventory-slips");
+
+        $slipsResponse->assertOk();
+        $exportSlips = $slipsResponse->json('documents.export');
+        $this->assertSame(1, (int) $slipsResponse->json('summary.export_slip_count'));
+        $this->assertCount(1, $exportSlips);
+        $this->assertSame($document->document_number, $exportSlips[0]['document_number'] ?? null);
+        $this->assertSame('document', $exportSlips[0]['source_kind'] ?? null);
+
         $showResponse = $this
             ->withHeaders($this->headers($account))
             ->getJson("/api/orders/{$order->id}");
@@ -115,6 +126,7 @@ class OrderQuickDispatchOutsideDeliveryTest extends TestCase
         $this->assertSame(0.0, (float) ($listRow['shipping_fee'] ?? 0));
         $this->assertSame(45000.0, (float) ($listRow['internal_shipping_fee'] ?? 0));
         $this->assertSame(280000.0, (float) ($listRow['total_price'] ?? 0));
+        $this->assertSame(1, (int) data_get($listRow, 'inventory_slip_summary.export_slip_count'));
     }
 
     public function test_quick_dispatch_outside_delivery_generates_incrementing_internal_tracking_codes(): void

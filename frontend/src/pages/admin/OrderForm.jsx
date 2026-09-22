@@ -144,7 +144,9 @@ const ACTUAL_PRODUCT_PICKER_RESULT_TAB_HISTORY = 'history';
 const WAREHOUSE_PICKING_HISTORY_STORAGE_KEY_PREFIX = 'warehouse_picking_replacement_history_v1';
 const WAREHOUSE_PICKING_HISTORY_LIMIT = 6;
 const WAREHOUSE_PICKING_HISTORY_MAX_SOURCES = 400;
-const ORDER_FORM_PRODUCT_SEARCH_DEBOUNCE_MS = 140;
+const ORDER_FORM_PRODUCT_SEARCH_DEBOUNCE_MS = 80;
+const ORDER_FORM_PRODUCT_SEARCH_SHORT_DEBOUNCE_MS = 320;
+const ORDER_FORM_PRODUCT_SEARCH_INCOMPLETE_DEBOUNCE_MS = 420;
 const ORDER_FORM_REPLACE_PICKER_SEARCH_DELAY_MS = 140;
 const ORDER_FORM_REPLACE_PICKER_TOP = 104;
 const ORDER_FORM_REPLACE_PICKER_MIN_HEIGHT = 320;
@@ -756,6 +758,33 @@ const sortQuoteTemplates = (templates = []) => [...(Array.isArray(templates) ? t
 });
 
 const normalizeCanvasText = (value) => String(value ?? '').normalize('NFC').trim();
+const normalizeOrderProductSearchTypingText = (value) => normalizeCanvasText(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+const getOrderProductSearchDebounceMs = (term) => {
+    const normalized = normalizeOrderProductSearchTypingText(term);
+    if (!normalized) {
+        return 0;
+    }
+
+    const tokens = normalized
+        .split(/[^a-z0-9]+/)
+        .map((token) => token.trim())
+        .filter(Boolean);
+    const compact = normalized.replace(/[^a-z0-9]+/g, '');
+    const lastToken = tokens[tokens.length - 1] || '';
+
+    if (compact.length <= 2) {
+        return ORDER_FORM_PRODUCT_SEARCH_SHORT_DEBOUNCE_MS;
+    }
+
+    if (tokens.length > 1 && lastToken.length === 1) {
+        return ORDER_FORM_PRODUCT_SEARCH_INCOMPLETE_DEBOUNCE_MS;
+    }
+
+    return ORDER_FORM_PRODUCT_SEARCH_DEBOUNCE_MS;
+};
 const getOrderLineDisplaySequence = (item, index = 0) => {
     const sortOrder = Number(item?.sort_order);
     if (Number.isFinite(sortOrder) && sortOrder > 0) {
@@ -14035,7 +14064,7 @@ const OrderForm = () => {
 
         const timerId = setTimeout(() => {
             setDebouncedSearchTerm(searchTerm);
-        }, ORDER_FORM_PRODUCT_SEARCH_DEBOUNCE_MS);
+        }, getOrderProductSearchDebounceMs(searchTerm));
 
         return () => {
             clearTimeout(timerId);

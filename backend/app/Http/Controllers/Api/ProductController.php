@@ -71,6 +71,7 @@ class ProductController extends Controller
     ];
 
     private array $schemaHasColumnCache = [];
+    private array $pickerSourceContextCache = [];
 
     private function schemaHasColumn(string $table, string $column): bool
     {
@@ -450,7 +451,7 @@ class ProductController extends Controller
         );
 
         if (!$context) {
-            $context = [
+            $context = $this->pickerSourceContextCache[$catalogAccountId] ??= [
                 'account_id' => $catalogAccountId,
                 'name' => Account::query()->whereKey($catalogAccountId)->value('name'),
                 'catalog_account_id' => $catalogAccountId,
@@ -8452,7 +8453,7 @@ class ProductController extends Controller
                     'products.inventory_unit_id',
                     'products.profit_center_id',
                     'products.inventory_import_starred',
-                ]);
+                ])->withExists('variations');
 
                 if ($bundleOptionSearch !== null && !empty($matchedProductIds)) {
                     $bundleQuery->where(function ($optionQuery) use ($bundleOptionSearch, $matchedProductIds) {
@@ -8513,6 +8514,7 @@ class ProductController extends Controller
                 'products.profit_center_id',
                 'products.inventory_import_starred',
             ])
+            ->withExists('variations')
             ->whereIn('products.id', $variantIds->all())
             ->where('products.status', true);
 

@@ -8467,6 +8467,23 @@ class ProductController extends Controller
             },
             'bundleItems.unit:id,name',
             'bundleItems.attributeValues:id,product_id,attribute_id,value',
+            'bundleItems.parentConfigurable' => function ($parentQuery) use ($sourceCatalogAccountIds) {
+                $parentQuery->withoutGlobalScope('account_id');
+                if (!empty($sourceCatalogAccountIds)) {
+                    $parentQuery->whereIn('products.account_id', $sourceCatalogAccountIds);
+                }
+                $parentQuery->select([
+                    'products.id',
+                    'products.account_id',
+                    'products.sku',
+                    'products.name',
+                    'products.type',
+                    'products.inventory_unit_id',
+                    'products.profit_center_id',
+                    'products.warehouse_sequence',
+                    'products.inventory_import_starred',
+                ]);
+            },
             'bundleItems.images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
         ];
 
@@ -8526,6 +8543,23 @@ class ProductController extends Controller
             ->with([
                 'unit:id,name',
                 'attributeValues:id,product_id,attribute_id,value',
+                'parentConfigurable' => function ($parentQuery) use ($sourceCatalogAccountIds) {
+                    $parentQuery->withoutGlobalScope('account_id');
+                    if (!empty($sourceCatalogAccountIds)) {
+                        $parentQuery->whereIn('products.account_id', $sourceCatalogAccountIds);
+                    }
+                    $parentQuery->select([
+                        'products.id',
+                        'products.account_id',
+                        'products.sku',
+                        'products.name',
+                        'products.type',
+                        'products.inventory_unit_id',
+                        'products.profit_center_id',
+                        'products.warehouse_sequence',
+                        'products.inventory_import_starred',
+                    ]);
+                },
                 'images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
                 'images.mediaAsset:id,public_id,disk,variants',
             ])
@@ -8675,6 +8709,15 @@ class ProductController extends Controller
                         ? $selectedVariantMap->get($selectedVariantId)
                         : null;
                     $resolvedProduct = $selectedVariant ?: $bundleItem;
+                    $variantParentProduct = $selectedVariant && $selectedVariant->relationLoaded('parentConfigurable')
+                        ? $selectedVariant->parentConfigurable->first()
+                        : null;
+                    $bundleItemParentProduct = $bundleItem->relationLoaded('parentConfigurable')
+                        ? $bundleItem->parentConfigurable->first()
+                        : null;
+                    $resolvedParentProduct = $variantParentProduct
+                        ?: ($selectedVariant && $bundleItem->type === 'configurable' ? $bundleItem : null)
+                        ?: $bundleItemParentProduct;
 
                     $sourcePayload = $this->pickerSourcePayloadForProduct($resolvedProduct, $sourceContexts);
 
@@ -8682,6 +8725,9 @@ class ProductController extends Controller
                         'base_product_id' => (int) $bundleItem->id,
                         'product_id' => (int) $resolvedProduct->id,
                         'variant_id' => $selectedVariant?->id ? (int) $selectedVariant->id : null,
+                        'parent_product_id' => $resolvedParentProduct?->id ? (int) $resolvedParentProduct->id : null,
+                        'parent_product_name' => $resolvedParentProduct?->name,
+                        'parent_product_sku' => $resolvedParentProduct?->sku,
                         'account_id' => (int) ($resolvedProduct->account_id ?? 0),
                         'name' => $resolvedProduct->name,
                         'sku' => $resolvedProduct->sku,
@@ -8690,6 +8736,7 @@ class ProductController extends Controller
                         'warehouse_sequence' => $this->productWarehouseSequenceForDisplay($resolvedProduct),
                         'inventory_import_starred' => (bool) ($resolvedProduct->inventory_import_starred ?? false),
                         'base_inventory_import_starred' => (bool) ($bundleItem->inventory_import_starred ?? false),
+                        'parent_inventory_import_starred' => (bool) ($resolvedParentProduct?->inventory_import_starred ?? false),
                         'category_id' => $resolvedProduct->category_id !== null ? (int) $resolvedProduct->category_id : null,
                         'profit_center_id' => $resolvedProduct->profit_center_id !== null
                             ? (int) $resolvedProduct->profit_center_id

@@ -152,6 +152,7 @@ const ORDER_FORM_REPLACE_PICKER_TOP = 104;
 const ORDER_FORM_REPLACE_PICKER_MIN_HEIGHT = 320;
 const ORDER_FORM_REPLACE_PICKER_PREFETCH_DELAY_MS = 0;
 const ORDER_FORM_REPLACE_PICKER_PREFETCH_FAMILY_LIMIT = 24;
+const ORDER_FORM_REPLACE_PICKER_REQUEST_TIMEOUT_MS = 7000;
 const ACTUAL_PRODUCT_CATEGORY_GROUP_MAX_PRODUCT_PAGES = 8;
 const ACTUAL_PRODUCT_CATEGORY_GROUP_STYLE_WORDS = new Set([
     'men', 'mau', 'loai', 'dong', 'bo', 'set', 'combo',
@@ -1576,11 +1577,62 @@ const buildProductSourcePayload = (source) => {
 
     return payload;
 };
+const resolveVariantParentCandidate = (source) => {
+    if (!source || typeof source !== 'object') {
+        return null;
+    }
+
+    if (source.parent && typeof source.parent === 'object') {
+        return source.parent;
+    }
+
+    if (source.parent_product && typeof source.parent_product === 'object') {
+        return source.parent_product;
+    }
+
+    if (Array.isArray(source.parent_configurable) && source.parent_configurable[0]) {
+        return source.parent_configurable[0];
+    }
+
+    if (Array.isArray(source.parentConfigurable) && source.parentConfigurable[0]) {
+        return source.parentConfigurable[0];
+    }
+
+    return null;
+};
+const resolveVariantParentPayload = (source = {}) => {
+    const parent = resolveVariantParentCandidate(source);
+    const options = source?.options || {};
+    const parentProductId = Number(
+        source?.parent_product_id
+        ?? source?.variant_parent_id
+        ?? options?.variant_parent_id
+        ?? parent?.id
+        ?? 0
+    ) || 0;
+
+    return {
+        parent_product_id: parentProductId || undefined,
+        parent_product_name: normalizeCanvasText(
+            source?.parent_product_name
+            || source?.variant_parent_name
+            || options?.variant_parent_name
+            || parent?.name
+        ),
+        parent_product_sku: normalizeCanvasText(
+            source?.parent_product_sku
+            || source?.variant_parent_sku
+            || options?.variant_parent_sku
+            || parent?.sku
+        ),
+    };
+};
 const normalizeStoredProductQuickSetupBundleItems = (items = []) => (
     (Array.isArray(items) ? items : [])
         .map((item) => {
             const productId = Number(item?.product_id ?? item?.target_product_id ?? item?.id ?? 0);
             if (!Number.isFinite(productId) || productId <= 0) return null;
+            const parentPayload = resolveVariantParentPayload(item);
 
             return {
                 ...item,
@@ -1588,6 +1640,7 @@ const normalizeStoredProductQuickSetupBundleItems = (items = []) => (
                 product_id: productId,
                 target_product_id: productId,
                 base_product_id: Number(item?.base_product_id ?? 0) || undefined,
+                ...parentPayload,
                 sku: String(item?.sku ?? '').trim(),
                 display_sku: String(item?.display_sku ?? item?.sku ?? '').trim(),
                 name: String(item?.name ?? '').trim(),
@@ -2171,6 +2224,7 @@ const getOrderLineReplacementFamilyParentId = (entry) => {
 
     return [
         entry?.parent_product_id,
+        entry?.variant_parent_id,
         entry?.options?.variant_parent_id,
         entry?.bundle_item_base_product_id,
         entry?.options?.bundle_item_base_product_id,
@@ -2387,7 +2441,8 @@ const scoreActualProductGroupReplacementCandidate = (
 };
 const normalizeBundleItemReplacementEntry = (bundleItem, targetEntry = {}) => {
     const productId = getBundleItemProductId(bundleItem);
-    const parentProductId = Number(bundleItem?.base_product_id ?? bundleItem?.parent_product_id ?? 0) || 0;
+    const parentPayload = resolveVariantParentPayload(bundleItem);
+    const parentProductId = Number(parentPayload.parent_product_id ?? bundleItem?.base_product_id ?? 0) || 0;
 
     return normalizeProductPickerEntry({
         ...bundleItem,
@@ -2397,7 +2452,8 @@ const normalizeBundleItemReplacementEntry = (bundleItem, targetEntry = {}) => {
         product_id: productId,
         target_product_id: productId,
         parent_product_id: parentProductId || undefined,
-        parent_product_name: normalizeCanvasText(bundleItem?.parent_product_name || bundleItem?.base_product_name || targetEntry?.bundle_parent_name),
+        parent_product_name: normalizeCanvasText(parentPayload.parent_product_name || bundleItem?.base_product_name || targetEntry?.bundle_parent_name),
+        parent_product_sku: normalizeCanvasText(parentPayload.parent_product_sku || bundleItem?.base_product_sku),
         name: normalizeCanvasText(bundleItem?.name || bundleItem?.display_name) || `Sản phẩm #${productId}`,
         display_name: normalizeCanvasText(bundleItem?.display_name || bundleItem?.name) || `Sản phẩm #${productId}`,
         sku: normalizeCanvasText(bundleItem?.sku || bundleItem?.display_sku),
@@ -3680,6 +3736,7 @@ const normalizeProductPickerEntry = (product) => {
                         ...bundleItem,
                         ...resolveInventorySnapshot(bundleItem),
                         ...resolveProductSourceFields(bundleItem, sourceFields),
+                        ...resolveVariantParentPayload(bundleItem),
                         price: resolveMoneyValue(bundleItem?.price, 0),
                         expected_cost: parseMoneyNumber(bundleItem?.expected_cost),
                         cost_price: resolveProductCostPrice(bundleItem),
@@ -4978,9 +5035,12 @@ const buildOrderItemsFromSearchEntry = (entry) => {
                 const bundleItemName = isPlaceholderProductName(bundleItemRawName, productId)
                     ? ''
                     : bundleItemRawName;
+                const bundleItemParentPayload = resolveVariantParentPayload(bundleItem);
+                const bundleItemParentProductId = Number(bundleItemParentPayload.parent_product_id ?? 0) || 0;
 
                 return createOrderLineItem({
                     product_id: productId,
+                    parent_product_id: bundleItemParentProductId || undefined,
                     name: bundleItemName || (productId ? `Sản phẩm #${productId}` : 'Sản phẩm bundle'),
                     sku: normalizeCanvasText(bundleItem?.display_sku || bundleItem?.sku),
                     unit_name: resolveOrderUnitLabel(bundleItem),
@@ -5004,6 +5064,9 @@ const buildOrderItemsFromSearchEntry = (entry) => {
                         bundle_option_post_id: Number(entry?.option_post_id) || undefined,
                         bundle_option_post_title: normalizeCanvasText(entry?.option_post_title),
                         bundle_item_base_product_id: Number(bundleItem?.base_product_id) || undefined,
+                        variant_parent_id: bundleItemParentProductId || undefined,
+                        variant_parent_name: bundleItemParentPayload.parent_product_name,
+                        variant_parent_sku: bundleItemParentPayload.parent_product_sku,
                         variant_label: normalizeCanvasText(bundleItem?.option_label || bundleItem?.variant_label),
                         variant_name: normalizeCanvasText(bundleItem?.variant_name),
                         search_entry_kind: SEARCH_ENTRY_BUNDLE_OPTION,
@@ -5249,6 +5312,7 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
             const bundleItems = (Array.isArray(bundleOption?.items) ? bundleOption.items : [])
                 .map((bundleItem) => ({
                     base_product_id: Number(bundleItem?.base_product_id) || undefined,
+                    ...resolveVariantParentPayload(bundleItem),
                     product_id: Number(bundleItem?.product_id ?? bundleItem?.target_product_id ?? bundleItem?.id) || 0,
                     name: normalizeCanvasText(bundleItem?.name) || 'Sản phẩm bundle',
                     display_name: normalizeCanvasText(bundleItem?.display_name || bundleItem?.name) || 'Sản phẩm bundle',
@@ -7549,7 +7613,7 @@ const OrderAiLineReplacePanel = ({
                 </div>
 
                 <div className="flex-1 overflow-y-auto bg-white">
-                    {displayLoading && (!isWarehousePickingTab || displayResults.length === 0) ? (
+                    {displayLoading && displayResults.length === 0 ? (
                         <div className="px-4 py-8 text-center text-[12px] font-semibold text-primary/45">
                             Đang tìm sản phẩm...
                         </div>
@@ -8145,6 +8209,7 @@ const OrderForm = () => {
         const params = {
             picker: 1,
             fast_picker: 1,
+            light_picker: 1,
             replace_picker: 1,
             allow_variants: 1,
             per_page: normalizedFamilyParentIds.length > 1 ? 200 : 100,
@@ -11769,6 +11834,7 @@ const OrderForm = () => {
         const params = {
             picker: 1,
             fast_picker: 1,
+            light_picker: 1,
             replace_picker: 1,
             allow_variants: 1,
             per_page: isCompactCompositeProductSearch(term) ? 160 : 60,
@@ -11964,6 +12030,7 @@ const OrderForm = () => {
         const params = appendCrossSellSourceParams({
             picker: 1,
             fast_picker: 1,
+            light_picker: 1,
             replace_picker: 1,
             allow_variants: 1,
             per_page: 20,
@@ -12014,6 +12081,16 @@ const OrderForm = () => {
                 orderAiReplaceSeedTerm
             ));
         };
+        const buildReplacementSearchParams = (searchValue, perPage = 40) => appendCrossSellSourceParams({
+            picker: 1,
+            fast_picker: 1,
+            light_picker: 1,
+            replace_picker: 1,
+            allow_variants: 1,
+            per_page: perPage,
+            search: searchValue,
+            filter_bundle_options_by_search: 1,
+        });
 
         if (!orderAiReplaceLineId || (!hasFamilyScope && term.length < 2)) {
             orderAiReplaceSearchAbortRef.current?.abort();
@@ -12058,21 +12135,47 @@ const OrderForm = () => {
             orderAiReplaceSearchAbortRef.current = controller;
             setOrderAiReplaceLoading(true);
 
+            let requestTimeoutId = null;
             const timerId = window.setTimeout(() => {
-                productApi.getAll(params, controller.signal)
-                    .then((response) => {
+                requestTimeoutId = window.setTimeout(() => {
+                    controller.abort();
+                }, ORDER_FORM_REPLACE_PICKER_REQUEST_TIMEOUT_MS);
+
+                (async () => {
+                    try {
+                        const response = await productApi.getAll(params, controller.signal);
                         if (controller.signal.aborted) return;
                         const entries = buildSourceAwareOrderAiPickerEntries(response.data?.data || [])
                             .filter((entry) => getOrderLineReplacementFamilyParentId(entry) === familyParentId);
                         cacheOrderAiReplaceFamilyEntries(entries);
-                        applyFamilyResults(entries);
-                    })
-                    .catch((error) => {
+                        if (entries.length > 0 || term.length < 2) {
+                            applyFamilyResults(entries);
+                            return;
+                        }
+                    } catch (error) {
                         if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
                         console.error('Error fetching scoped replacement products', error);
+                    }
+
+                    if (!controller.signal.aborted && term.length >= 2) {
+                        try {
+                            const fallbackResponse = await productApi.getAll(buildReplacementSearchParams(term), controller.signal);
+                            if (controller.signal.aborted) return;
+                            const fallbackEntries = buildSourceAwareOrderAiPickerEntries(fallbackResponse.data?.data || []);
+                            setOrderAiReplaceResults(fallbackEntries);
+                        } catch (error) {
+                            if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
+                            console.error('Error fetching fallback replacement products', error);
+                            setOrderAiReplaceResults([]);
+                        }
+                    } else if (!controller.signal.aborted) {
                         setOrderAiReplaceResults([]);
-                    })
+                    }
+                })()
                     .finally(() => {
+                        if (requestTimeoutId) {
+                            window.clearTimeout(requestTimeoutId);
+                        }
                         if (orderAiReplaceSearchAbortRef.current === controller) {
                             orderAiReplaceSearchAbortRef.current = null;
                             setOrderAiReplaceLoading(false);
@@ -12083,6 +12186,9 @@ const OrderForm = () => {
             return () => {
                 controller.abort();
                 window.clearTimeout(timerId);
+                if (requestTimeoutId) {
+                    window.clearTimeout(requestTimeoutId);
+                }
             };
         }
 
@@ -12094,15 +12200,7 @@ const OrderForm = () => {
             return undefined;
         }
 
-        const params = appendCrossSellSourceParams({
-            picker: 1,
-            fast_picker: 1,
-            replace_picker: 1,
-            allow_variants: 1,
-            per_page: 40,
-            search: term,
-            filter_bundle_options_by_search: 1,
-        });
+        const params = buildReplacementSearchParams(term);
         const cacheKey = JSON.stringify(params);
         const cachedResults = orderAiReplaceSearchCacheRef.current.get(cacheKey);
         if (cachedResults) {
@@ -12115,7 +12213,12 @@ const OrderForm = () => {
         orderAiReplaceSearchAbortRef.current = controller;
         setOrderAiReplaceLoading(true);
 
+        let requestTimeoutId = null;
         const timerId = window.setTimeout(() => {
+            requestTimeoutId = window.setTimeout(() => {
+                controller.abort();
+            }, ORDER_FORM_REPLACE_PICKER_REQUEST_TIMEOUT_MS);
+
             productApi.getAll(params, controller.signal)
                 .then((response) => {
                     if (controller.signal.aborted) return;
@@ -12129,6 +12232,9 @@ const OrderForm = () => {
                     setOrderAiReplaceResults([]);
                 })
                 .finally(() => {
+                    if (requestTimeoutId) {
+                        window.clearTimeout(requestTimeoutId);
+                    }
                     if (orderAiReplaceSearchAbortRef.current === controller) {
                         orderAiReplaceSearchAbortRef.current = null;
                         setOrderAiReplaceLoading(false);
@@ -12139,6 +12245,9 @@ const OrderForm = () => {
         return () => {
             controller.abort();
             window.clearTimeout(timerId);
+            if (requestTimeoutId) {
+                window.clearTimeout(requestTimeoutId);
+            }
         };
     }, [
         activeOrderAiReplaceLine,
@@ -12275,6 +12384,7 @@ const OrderForm = () => {
                         const response = await productApi.getAll(appendCrossSellSourceParams({
                             picker: 1,
                             fast_picker: 1,
+                            light_picker: 1,
                             replace_picker: 1,
                             allow_variants: 1,
                             per_page: isCompactCompositeProductSearch(groupSearchTerm) ? 160 : 60,
@@ -12457,6 +12567,7 @@ const OrderForm = () => {
                     const params = appendCrossSellSourceParams({
                         picker: 1,
                         fast_picker: 1,
+                        light_picker: 1,
                         replace_picker: 1,
                         allow_variants: 1,
                         per_page: isGroupReplaceMode && isCompactCompositeProductSearch(manualSearchTerm) ? 160 : (isGroupReplaceMode ? 60 : 20),

@@ -5,12 +5,12 @@ import Pagination from '../../components/Pagination';
 import { telesalesApi } from '../../services/api';
 
 const queueTabs = [
-    { value: 'all', label: 'Tất cả', icon: 'view_list', statKey: 'total' },
-    { value: 'today', label: 'Việc hôm nay', icon: 'event_available', statKey: 'today_due' },
-    { value: 'new_today', label: 'Khách mới', icon: 'person_add', statKey: 'new_today' },
-    { value: '3_days', label: 'Gọi lại 3 ngày', icon: 'phone_callback', statKey: 'three_day_due' },
-    { value: '7_days', label: 'Gọi lại 7 ngày', icon: 'event_repeat', statKey: 'seven_day_due' },
-    { value: 'overdue', label: 'Quá hạn', icon: 'alarm', statKey: 'overdue' },
+    { value: 'all', label: 'Tất cả', mobileLabel: 'Tất cả', icon: 'view_list', statKey: 'total' },
+    { value: 'today', label: 'Việc hôm nay', mobileLabel: 'Hôm nay', icon: 'event_available', statKey: 'today_due' },
+    { value: 'new_today', label: 'Khách mới', mobileLabel: 'Khách mới', icon: 'person_add', statKey: 'new_today' },
+    { value: '3_days', label: 'Gọi lại 3 ngày', mobileLabel: '3 ngày', icon: 'phone_callback', statKey: 'three_day_due' },
+    { value: '7_days', label: 'Gọi lại 7 ngày', mobileLabel: '7 ngày', icon: 'event_repeat', statKey: 'seven_day_due' },
+    { value: 'overdue', label: 'Quá hạn', mobileLabel: 'Quá hạn', icon: 'alarm', statKey: 'overdue' },
 ];
 
 const TELESALES_RETURN_STATE_KEY = 'webnam.telesales.return_state';
@@ -436,6 +436,7 @@ const TelesalesCrm = () => {
     const [initialViewState] = useState(() => buildInitialViewState(location.search));
     const tableScrollRef = useRef(null);
     const actionMenuRef = useRef(null);
+    const mobileActionMenuRef = useRef(null);
     const todayValue = useMemo(() => toDateInputValue(), []);
     const monthValue = useMemo(() => toMonthInputValue(), []);
     const initialMonthRange = useMemo(() => getCurrentMonthRange(), []);
@@ -461,6 +462,7 @@ const TelesalesCrm = () => {
     const [dateFrom, setDateFrom] = useState(initialViewState.dateFrom);
     const [dateTo, setDateTo] = useState(initialViewState.dateTo);
     const [dateFilterOpen, setDateFilterOpen] = useState(false);
+    const [mobileFilterOpen, setMobileFilterOpen] = useState(null);
     const [loading, setLoading] = useState(true);
     const [inlineSavingIds, setInlineSavingIds] = useState({});
     const [inlineNoteDrafts, setInlineNoteDrafts] = useState({});
@@ -736,6 +738,7 @@ const TelesalesCrm = () => {
 
         const closeActionMenu = (event) => {
             if (actionMenuRef.current?.contains(event.target)) return;
+            if (mobileActionMenuRef.current?.contains(event.target)) return;
             setActionMenuLeadId(null);
         };
         const closeActionMenuOnEscape = (event) => {
@@ -2325,10 +2328,415 @@ const TelesalesCrm = () => {
         );
     };
 
+    const toggleMobileFilter = (filterKey) => {
+        setMobileFilterOpen((current) => (current === filterKey ? null : filterKey));
+    };
+
+    const mobileFilterButtonClass = (filterKey, isActive = false) => (
+        `inline-flex size-9 shrink-0 items-center justify-center rounded-sm border bg-white text-slate-700 shadow-sm transition ${
+            mobileFilterOpen === filterKey || isActive
+                ? 'border-teal-400 bg-teal-50 text-teal-700 ring-1 ring-teal-200'
+                : 'border-slate-200 hover:border-teal-300 hover:text-teal-700'
+        }`
+    );
+
+    const renderMobileFilterPanel = () => {
+        if (!mobileFilterOpen) return null;
+
+        const titleMap = {
+            search: 'Tìm khách',
+            work: 'Trạng thái xử lý',
+            date: 'Lọc ngày',
+            status: 'Trạng thái khách',
+            potential: 'Tiềm năng',
+        };
+
+        return (
+            <div className="absolute left-2 right-2 top-[54px] z-30 rounded-sm border border-teal-200 bg-teal-50 p-2.5 shadow-xl">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                    <div className="text-[13px] font-black text-slate-950">{titleMap[mobileFilterOpen]}</div>
+                    <button
+                        type="button"
+                        onClick={() => setMobileFilterOpen(null)}
+                        className="inline-flex h-7 items-center justify-center rounded-sm px-2 text-[11px] font-black text-teal-700 hover:bg-white/70"
+                    >
+                        Đóng
+                    </button>
+                </div>
+
+                {mobileFilterOpen === 'search' ? (
+                    <div className="relative">
+                        <span className="material-symbols-outlined pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-slate-400">search</span>
+                        <input
+                            value={search}
+                            onChange={(event) => {
+                                setSearch(event.target.value);
+                                setPage(1);
+                            }}
+                            className={`${inputClassName} pl-10`}
+                            placeholder="Tìm tên khách, SĐT, mã lead..."
+                        />
+                    </div>
+                ) : null}
+
+                {mobileFilterOpen === 'work' ? (
+                    <div className="grid grid-cols-3 gap-1.5">
+                        {workStatusOptions.map((option) => (
+                            <button
+                                key={option.value}
+                                type="button"
+                                onClick={() => {
+                                    setWorkStatus(option.value);
+                                    setPage(1);
+                                }}
+                                className={`h-9 rounded-sm border px-2 text-[11px] font-black ${
+                                    workStatus === option.value
+                                        ? 'border-teal-700 bg-teal-700 text-white'
+                                        : 'border-slate-200 bg-white text-slate-700'
+                                }`}
+                            >
+                                {option.label.replace(' xử lý', '')}
+                            </button>
+                        ))}
+                    </div>
+                ) : null}
+
+                {mobileFilterOpen === 'date' ? (
+                    <div className="grid grid-cols-2 gap-2">
+                        <input
+                            type="date"
+                            value={dateFrom}
+                            onChange={(event) => {
+                                setDateFrom(event.target.value);
+                                setPage(1);
+                            }}
+                            className={inputClassName}
+                            aria-label="Từ ngày"
+                        />
+                        <input
+                            type="date"
+                            value={dateTo}
+                            onChange={(event) => {
+                                setDateTo(event.target.value);
+                                setPage(1);
+                            }}
+                            className={inputClassName}
+                            aria-label="Đến ngày"
+                        />
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setDateFrom(initialMonthRange.from);
+                                setDateTo(initialMonthRange.to);
+                                setPage(1);
+                            }}
+                            className="h-9 rounded-sm border border-slate-200 bg-white px-2 text-[12px] font-black text-slate-700"
+                        >
+                            Tháng này
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setDateFrom('');
+                                setDateTo('');
+                                setPage(1);
+                            }}
+                            className="h-9 rounded-sm border border-slate-200 bg-white px-2 text-[12px] font-black text-red-600"
+                        >
+                            Xóa lọc
+                        </button>
+                    </div>
+                ) : null}
+
+                {mobileFilterOpen === 'status' ? (
+                    <div className="grid max-h-44 grid-cols-2 gap-1.5 overflow-auto">
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setStatusFilter('');
+                                setPage(1);
+                            }}
+                            className={`h-9 rounded-sm border px-2 text-[11px] font-black ${
+                                !statusFilter ? 'border-teal-700 bg-teal-700 text-white' : 'border-slate-200 bg-white text-slate-700'
+                            }`}
+                        >
+                            Tất cả
+                        </button>
+                        {activeStatuses.map((status) => (
+                            <button
+                                key={status.id}
+                                type="button"
+                                onClick={() => {
+                                    setStatusFilter(String(status.id));
+                                    setPage(1);
+                                }}
+                                className={`h-9 rounded-sm border px-2 text-[11px] font-black ${
+                                    String(statusFilter) === String(status.id)
+                                        ? 'border-teal-700 bg-teal-700 text-white'
+                                        : 'border-slate-200 bg-white text-slate-700'
+                                }`}
+                            >
+                                {status.name}
+                            </button>
+                        ))}
+                    </div>
+                ) : null}
+
+                {mobileFilterOpen === 'potential' ? (
+                    <div className="grid max-h-44 grid-cols-2 gap-1.5 overflow-auto">
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setPotentialFilter('');
+                                setPage(1);
+                            }}
+                            className={`h-9 rounded-sm border px-2 text-[11px] font-black ${
+                                !potentialFilter ? 'border-teal-700 bg-teal-700 text-white' : 'border-slate-200 bg-white text-slate-700'
+                            }`}
+                        >
+                            Tất cả
+                        </button>
+                        {activePotentials.map((potential) => (
+                            <button
+                                key={potential.value}
+                                type="button"
+                                onClick={() => {
+                                    setPotentialFilter(potential.value);
+                                    setPage(1);
+                                }}
+                                className={`h-9 rounded-sm border px-2 text-[11px] font-black ${
+                                    potentialFilter === potential.value
+                                        ? 'border-teal-700 bg-teal-700 text-white'
+                                        : 'border-slate-200 bg-white text-slate-700'
+                                }`}
+                            >
+                                {potential.label}
+                            </button>
+                        ))}
+                    </div>
+                ) : null}
+            </div>
+        );
+    };
+
+    const renderMobileLeadCard = (lead) => {
+        const inlineSaving = Boolean(inlineSavingIds[lead.id]);
+        const statusValue = lead.lead_status_id ? String(lead.lead_status_id) : '';
+        const potentialValue = lead.potential_level || '';
+        const noteValue = inlineNoteDrafts[lead.id] ?? lead.latest_note_content ?? lead.latest_note_excerpt ?? '';
+        const potentialOption = activePotentials.find((potential) => potential.value === potentialValue);
+        const historyOpen = Boolean(historyOpenIds[lead.id]);
+        const zaloSameAsPhone = normalizePhoneDigits(lead.zalo_phone || lead.phone) === normalizePhoneDigits(lead.phone);
+        const phoneCarrierLabel = detectVietnamMobileCarrier(lead.phone);
+        const potentialSelectValue = potentialOption ? potentialValue : '';
+        const leadAddedAt = lead.added_at || lead.placed_at || lead.created_at;
+        const customerAddedLabel = formatDateTimeLocalLabel(leadAddedAt) || lead.added_label || lead.placed_label || '';
+        const reminderAddedDateLabel = formatDateOnlyLabel(leadAddedAt);
+        const currentTask = lead.current_task || null;
+        const workTask = lead.work_task || currentTask;
+        const reminderProcessed = workTask?.status === 'completed';
+        const taskStatusDisplay = getTaskStatusDisplay(currentTask);
+        const currentStatusOption = activeStatuses.find((status) => String(status.id) === String(statusValue));
+        const currentStatusColor = taskStatusDisplay?.color || currentStatusOption?.color || '#2563eb';
+        const currentTaskDue = workTask?.due_label || '';
+        const actionMenuOpenForLead = String(actionMenuLeadId || '') === String(lead.id);
+        const leadDeleting = String(deletingLeadId || '') === String(lead.id);
+        const statusLabel = taskStatusDisplay?.label || currentStatusOption?.name || 'Số mới';
+        const reminderLabel = labelForReminder(lead);
+
+        return (
+            <article key={lead.id} className={`overflow-hidden rounded-sm border border-slate-200 bg-white shadow-sm ${String(restoredLeadId || '') === String(lead.id) ? 'ring-2 ring-teal-300' : ''}`}>
+                <div className="grid grid-cols-[26px_minmax(0,1fr)_auto] items-start gap-2 border-b border-slate-100 px-2.5 py-2.5">
+                    <div ref={actionMenuOpenForLead ? mobileActionMenuRef : null} className="relative">
+                        <button
+                            type="button"
+                            onClick={() => toggleLeadActionMenu(lead.id)}
+                            disabled={inlineSaving || leadDeleting}
+                            className="inline-flex size-7 items-center justify-center rounded-sm border border-slate-200 bg-white text-slate-500 shadow-sm disabled:cursor-wait disabled:opacity-50"
+                            aria-label={`Thao tác ${lead.customer_name || lead.phone || lead.id}`}
+                            aria-expanded={actionMenuOpenForLead}
+                        >
+                            <span className="material-symbols-outlined text-[17px]">more_horiz</span>
+                        </button>
+
+                        {actionMenuOpenForLead ? (
+                            <div className="absolute left-0 top-8 z-40 w-[142px] rounded-sm border border-slate-200 bg-white p-1.5 text-left shadow-xl">
+                                <button
+                                    type="button"
+                                    onClick={() => openEditLead(lead)}
+                                    disabled={leadEditSaving || leadDeleting}
+                                    className="flex h-9 w-full items-center gap-2 rounded-sm px-2 text-[13px] font-bold text-slate-700 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-wait disabled:text-slate-300"
+                                >
+                                    <span className="material-symbols-outlined text-[18px]">edit</span>
+                                    Sửa khách
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => handleDeleteLead(lead)}
+                                    disabled={leadDeleting}
+                                    className="flex h-9 w-full items-center gap-2 rounded-sm px-2 text-[13px] font-bold text-red-600 hover:bg-red-50 disabled:cursor-wait disabled:text-slate-300"
+                                >
+                                    <span className="material-symbols-outlined text-[18px]">delete</span>
+                                    {leadDeleting ? 'Đang xóa...' : 'Xóa khách'}
+                                </button>
+                            </div>
+                        ) : null}
+                    </div>
+
+                    <div className="min-w-0">
+                        <div className="truncate text-[14px] font-black text-slate-950">{lead.customer_name || 'Khách chưa có tên'}</div>
+                        <div className="mt-0.5 truncate text-[12px] font-semibold text-slate-700">{customerAddedLabel || 'Chưa có ngày thêm'}</div>
+                    </div>
+
+                    <span
+                        className="inline-flex h-7 max-w-[132px] items-center gap-1.5 truncate rounded-sm border px-2 text-[11px] font-black"
+                        style={{
+                            borderColor: `${currentStatusColor}55`,
+                            color: currentStatusColor,
+                            backgroundColor: `${currentStatusColor}10`,
+                        }}
+                    >
+                        <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: currentStatusColor }} />
+                        <span className="truncate">{statusLabel}</span>
+                    </span>
+                </div>
+
+                <div className="px-2.5 py-2.5">
+                    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
+                        <div className="min-w-0">
+                            <div className="truncate text-[13px] font-black text-teal-700">
+                                {lead.phone || '-'}{phoneCarrierLabel ? ` - ${phoneCarrierLabel}` : ''}
+                            </div>
+                            <label className="mt-0.5 flex items-center gap-1 text-[11px] font-semibold text-slate-600">
+                                <input
+                                    type="checkbox"
+                                    checked={zaloSameAsPhone}
+                                    disabled={inlineSaving}
+                                    onChange={(event) => handleZaloSameAsPhoneChange(lead, event.target.checked)}
+                                    className="size-3.5 accent-teal-700"
+                                />
+                                SĐT là Zalo
+                            </label>
+                        </div>
+
+                        <div className="flex shrink-0 items-center gap-1.5">
+                            <button type="button" onClick={() => handleOpenPhone(lead)} className="inline-flex h-8 items-center gap-1 rounded-sm bg-teal-700 px-2.5 text-[12px] font-black text-white shadow-sm">
+                                <span className="material-symbols-outlined text-[15px]">call</span>
+                                Gọi
+                            </button>
+                            <button type="button" onClick={() => handleOpenZalo(lead)} className="inline-flex h-8 items-center rounded-sm border border-slate-200 bg-white px-2.5 text-[12px] font-black text-slate-900 shadow-sm">
+                                Zalo
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="mt-2 grid grid-cols-2 gap-1.5">
+                        <label className="flex min-h-[34px] items-center gap-1 rounded-sm bg-slate-50 px-2 text-[11px] font-black text-slate-700">
+                            <span className="shrink-0 text-slate-600">Sale:</span>
+                            <select
+                                value={lead.assigned_staff_id ? String(lead.assigned_staff_id) : ''}
+                                disabled={inlineSaving}
+                                onChange={(event) => handleInlineStaffChange(lead, event.target.value)}
+                                className="min-w-0 flex-1 appearance-none bg-transparent text-[11px] font-black text-slate-900 outline-none disabled:text-slate-400"
+                                aria-label={`Sửa sale ${lead.customer_name || lead.phone || lead.id}`}
+                            >
+                                <option value="">Chưa gán</option>
+                                {bootstrap.staffs.map((staff) => (
+                                    <option key={staff.id} value={staff.id}>{staff.name}</option>
+                                ))}
+                            </select>
+                        </label>
+
+                        <label className="flex min-h-[34px] items-center gap-1 rounded-sm bg-slate-50 px-2 text-[11px] font-black text-slate-700">
+                            <span className="shrink-0 text-slate-600">Tiềm năng:</span>
+                            <select
+                                value={potentialSelectValue}
+                                disabled={inlineSaving}
+                                onChange={(event) => handleInlinePotentialChange(lead, event.target.value)}
+                                className="min-w-0 flex-1 appearance-none bg-transparent text-[11px] font-black outline-none disabled:text-slate-400"
+                                style={{ color: potentialOption?.color || '#0f172a' }}
+                                aria-label={`Sửa tiềm năng ${lead.customer_name || lead.phone || lead.id}`}
+                            >
+                                <option value="">Chưa phân loại</option>
+                                {activePotentials.map((potential) => (
+                                    <option key={potential.value} value={potential.value}>{potential.label}</option>
+                                ))}
+                            </select>
+                        </label>
+                    </div>
+
+                    <div className={`mt-2 flex min-h-[34px] items-center gap-1.5 overflow-hidden rounded-sm border px-2.5 text-[11px] font-semibold ${
+                        reminderProcessed ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : lead.do_not_call ? 'border-slate-200 bg-slate-50 text-slate-600' : 'border-teal-200 bg-teal-50 text-slate-700'
+                    }`}>
+                        <span className={`shrink-0 truncate text-[12px] font-black ${reminderProcessed ? 'text-emerald-700' : lead.do_not_call ? 'text-slate-600' : workTask?.is_overdue ? 'text-red-600' : 'text-teal-800'}`}>
+                            {reminderLabel}
+                        </span>
+                        {currentTaskDue ? <span className="shrink-0 text-slate-600">| hạn {currentTaskDue}</span> : null}
+                        {reminderAddedDateLabel ? <span className="min-w-0 truncate text-slate-600">| thêm {reminderAddedDateLabel}</span> : null}
+                    </div>
+
+                    <div className="mt-2 grid grid-cols-[minmax(0,1fr)_auto_auto] gap-1.5">
+                        <input
+                            type="text"
+                            value={noteValue}
+                            disabled={inlineSaving}
+                            placeholder="Nhập ghi chú rồi Enter..."
+                            onChange={(event) => setInlineNoteDrafts((prev) => ({ ...prev, [lead.id]: event.target.value }))}
+                            onKeyDown={(event) => {
+                                if (event.key === 'Enter') {
+                                    event.preventDefault();
+                                    saveInlineNote(lead);
+                                }
+
+                                if (event.key === 'Escape') {
+                                    event.preventDefault();
+                                    setInlineNoteDrafts((prev) => {
+                                        const next = { ...prev };
+                                        delete next[lead.id];
+                                        return next;
+                                    });
+                                }
+                            }}
+                            className="h-8 min-w-0 rounded-sm border border-slate-200 bg-white px-2 text-[12px] font-semibold text-slate-700 shadow-sm outline-none focus:border-teal-500"
+                            aria-label={`Sửa ghi chú ${lead.customer_name || lead.phone || lead.id}`}
+                        />
+                        <button type="button" onClick={() => openCreateOrder(lead)} className="inline-flex h-8 items-center justify-center rounded-sm border border-teal-600 bg-white px-2.5 text-[12px] font-black text-teal-700 shadow-sm">
+                            Tạo đơn
+                        </button>
+                        <button type="button" onClick={() => toggleHistory(lead)} disabled={inlineSaving} className="inline-flex size-8 shrink-0 items-center justify-center rounded-sm border border-teal-300 bg-white text-teal-700 shadow-sm" title="Xem lịch sử cũ">
+                            <span className="material-symbols-outlined text-[18px]">{historyOpen ? 'keyboard_arrow_up' : 'keyboard_arrow_down'}</span>
+                        </button>
+                    </div>
+                </div>
+
+                {historyOpen ? (
+                    <div className="border-t border-slate-100 bg-slate-50 px-2.5 py-2">
+                        {historyLoadingIds[lead.id] ? (
+                            <div className="py-4 text-center text-[12px] font-semibold text-slate-500">Đang tải lịch sử...</div>
+                        ) : Array.isArray(historyDetails[lead.id]?.notes_timeline) && historyDetails[lead.id].notes_timeline.length ? (
+                            <div className="space-y-1.5">
+                                {historyDetails[lead.id].notes_timeline.map((note) => (
+                                    <div key={note.id} className="rounded-sm bg-white px-2 py-1.5 text-[11px] font-semibold text-slate-700">
+                                        <span className="font-black text-teal-700">{note.activity_label}</span>
+                                        <span className="mx-1 text-slate-400">-</span>
+                                        <span className="text-slate-500">{formatDateTimeLocalLabel(note.created_at) || note.created_label}</span>
+                                        <div className="mt-0.5 whitespace-pre-wrap">{note.content}</div>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <div className="py-4 text-center text-[12px] font-semibold text-slate-500">Chưa có ghi chú nào.</div>
+                        )}
+                    </div>
+                ) : null}
+            </article>
+        );
+    };
+
     return (
         <div className="min-h-full bg-[#edf3f6] text-slate-900">
-            <div className="flex min-h-full flex-col gap-4 p-4 lg:p-5">
-                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex min-h-full flex-col gap-3 p-3 lg:gap-4 lg:p-5">
+                <div className="hidden flex-col gap-3 lg:flex lg:flex-row lg:items-center lg:justify-between">
                     <div>
                         <h1 className="text-2xl font-black text-slate-950">CRM Telesales</h1>
                         <p className="mt-1 text-[13px] font-medium text-slate-500">Quản lý khách, lịch gọi lại 3/7 ngày, sale phụ trách và lịch sử chăm sóc.</p>
@@ -2363,7 +2771,7 @@ const TelesalesCrm = () => {
                     </div>
                 ) : null}
 
-                <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
+                <div className="grid grid-cols-6 gap-1.5 lg:gap-3">
                     {queueTabs.map((tab) => {
                         const active = queue === tab.value;
                         const value = tab.statKey ? stats[tab.statKey] : pagination.total;
@@ -2373,27 +2781,58 @@ const TelesalesCrm = () => {
                                 key={tab.value}
                                 type="button"
                                 onClick={() => handleQueueChange(tab.value)}
-                                className={`min-h-[92px] rounded-sm border bg-white p-3 text-left shadow-sm transition ${
+                                className={`relative min-h-[54px] rounded-sm border bg-white p-1.5 text-left shadow-sm transition lg:min-h-[92px] lg:p-3 ${
                                     active ? 'border-teal-500 ring-2 ring-teal-500/10' : 'border-slate-200 hover:border-teal-300'
                                 }`}
                             >
                                 <div className="flex items-center justify-between gap-2">
-                                    <span className={`inline-flex size-9 items-center justify-center rounded-sm ${active ? 'bg-teal-700 text-white' : 'bg-slate-100 text-slate-500'}`}>
-                                        <span className="material-symbols-outlined text-[19px]">{tab.icon}</span>
+                                    <span className={`inline-flex size-6 items-center justify-center rounded-sm lg:size-9 ${active ? 'bg-teal-700 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                                        <span className="material-symbols-outlined text-[16px] lg:text-[19px]">{tab.icon}</span>
                                     </span>
                                     {tab.value === 'overdue' && Number(value) > 0 ? (
-                                        <span className="rounded-full bg-red-100 px-2 py-1 text-[11px] font-bold text-red-700">Cần xử lý</span>
+                                        <span className="absolute right-1 top-1 inline-flex size-4 items-center justify-center rounded-full bg-red-100 text-[10px] font-black text-red-700 lg:static lg:h-auto lg:w-auto lg:rounded-full lg:px-2 lg:py-1 lg:text-[11px]">
+                                            <span className="lg:hidden">!</span>
+                                            <span className="hidden lg:inline">Cần xử lý</span>
+                                        </span>
                                     ) : null}
                                 </div>
-                                <div className="mt-3 text-2xl font-black text-slate-950">{formatNumber(value)}</div>
-                                <div className="mt-0.5 truncate text-[13px] font-semibold text-slate-500">{tab.label}</div>
+                                <div className="mt-1 text-[17px] font-black leading-none text-slate-950 lg:mt-3 lg:text-2xl">{formatNumber(value)}</div>
+                                <div className="mt-0.5 truncate text-[9px] font-semibold leading-tight text-slate-600 lg:text-[13px] lg:text-slate-500">
+                                    <span className="lg:hidden">{tab.mobileLabel}</span>
+                                    <span className="hidden lg:inline">{tab.label}</span>
+                                </div>
                             </button>
                         );
                     })}
                 </div>
 
-                <div className="min-w-0 overflow-hidden rounded-sm border border-slate-200 bg-white shadow-sm">
-                    <div className="border-b border-slate-200 p-3">
+                <div className="min-w-0 overflow-visible rounded-sm border-0 bg-transparent shadow-none lg:overflow-hidden lg:border lg:border-slate-200 lg:bg-white lg:shadow-sm">
+                    <div className="relative mb-3 rounded-sm border border-slate-200 bg-white p-2 shadow-sm lg:hidden">
+                        <div className="flex h-9 items-center gap-1.5 overflow-hidden">
+                            <button type="button" onClick={() => setImportOpen(true)} className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-sm bg-teal-700 px-3 text-[12px] font-black text-white shadow-sm">
+                                <span className="material-symbols-outlined text-[17px]">add</span>
+                                Nhập
+                            </button>
+                            <button type="button" onClick={() => toggleMobileFilter('search')} className={mobileFilterButtonClass('search', Boolean(search))} aria-label="Tìm khách">
+                                <span className="material-symbols-outlined text-[19px]">search</span>
+                            </button>
+                            <button type="button" onClick={() => toggleMobileFilter('work')} className={mobileFilterButtonClass('work', workStatus !== 'all')} aria-label="Lọc xử lý">
+                                <span className="material-symbols-outlined text-[19px]">fact_check</span>
+                            </button>
+                            <button type="button" onClick={() => toggleMobileFilter('date')} className={mobileFilterButtonClass('date', Boolean(dateFrom || dateTo))} aria-label="Lọc ngày">
+                                <span className="material-symbols-outlined text-[19px]">calendar_month</span>
+                            </button>
+                            <button type="button" onClick={() => toggleMobileFilter('status')} className={mobileFilterButtonClass('status', Boolean(statusFilter))} aria-label="Lọc trạng thái">
+                                <span className="material-symbols-outlined text-[19px]">tune</span>
+                            </button>
+                            <button type="button" onClick={() => toggleMobileFilter('potential')} className={mobileFilterButtonClass('potential', Boolean(potentialFilter))} aria-label="Lọc tiềm năng">
+                                <span className="material-symbols-outlined text-[19px]">star</span>
+                            </button>
+                        </div>
+                        {renderMobileFilterPanel()}
+                    </div>
+
+                    <div className="hidden border-b border-slate-200 p-3 lg:block">
                         <div className="grid grid-cols-1 gap-2 xl:grid-cols-[136px_minmax(150px,1fr)_150px_156px_128px_132px_160px_180px_180px_152px] xl:items-center">
                             <button type="button" onClick={() => setImportOpen(true)} className={primaryButtonClassName}>
                                 <span className="material-symbols-outlined text-[18px]">add</span>
@@ -2570,7 +3009,19 @@ const TelesalesCrm = () => {
                         </div>
                     </div>
 
-                    <div ref={tableScrollRef} className="max-h-[calc(100vh-330px)] min-h-[480px] overflow-auto">
+                    <div className="grid gap-3 lg:hidden">
+                        {loading && leads.length === 0 ? (
+                            <div className="rounded-sm border border-slate-200 bg-white px-4 py-12 text-center text-[13px] font-semibold text-slate-500 shadow-sm">
+                                Đang tải danh sách khách...
+                            </div>
+                        ) : leads.length === 0 ? (
+                            <div className="rounded-sm border border-slate-200 bg-white px-4 py-12 text-center text-[13px] font-semibold text-slate-500 shadow-sm">
+                                Chưa có khách phù hợp với bộ lọc hiện tại.
+                            </div>
+                        ) : leads.map(renderMobileLeadCard)}
+                    </div>
+
+                    <div ref={tableScrollRef} className="hidden max-h-[calc(100vh-330px)] min-h-[480px] overflow-auto lg:block">
                         <table className="min-w-[1632px] table-fixed border-collapse">
                             <thead className="sticky top-0 z-20">
                                 <tr className="bg-slate-50 text-left text-[12px] font-bold text-slate-500">

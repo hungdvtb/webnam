@@ -184,6 +184,7 @@ class OrderController extends Controller
     private const QUICK_DISPATCH_EXPORT_NOTE_PREFIX = 'Tu tao tu van chuyen';
     private const QUICK_DISPATCH_EXPORT_META_SOURCE = 'quick_dispatch';
     private const ORDER_SEARCH_SCOPE_CUSTOMER_NAME = 'customer_name';
+    private const ORDER_SEARCH_SCOPE_CUSTOMER_PHONE = 'customer_phone';
 
     public function __construct(
         protected RepeatCustomerPhoneService $repeatCustomerPhoneService,
@@ -668,6 +669,18 @@ class OrderController extends Controller
             return;
         }
 
+        if (!$allowFuzzy && $this->usesPostgresSearchDriver() && $accountId > 0) {
+            $matchingIds = $this->matchingOrderNameIdsFromIndexedLookups($term, $accountId);
+
+            if (empty($matchingIds)) {
+                $query->{$or ? 'orWhereRaw' : 'whereRaw'}('1 = 0');
+                return;
+            }
+
+            $query->{$or ? 'orWhereIn' : 'whereIn'}('orders.id', $matchingIds);
+            return;
+        }
+
         $nameAttributeIds = $this->candidateOrderNameAttributeIds($accountId);
         $method = $or ? 'orWhere' : 'where';
 
@@ -687,13 +700,108 @@ class OrderController extends Controller
         });
     }
 
+    private function matchingOrderNameIdsFromIndexedLookups(string $term, int $accountId): array
+    {
+        if ($this->normalizeSearchText($term) === '' || $accountId <= 0) {
+            return [];
+        }
+
+        $ids = collect(
+            Order::withTrashed()
+                ->where('account_id', $accountId)
+                ->where(function ($nameQuery) use ($term) {
+                    $this->applyOrderNameFieldConstraint($nameQuery, 'customer_name', $term, false);
+                })
+                ->pluck('id')
+                ->all()
+        );
+
+        $shipmentIds = Shipment::query()
+            ->where('account_id', $accountId)
+            ->whereNotNull('order_id')
+            ->where(function ($shipmentQuery) use ($term) {
+                $this->applyOrderNameFieldConstraint($shipmentQuery, 'customer_name', $term, false);
+            })
+            ->pluck('order_id');
+
+        $ids = $ids->merge($shipmentIds);
+
+        $nameAttributeIds = $this->candidateOrderNameAttributeIds($accountId);
+        if (!empty($nameAttributeIds)) {
+            $attributeIds = DB::table('order_attribute_values')
+                ->join('orders', 'orders.id', '=', 'order_attribute_values.order_id')
+                ->where('orders.account_id', $accountId)
+                ->whereIn('order_attribute_values.attribute_id', $nameAttributeIds)
+                ->where(function ($attributeQuery) use ($term) {
+                    $this->applyOrderNameFieldConstraint($attributeQuery, 'order_attribute_values.value', $term, false);
+                })
+                ->pluck('order_attribute_values.order_id');
+
+            $ids = $ids->merge($attributeIds);
+        }
+
+        return $ids
+            ->map(fn ($id) => (int) $id)
+            ->filter(fn (int $id) => $id > 0)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
     private function normalizeOrderSearchScope(mixed $value): ?string
     {
         $normalized = Str::lower(trim((string) $value));
 
-        return in_array($normalized, ['customer', 'customer_name', 'name'], true)
-            ? self::ORDER_SEARCH_SCOPE_CUSTOMER_NAME
-            : null;
+        if (in_array($normalized, ['customer', 'customer_name', 'name'], true)) {
+            return self::ORDER_SEARCH_SCOPE_CUSTOMER_NAME;
+        }
+
+        if (in_array($normalized, ['customer_phone', 'phone', 'sdt', 'so_dien_thoai', 'tel'], true)) {
+            return self::ORDER_SEARCH_SCOPE_CUSTOMER_PHONE;
+        }
+
+        return null;
+    }
+
+    private function normalizedPhoneSearchDigits(string $value): string
+    {
+        return (string) preg_replace('/\D+/', '', $value);
+    }
+
+    private function isLikelyCustomerPhoneSearchTerm(string $value): bool
+    {
+        $trimmed = trim($value);
+        $digits = $this->normalizedPhoneSearchDigits($trimmed);
+
+        return strlen($digits) >= 9
+            && Str::startsWith($digits, ['0', '84'])
+            && $trimmed !== ''
+            && !preg_match('/[^\d\s+().,;\/-]/u', $trimmed);
+    }
+
+    private function phoneSearchLike(string $value, bool $prefixOnly = false): ?string
+    {
+        $digits = $this->normalizedPhoneSearchDigits($value);
+
+        if ($digits === '') {
+            return null;
+        }
+
+        $escaped = $this->escapeLike($digits);
+
+        return $prefixOnly ? "{$escaped}%" : "%{$escaped}%";
+    }
+
+    private function applyPhoneFieldConstraint($query, string $column, string $like, bool $or = false): void
+    {
+        $method = $or ? 'orWhere' : 'where';
+        $compactExpr = $this->compactSearchExpression($column);
+
+        $query->{$method}(function ($fieldQuery) use ($column, $compactExpr, $like) {
+            $fieldQuery
+                ->where($column, 'LIKE', $like)
+                ->orWhereRaw("{$compactExpr} LIKE ? ESCAPE '\\'", [$like]);
+        });
     }
 
     private function applyOrderPhoneSearch(
@@ -703,27 +811,43 @@ class OrderController extends Controller
         bool $or = false,
         bool $prefixOnly = false
     ): void {
+        $phoneLike = $this->phoneSearchLike($term, $prefixOnly);
         $like = $prefixOnly
             ? $this->prefixLike($term)
             : $this->containsLike($term);
 
-        if ($like === null) {
+        if ($phoneLike === null && $like === null) {
             return;
         }
 
         $phoneAttributeIds = $this->candidateOrderPhoneAttributeIds($accountId);
         $method = $or ? 'orWhere' : 'where';
 
-        $query->{$method}(function ($phoneQuery) use ($like, $phoneAttributeIds) {
-            $this->applyInsensitiveLike($phoneQuery, 'customer_phone', $like);
+        $query->{$method}(function ($phoneQuery) use ($like, $phoneLike, $phoneAttributeIds) {
+            if ($phoneLike !== null) {
+                $this->applyPhoneFieldConstraint($phoneQuery, 'customer_phone', $phoneLike);
+            } else {
+                $this->applyInsensitiveLike($phoneQuery, 'customer_phone', $like);
+            }
 
-            $phoneQuery->orWhereHas('shipments', function ($shipmentQuery) use ($like) {
+            $phoneQuery->orWhereHas('shipments', function ($shipmentQuery) use ($like, $phoneLike) {
+                if ($phoneLike !== null) {
+                    $this->applyPhoneFieldConstraint($shipmentQuery, 'customer_phone', $phoneLike);
+                    return;
+                }
+
                 $this->applyInsensitiveLike($shipmentQuery, 'customer_phone', $like);
             });
 
             if (!empty($phoneAttributeIds)) {
-                $phoneQuery->orWhereHas('attributeValues', function ($attributeValueQuery) use ($phoneAttributeIds, $like) {
+                $phoneQuery->orWhereHas('attributeValues', function ($attributeValueQuery) use ($phoneAttributeIds, $like, $phoneLike) {
                     $attributeValueQuery->whereIn('attribute_id', $phoneAttributeIds);
+
+                    if ($phoneLike !== null) {
+                        $this->applyPhoneFieldConstraint($attributeValueQuery, 'value', $phoneLike);
+                        return;
+                    }
+
                     $this->applyInsensitiveLike($attributeValueQuery, 'value', $like);
                 });
             }
@@ -3882,6 +4006,14 @@ class OrderController extends Controller
                     foreach ($searchTerms as $index => $term) {
                         $method = $index === 0 ? 'where' : 'orWhere';
                         $searchQuery->{$method}(function ($termQuery) use ($term, $accountId, $searchScope) {
+                            if (
+                                $searchScope === self::ORDER_SEARCH_SCOPE_CUSTOMER_PHONE
+                                || ($searchScope === null && $this->isLikelyCustomerPhoneSearchTerm($term))
+                            ) {
+                                $this->applyOrderPhoneSearch($termQuery, $term, $accountId);
+                                return;
+                            }
+
                             if ($searchScope === self::ORDER_SEARCH_SCOPE_CUSTOMER_NAME) {
                                 $this->applyOrderNameSearch($termQuery, $term, $accountId, false, false);
                                 return;

@@ -265,6 +265,7 @@ const INVENTORY_ORDER_SCOPE_VALUES = new Set([
     INVENTORY_ORDER_SCOPE_PENDING_RETURN,
 ]);
 const ORDER_CUSTOMER_NAME_SEARCH_SCOPE = 'customer_name';
+const ORDER_CUSTOMER_PHONE_SEARCH_SCOPE = 'customer_phone';
 const CUSTOMER_NAME_HONORIFIC_TOKENS = new Set(['anh', 'chi', 'co', 'chu', 'bac', 'em', 'ba']);
 const CUSTOMER_NAME_PREFIX_TOKENS = new Set([
     'nguyen', 'tran', 'le', 'pham', 'hoang', 'huynh', 'phan', 'vu', 'vo', 'dang',
@@ -324,11 +325,27 @@ const isLikelyCustomerNameSearchTerm = (value = '') => {
     return tokens.length >= 3 && hasCustomerNameHint && !hasProductHint;
 };
 
+const isLikelyCustomerPhoneSearchTerm = (value = '') => {
+    const rawValue = String(value || '').trim();
+    const digitValue = rawValue.replace(/\D+/g, '');
+
+    return digitValue.length >= 9
+        && /^(0|84)/.test(digitValue)
+        && !/[^\d\s+().,;/-]/u.test(rawValue);
+};
+
 const shouldScopeOrderSearchToCustomerName = (searchTerms = []) => {
     const normalizedTerms = parseKeywordTokens(searchTerms);
 
     return normalizedTerms.length > 0
         && normalizedTerms.every((term) => isLikelyCustomerNameSearchTerm(term));
+};
+
+const shouldScopeOrderSearchToCustomerPhone = (searchTerms = []) => {
+    const normalizedTerms = parseKeywordTokens(searchTerms);
+
+    return normalizedTerms.length > 0
+        && normalizedTerms.every((term) => isLikelyCustomerPhoneSearchTerm(term));
 };
 
 const ORDER_TYPE_BADGE_CLASSNAMES = {
@@ -3966,6 +3983,7 @@ const buildOrderListRequestParams = ({
         : baseScopedIds;
     const searchTerms = buildOrderSearchTerms(filters);
     const shouldUseCustomerNameSearchScope = shouldScopeOrderSearchToCustomerName(searchTerms);
+    const shouldUseCustomerPhoneSearchScope = canViewCustomerPhone && shouldScopeOrderSearchToCustomerPhone(searchTerms);
 
     const params = {
         page,
@@ -3988,7 +4006,9 @@ const buildOrderListRequestParams = ({
     if (searchTerms.length) {
         params.search = serializeKeywordTokens(searchTerms);
         params.search_terms = searchTerms;
-        if (shouldUseCustomerNameSearchScope) {
+        if (shouldUseCustomerPhoneSearchScope) {
+            params.search_scope = ORDER_CUSTOMER_PHONE_SEARCH_SCOPE;
+        } else if (shouldUseCustomerNameSearchScope) {
             params.search_scope = ORDER_CUSTOMER_NAME_SEARCH_SCOPE;
         }
     }

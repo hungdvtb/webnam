@@ -243,6 +243,73 @@ class OrderQuickSelectTest extends TestCase
         );
     }
 
+    public function test_order_list_customer_phone_search_scope_ignores_other_matching_fields(): void
+    {
+        [$account, $user] = $this->authenticate();
+
+        $customerPhone = '0987654321';
+
+        $targetOrder = $this->createOrder($account, [
+            'order_number' => 'OR-CUSTOMER-PHONE-001',
+            'customer_phone' => $customerPhone,
+        ]);
+
+        $formattedPhoneOrder = $this->createOrder($account, [
+            'order_number' => 'OR-CUSTOMER-PHONE-FORMATTED',
+            'customer_phone' => '090 123 4567',
+        ]);
+
+        $product = $this->createProduct($account, [
+            'name' => "San pham {$customerPhone}",
+            'sku' => "SKU-{$customerPhone}",
+        ]);
+        $productOnlyOrder = $this->createOrder($account, [
+            'order_number' => 'OR-PRODUCT-PHONE-001',
+            'customer_phone' => '0911111111',
+        ]);
+        $this->createOrderItem($account, $productOnlyOrder, $product);
+
+        $orderNumberOnlyOrder = $this->createOrder($account, [
+            'order_number' => "OR-{$customerPhone}",
+            'customer_phone' => '0922222222',
+        ]);
+
+        $addressOnlyOrder = $this->createOrder($account, [
+            'order_number' => 'OR-ADDRESS-PHONE-001',
+            'customer_phone' => '0933333333',
+            'shipping_address' => "Dia chi co {$customerPhone}",
+        ]);
+
+        $trackingOnlyOrder = $this->createOrder($account, [
+            'order_number' => 'OR-TRACKING-PHONE-001',
+            'customer_phone' => '0944444444',
+            'shipping_tracking_code' => $customerPhone,
+        ]);
+        $this->createShipment($account, $trackingOnlyOrder, $user, [
+            'customer_phone' => '0955555555',
+            'carrier_tracking_code' => $customerPhone,
+        ]);
+
+        $resultIds = $this->orderSearchIds($account, [
+            'search' => $customerPhone,
+            'search_scope' => 'customer_phone',
+        ]);
+
+        $this->assertSame([$targetOrder->id], $resultIds);
+        $this->assertNotContains($productOnlyOrder->id, $resultIds);
+        $this->assertNotContains($orderNumberOnlyOrder->id, $resultIds);
+        $this->assertNotContains($addressOnlyOrder->id, $resultIds);
+        $this->assertNotContains($trackingOnlyOrder->id, $resultIds);
+
+        $this->assertSame(
+            [$formattedPhoneOrder->id],
+            $this->orderSearchIds($account, [
+                'search' => '0901234567',
+                'search_scope' => 'customer_phone',
+            ])
+        );
+    }
+
     public function test_quick_select_reports_duplicates_and_missing_codes_without_auto_selecting_ambiguous_matches(): void
     {
         [$account] = $this->authenticate();

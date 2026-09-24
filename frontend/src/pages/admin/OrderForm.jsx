@@ -153,6 +153,7 @@ const ORDER_FORM_REPLACE_PICKER_MIN_HEIGHT = 320;
 const ORDER_FORM_REPLACE_PICKER_PREFETCH_DELAY_MS = 0;
 const ORDER_FORM_REPLACE_PICKER_PREFETCH_FAMILY_LIMIT = 24;
 const ORDER_FORM_REPLACE_PICKER_REQUEST_TIMEOUT_MS = 7000;
+const ORDER_FORM_REPLACE_FAMILY_CACHE_VERSION = 2;
 const ACTUAL_PRODUCT_CATEGORY_GROUP_MAX_PRODUCT_PAGES = 8;
 const ACTUAL_PRODUCT_CATEGORY_GROUP_STYLE_WORDS = new Set([
     'men', 'mau', 'loai', 'dong', 'bo', 'set', 'combo',
@@ -8224,7 +8225,10 @@ const OrderForm = () => {
         return appendCrossSellSourceParams(params);
     }, [appendCrossSellSourceParams]);
     const getOrderAiReplaceFamilyCacheKey = useCallback((familyParentId) => (
-        JSON.stringify(buildOrderAiReplaceFamilySearchParams([familyParentId]))
+        JSON.stringify({
+            version: ORDER_FORM_REPLACE_FAMILY_CACHE_VERSION,
+            params: buildOrderAiReplaceFamilySearchParams([familyParentId]),
+        })
     ), [buildOrderAiReplaceFamilySearchParams]);
     const cacheOrderAiReplaceFamilyEntries = useCallback((entries = [], { minFamilySize = 1 } = {}) => {
         const normalizedMinFamilySize = Math.max(1, Number(minFamilySize) || 1);
@@ -11949,23 +11953,6 @@ const OrderForm = () => {
             return undefined;
         }
 
-        const localSetupEntries = mergeProductSearchEntryLists(
-            productQuickSetupProducts,
-            isProductQuickModeActive && !hasEnabledCrossSellSources
-                ? normalizeReplacementDeclarationResults(getReplacementDeclarationQuickModeRows('', { limit: 1000 }))
-                : []
-        );
-        if (localSetupEntries.length > 0) {
-            cacheOrderAiReplaceFamilyEntries(localSetupEntries, { minFamilySize: 2 });
-            missingFamilyParentIds = missingFamilyParentIds.filter((familyParentId) => (
-                !orderAiReplaceSearchCacheRef.current.has(getOrderAiReplaceFamilyCacheKey(familyParentId))
-            ));
-
-            if (missingFamilyParentIds.length === 0) {
-                return undefined;
-            }
-        }
-
         const controller = new AbortController();
         orderAiReplaceFamilyPrefetchAbortRef.current = controller;
 
@@ -12000,12 +11987,7 @@ const OrderForm = () => {
         buildSourceAwareOrderAiPickerEntries,
         cacheOrderAiReplaceFamilyEntries,
         getOrderAiReplaceFamilyCacheKey,
-        getReplacementDeclarationQuickModeRows,
-        hasEnabledCrossSellSources,
-        isProductQuickModeActive,
-        normalizeReplacementDeclarationResults,
         orderAiReplaceFamilyParentKey,
-        productQuickSetupProducts,
     ]);
 
     useEffect(() => {
@@ -12123,16 +12105,6 @@ const OrderForm = () => {
             const cachedResults = orderAiReplaceSearchCacheRef.current.get(cacheKey);
             if (cachedResults && cachedResults.length > 0) {
                 applyFamilyResults(cachedResults);
-                setOrderAiReplaceLoading(false);
-                return undefined;
-            }
-
-            const localSearchFamilyEntries = buildSourceAwareOrderAiPickerEntries(products)
-                .filter((entry) => getOrderLineReplacementFamilyParentId(entry) === familyParentId);
-
-            if (localSearchFamilyEntries.length > 1) {
-                cacheOrderAiReplaceFamilyEntries(localSearchFamilyEntries);
-                applyFamilyResults(localSearchFamilyEntries);
                 setOrderAiReplaceLoading(false);
                 return undefined;
             }
@@ -12270,8 +12242,6 @@ const OrderForm = () => {
         orderAiReplaceLineId,
         orderAiReplaceSearchTerm,
         orderAiReplaceSeedTerm,
-        products,
-        productQuickSetupProducts,
     ]);
     useEffect(() => {
         if (!orderAiReplaceLineId || orderAiReplaceActiveTab !== ACTUAL_PRODUCT_PICKER_TAB_WAREHOUSE) {

@@ -12121,32 +12121,15 @@ const OrderForm = () => {
             const params = buildOrderAiReplaceFamilySearchParams([familyParentId]);
             const cacheKey = getOrderAiReplaceFamilyCacheKey(familyParentId);
             const cachedResults = orderAiReplaceSearchCacheRef.current.get(cacheKey);
-            if (cachedResults) {
+            if (cachedResults && cachedResults.length > 2) {
                 applyFamilyResults(cachedResults);
-                setOrderAiReplaceLoading(false);
-                return undefined;
-            }
-
-            const localSetupEntries = mergeProductSearchEntryLists(
-                productQuickSetupProducts,
-                isProductQuickModeActive && !hasEnabledCrossSellSources
-                    ? normalizeReplacementDeclarationResults(getReplacementDeclarationQuickModeRows('', { limit: 1000 }))
-                    : []
-            ).filter((entry) => getOrderLineReplacementFamilyParentId(entry) === familyParentId);
-
-            if (localSetupEntries.length > 1) {
-                cacheOrderAiReplaceFamilyEntries(localSetupEntries, { minFamilySize: 2 });
-                setOrderAiReplaceResults(filterOrderLineReplacementFamilyEntries(
-                    localSetupEntries,
-                    term,
-                    orderAiReplaceSeedTerm
-                ));
                 setOrderAiReplaceLoading(false);
                 return undefined;
             }
 
             const controller = new AbortController();
             orderAiReplaceSearchAbortRef.current = controller;
+            setOrderAiReplaceResults([]);
             setOrderAiReplaceLoading(true);
 
             let requestTimeoutId = null;

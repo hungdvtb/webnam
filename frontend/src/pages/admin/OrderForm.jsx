@@ -12121,8 +12121,18 @@ const OrderForm = () => {
             const params = buildOrderAiReplaceFamilySearchParams([familyParentId]);
             const cacheKey = getOrderAiReplaceFamilyCacheKey(familyParentId);
             const cachedResults = orderAiReplaceSearchCacheRef.current.get(cacheKey);
-            if (cachedResults && cachedResults.length > 2) {
+            if (cachedResults && cachedResults.length > 0) {
                 applyFamilyResults(cachedResults);
+                setOrderAiReplaceLoading(false);
+                return undefined;
+            }
+
+            const localSearchFamilyEntries = buildSourceAwareOrderAiPickerEntries(products)
+                .filter((entry) => getOrderLineReplacementFamilyParentId(entry) === familyParentId);
+
+            if (localSearchFamilyEntries.length > 1) {
+                cacheOrderAiReplaceFamilyEntries(localSearchFamilyEntries);
+                applyFamilyResults(localSearchFamilyEntries);
                 setOrderAiReplaceLoading(false);
                 return undefined;
             }
@@ -12260,6 +12270,7 @@ const OrderForm = () => {
         orderAiReplaceLineId,
         orderAiReplaceSearchTerm,
         orderAiReplaceSeedTerm,
+        products,
         productQuickSetupProducts,
     ]);
     useEffect(() => {

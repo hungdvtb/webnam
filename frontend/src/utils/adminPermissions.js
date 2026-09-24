@@ -6,6 +6,7 @@ export const ADMIN_PERMISSION_OPTIONS = [
     { id: 'orders', label: 'Quản lý đơn hàng' },
     { id: 'customers', label: 'Quản lý khách hàng' },
     { id: 'leads', label: 'Xử lý lead' },
+    { id: 'telesales', label: 'CRM Telesales' },
     { id: 'inventory', label: 'Quản lý tồn kho' },
     { id: 'warehouses', label: 'Quản lý kho vận' },
     { id: 'attributes', label: 'Thuộc tính' },
@@ -68,6 +69,7 @@ export const ADMIN_ROLE_OPTIONS = [
     { id: 'sale', label: 'Nhân viên sale' },
     { id: 'warehouse', label: 'Nhân viên kho' },
     { id: 'employee', label: 'Nhân viên' },
+    { id: 'telesales_viewer', label: 'Chỉ xem CRM Telesales' },
     { id: 'viewer', label: 'Chỉ xem' },
     { id: 'custom', label: 'Tùy chỉnh' },
 ];
@@ -89,6 +91,9 @@ const ROLE_ALIASES = {
     employee: 'employee',
     nhan_vien: 'employee',
     nhanvien: 'employee',
+    telesales_viewer: 'telesales_viewer',
+    telesale_viewer: 'telesales_viewer',
+    crm_telesales_viewer: 'telesales_viewer',
     viewer: 'viewer',
     custom: 'custom',
 };
@@ -154,6 +159,7 @@ export function permissionsForRole(role) {
                 'orders',
                 'customers',
                 'leads',
+                'telesales',
                 'inventory',
                 'warehouses',
                 'attributes',
@@ -169,6 +175,7 @@ export function permissionsForRole(role) {
                 ...modulePermissions(['orders'], ['view', 'create', 'update', 'delete_soft', 'export']),
                 ...modulePermissions(['products', 'inventory', 'warehouses'], ['view']),
                 ...modulePermissions(['customers', 'leads'], ['view', 'create', 'update']),
+                ...modulePermissions(['telesales'], ['view', 'create', 'update']),
             ]);
         case 'warehouse':
             return unique([
@@ -189,7 +196,9 @@ export function permissionsForRole(role) {
                 ADMIN_INVENTORY_REPLACEMENT_LOOKUP_PERMISSION,
             ]);
         case 'viewer':
-            return modulePermissions(['dashboard', 'products', 'orders', 'customers', 'leads', 'inventory', 'warehouses'], ['view']);
+            return modulePermissions(['dashboard', 'products', 'orders', 'customers', 'leads', 'telesales', 'inventory', 'warehouses'], ['view']);
+        case 'telesales_viewer':
+            return modulePermissions(['telesales'], ['view']);
         default:
             return [];
     }
@@ -202,7 +211,7 @@ export function dataPermissionsForRole(role) {
         return [...ADMIN_DATA_PERMISSION_OPTIONS.map((permission) => permission.id), ADMIN_PROFIT_SCOPE_ALL_PERMISSION];
     }
 
-    if (['sale', 'warehouse', 'viewer'].includes(normalizedRole)) {
+    if (['sale', 'warehouse', 'viewer', 'telesales_viewer'].includes(normalizedRole)) {
         return ['customer_phone.view'];
     }
 
@@ -347,6 +356,11 @@ export function hasAdminPermission(user, permission, accountId = readActiveAccou
     const [module] = String(permission || '').split('.');
     if (permission === 'users.manage') {
         return permissions.includes('users.update') || permissions.includes('users.*');
+    }
+
+    const [, action] = String(permission || '').split('.');
+    if (module === 'telesales' && action) {
+        return permissions.includes(`leads.${action}`) || permissions.includes('leads.*');
     }
 
     const fallbackModulePermission = fallbackModulePermissionForFeaturePermission(permission);

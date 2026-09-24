@@ -19,6 +19,7 @@ class AccessControlService
         'orders',
         'customers',
         'leads',
+        'telesales',
         'inventory',
         'warehouses',
         'attributes',
@@ -88,6 +89,9 @@ class AccessControlService
         'employee' => 'employee',
         'nhan_vien' => 'employee',
         'nhanvien' => 'employee',
+        'telesales_viewer' => 'telesales_viewer',
+        'telesale_viewer' => 'telesales_viewer',
+        'crm_telesales_viewer' => 'telesales_viewer',
         'viewer' => 'viewer',
         'custom' => 'custom',
     ];
@@ -109,6 +113,7 @@ class AccessControlService
                 'orders',
                 'customers',
                 'leads',
+                'telesales',
                 'inventory',
                 'warehouses',
                 'attributes',
@@ -122,7 +127,8 @@ class AccessControlService
                 self::permissionsForModules(['dashboard'], ['view']),
                 self::permissionsForModules(['orders'], ['view', 'create', 'update', 'delete_soft', 'export']),
                 self::permissionsForModules(['products', 'inventory', 'warehouses'], ['view']),
-                self::permissionsForModules(['customers', 'leads'], ['view', 'create', 'update'])
+                self::permissionsForModules(['customers', 'leads'], ['view', 'create', 'update']),
+                self::permissionsForModules(['telesales'], ['view', 'create', 'update'])
             ))),
             'warehouse' => array_values(array_unique(array_merge(
                 self::permissionsForModules(['dashboard', 'orders', 'products'], ['view']),
@@ -148,9 +154,11 @@ class AccessControlService
                 'orders',
                 'customers',
                 'leads',
+                'telesales',
                 'inventory',
                 'warehouses',
             ], ['view']),
+            'telesales_viewer' => self::permissionsForModules(['telesales'], ['view']),
             default => [],
         };
     }
@@ -162,7 +170,7 @@ class AccessControlService
                 self::DATA_PERMISSIONS,
                 [self::PROFIT_SCOPE_ALL]
             ))),
-            'sale', 'warehouse', 'viewer' => [self::CUSTOMER_PHONE_DATA_PERMISSION],
+            'sale', 'warehouse', 'viewer', 'telesales_viewer' => [self::CUSTOMER_PHONE_DATA_PERMISSION],
             default => [],
         };
     }
@@ -626,6 +634,10 @@ class AccessControlService
 
         if ($module && $action && in_array("{$module}.*", $permissions, true)) {
             return true;
+        }
+
+        if ($module === 'telesales' && $action) {
+            return in_array("leads.{$action}", $permissions, true) || in_array('leads.*', $permissions, true);
         }
 
         if ($requiredPermission === 'users.manage') {

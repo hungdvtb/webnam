@@ -4044,6 +4044,40 @@ const buildOrderListRequestParams = ({
     return params;
 };
 
+const ORDER_CLEAR_SEARCH_CACHE_LIMIT = 12;
+
+const cloneOrderListResponseForCache = (payload) => {
+    if (!payload || typeof payload !== 'object') {
+        return null;
+    }
+
+    try {
+        return JSON.parse(JSON.stringify(payload));
+    } catch (error) {
+        console.warn('Cannot clone order list cache payload.', error);
+        return null;
+    }
+};
+
+const buildOrderClearSearchCacheKey = (accountId, params = {}) => {
+    const normalizedParams = Object.keys(params)
+        .sort()
+        .reduce((result, key) => {
+            const value = params[key];
+            result[key] = Array.isArray(value) ? [...value] : value;
+            return result;
+        }, {});
+
+    return `${accountId || 'default'}:${JSON.stringify(normalizedParams)}`;
+};
+
+const isOrderClearSearchCacheableParams = (params = {}) => (
+    Number(params.page || 1) === 1
+    && !params.search
+    && !params.search_scope
+    && !params.search_terms
+);
+
 const getCancelDispatchEligibility = (order) => {
     if (!order) {
         return {
@@ -5536,6 +5570,7 @@ const OrderList = () => {
     const shippingAlertRef = useRef(null);
     const previousUnreadRef = useRef([]);
     const orderRequestAbortRef = useRef(null);
+    const clearSearchResponseCacheRef = useRef(new Map());
     const suppressSearchSyncRef = useRef(false);
     const previousSearchDraftRef = useRef('');
     const pendingPersistedStateHydrationRef = useRef(initialStoredListState.hasState);
@@ -5950,7 +5985,60 @@ const OrderList = () => {
         });
     };
 
-    const fetchOrders = useCallback(async (page = 1, currentFilters = filters, perPage = pagination.per_page, currentSort = sortConfig) => {
+    const applyOrderListResponse = useCallback((payload = {}) => {
+        setOrders(Array.isArray(payload.data) ? payload.data : []);
+        setOrderSummary(normalizeOrderListSummary(payload.summary, payload.total));
+        setOutsideDeliveryUnpaidSummary(normalizeOrderListSummary(payload.outside_delivery_unpaid_summary));
+        setPagination({
+            current_page: payload.current_page || 1,
+            last_page: payload.last_page || 1,
+            total: payload.total || 0,
+            per_page: payload.per_page || pagination.per_page || 20,
+        });
+        setHasLoadedOrdersOnce(true);
+    }, [pagination.per_page]);
+
+    const rememberClearSearchResponse = useCallback((params, payload) => {
+        if (!isOrderClearSearchCacheableParams(params)) {
+            return;
+        }
+
+        const cachedPayload = cloneOrderListResponseForCache(payload);
+        if (!cachedPayload) {
+            return;
+        }
+
+        const cache = clearSearchResponseCacheRef.current;
+        const cacheKey = buildOrderClearSearchCacheKey(activeAccountId, params);
+        cache.delete(cacheKey);
+        cache.set(cacheKey, cachedPayload);
+
+        while (cache.size > ORDER_CLEAR_SEARCH_CACHE_LIMIT) {
+            cache.delete(cache.keys().next().value);
+        }
+    }, [activeAccountId]);
+
+    const restoreClearSearchResponse = useCallback((params) => {
+        if (!isOrderClearSearchCacheableParams(params)) {
+            return false;
+        }
+
+        const cache = clearSearchResponseCacheRef.current;
+        const cacheKey = buildOrderClearSearchCacheKey(activeAccountId, params);
+        const cachedPayload = cache.get(cacheKey);
+        if (!cachedPayload) {
+            return false;
+        }
+
+        cache.delete(cacheKey);
+        cache.set(cacheKey, cachedPayload);
+        applyOrderListResponse(cachedPayload);
+        setLoading(false);
+
+        return true;
+    }, [activeAccountId, applyOrderListResponse]);
+
+    const fetchOrders = useCallback(async (page = 1, currentFilters = filters, perPage = pagination.per_page, currentSort = sortConfig, options = {}) => {
         if (!isActiveAccountReady) {
             orderRequestAbortRef.current?.abort();
             setLoading(true);
@@ -5969,12 +6057,15 @@ const OrderList = () => {
         orderRequestAbortRef.current?.abort();
         const controller = new AbortController();
         orderRequestAbortRef.current = controller;
+        const shouldShowLoading = !options.silentRefresh;
         setPagination((current) => ({
             ...current,
             current_page: nextPage,
             per_page: normalizedPerPage,
         }));
-        setLoading(true);
+        if (shouldShowLoading) {
+            setLoading(true);
+        }
         try {
             const selectedOnlyIds = showSelectedOnlyRef.current
                 ? parseOrderIdList(selectedIdsRef.current)
@@ -6012,11 +6103,8 @@ const OrderList = () => {
 
             const response = await orderApi.getAll(params, controller.signal);
             if (controller.signal.aborted) return;
-            setOrders(response.data.data);
-            setOrderSummary(normalizeOrderListSummary(response.data.summary, response.data.total));
-            setOutsideDeliveryUnpaidSummary(normalizeOrderListSummary(response.data.outside_delivery_unpaid_summary));
-            setPagination({ current_page: response.data.current_page, last_page: response.data.last_page, total: response.data.total, per_page: response.data.per_page });
-            setHasLoadedOrdersOnce(true);
+            applyOrderListResponse(response.data);
+            rememberClearSearchResponse(params, response.data);
         } catch (error) {
             if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
             console.error("Error fetching orders", error);
@@ -6027,7 +6115,7 @@ const OrderList = () => {
                 setLoading(false);
             }
         }
-    }, [canViewCustomerPhone, filters, isActiveAccountReady, isDraftView, isMainView, isReturnFollowupView, isReturnWorkbenchView, isTrashView, pagination.per_page, returnWorkbenchIds, sortConfig]);
+    }, [applyOrderListResponse, canViewCustomerPhone, filters, isActiveAccountReady, isDraftView, isMainView, isReturnFollowupView, isReturnWorkbenchView, isTrashView, pagination.per_page, rememberClearSearchResponse, returnWorkbenchIds, sortConfig]);
 
     const handleOutsideDeliveryUnpaidToggle = useCallback(() => {
         const nextActive = !isOutsideDeliveryUnpaidFilterActive;
@@ -8350,11 +8438,48 @@ const OrderList = () => {
                 placeholder={placeholder}
                 onFocus={() => setShowSearchHistory(true)}
                 onChange={({ keywords, draftValue }) => {
-                    setFilters((prev) => ({
-                        ...prev,
+                    const nextFilters = {
+                        ...filters,
                         search_terms: keywords,
                         search_input: draftValue,
-                    }));
+                    };
+                    const nextSearchTerms = buildActiveKeywordTokens(keywords, draftValue);
+                    const shouldClearSearchImmediately = activeSearchTerms.length > 0 && nextSearchTerms.length === 0;
+
+                    setFilters(nextFilters);
+
+                    if (!shouldClearSearchImmediately) {
+                        return;
+                    }
+
+                    suppressSearchSyncRef.current = true;
+                    localStorage.removeItem('order_list_search_current');
+                    setShowSearchHistory(false);
+
+                    const selectedOnlyIds = showSelectedOnlyRef.current
+                        ? parseOrderIdList(selectedIdsRef.current)
+                        : [];
+                    const explicitScopedIds = parseOrderIdList(nextFilters.order_ids);
+                    const scopedOrderIds = isReturnWorkbenchView
+                        ? (explicitScopedIds.length ? explicitScopedIds : returnWorkbenchIds)
+                        : explicitScopedIds;
+                    const params = buildOrderListRequestParams({
+                        filters: nextFilters,
+                        sortConfig,
+                        page: 1,
+                        perPage: pagination.per_page,
+                        isMainView,
+                        isDraftView,
+                        isTrashView,
+                        scopedOrderIds,
+                        selectedOnlyIds,
+                        canViewCustomerPhone,
+                    });
+                    const restoredFromCache = restoreClearSearchResponse(params);
+
+                    fetchOrders(1, nextFilters, pagination.per_page, sortConfig, {
+                        silentRefresh: restoredFromCache,
+                    });
                 }}
             />
             {showSearchHistory && searchHistory.length > 0 && (

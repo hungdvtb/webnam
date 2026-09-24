@@ -2,7 +2,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom';
 import AccountSelector from '../../components/AccountSelector';
 import Pagination from '../../components/Pagination';
+import { useAuth } from '../../context/AuthContext';
 import { telesalesApi } from '../../services/api';
+import { hasAdminPermission } from '../../utils/adminPermissions';
 
 const queueTabs = [
     { value: 'all', label: 'Tất cả', mobileLabel: 'Tất cả', icon: 'view_list', statKey: 'total' },
@@ -359,6 +361,15 @@ const labelForReminder = (lead) => {
     return 'Chưa bật nhắc';
 };
 
+const formatMobileReminderLabel = (label) => {
+    const trimmedLabel = String(label || '').trim();
+    const overdueMatch = normalizeVietnameseText(trimmedLabel).match(/^qua\s+(\d+)\s+ngay(?:\s|$)/);
+
+    if (overdueMatch) return `Số ${overdueMatch[1]} ngày trước`;
+
+    return trimmedLabel;
+};
+
 const getTaskStatusDisplay = (task) => {
     if (!task || task.status !== 'pending' || !task.is_due) return null;
 
@@ -431,12 +442,20 @@ const columnOptions = [
 ];
 
 const TelesalesCrm = () => {
+    const { user } = useAuth();
     const navigate = useNavigate();
     const location = useLocation();
+    const canCreateTelesales = hasAdminPermission(user, 'telesales.create');
+    const canUpdateTelesales = hasAdminPermission(user, 'telesales.update');
+    const canDeleteTelesales = hasAdminPermission(user, 'telesales.delete_soft');
+    const canConfigureTelesales = hasAdminPermission(user, 'leads.update');
+    const canCreateOrderFromLead = hasAdminPermission(user, 'orders.create');
+    const canUseLeadActions = canUpdateTelesales || canDeleteTelesales;
     const [initialViewState] = useState(() => buildInitialViewState(location.search));
     const tableScrollRef = useRef(null);
     const actionMenuRef = useRef(null);
     const mobileActionMenuRef = useRef(null);
+    const mobileFilterRef = useRef(null);
     const todayValue = useMemo(() => toDateInputValue(), []);
     const monthValue = useMemo(() => toMonthInputValue(), []);
     const initialMonthRange = useMemo(() => getCurrentMonthRange(), []);
@@ -532,9 +551,10 @@ const TelesalesCrm = () => {
     });
 
     const canSubmitImport = useMemo(
-        () => importRows.some((row) => row.phone.trim())
+        () => canCreateTelesales
+            && importRows.some((row) => row.phone.trim())
             && importRows.every((row) => !row.phone.trim() || row.zalo_same_as_phone || row.zalo_phone.trim()),
-        [importRows]
+        [canCreateTelesales, importRows]
     );
 
     const conversionStats = stats.conversion || emptyStats.conversion;
@@ -549,8 +569,10 @@ const TelesalesCrm = () => {
     );
     const currentStart = pagination.total > 0 ? ((pagination.current_page - 1) * pagination.per_page) + 1 : 0;
     const currentEnd = pagination.total > 0 ? Math.min(pagination.current_page * pagination.per_page, pagination.total) : 0;
-    const visibleColumnCount = columnOptions.filter((column) => visibleColumns[column.key]).length;
-    const tableColumnCount = visibleColumnCount + 1;
+    const visibleColumnCount = columnOptions.filter((column) => (
+        visibleColumns[column.key] && (column.key !== 'createOrder' || canCreateOrderFromLead)
+    )).length;
+    const tableColumnCount = visibleColumnCount + (canUseLeadActions ? 1 : 0);
 
     const dateRangeLabel = useMemo(() => {
         if (dateFrom && dateTo) return `${formatShortDateLabel(dateFrom)} - ${formatShortDateLabel(dateTo)}`;
@@ -558,6 +580,18 @@ const TelesalesCrm = () => {
         if (dateTo) return `Đến ${formatShortDateLabel(dateTo)}`;
         return 'Lọc ngày';
     }, [dateFrom, dateTo]);
+    const desktopToolbarColumns = useMemo(() => [
+        ...(canCreateTelesales ? ['136px'] : []),
+        'minmax(150px, 1fr)',
+        '150px',
+        '156px',
+        '128px',
+        ...(canConfigureTelesales ? ['132px'] : []),
+        '160px',
+        '180px',
+        '180px',
+        '152px',
+    ].join(' '), [canConfigureTelesales, canCreateTelesales]);
 
     const fetchBootstrap = useCallback(async () => {
         const response = await telesalesApi.bootstrap();
@@ -759,6 +793,30 @@ const TelesalesCrm = () => {
     }, [actionMenuLeadId]);
 
     useEffect(() => {
+        if (!mobileFilterOpen) return undefined;
+
+        const closeMobileFilter = (event) => {
+            if (mobileFilterRef.current?.contains(event.target)) return;
+            setMobileFilterOpen(null);
+        };
+        const closeMobileFilterOnEscape = (event) => {
+            if (event.key === 'Escape') {
+                setMobileFilterOpen(null);
+            }
+        };
+
+        document.addEventListener('mousedown', closeMobileFilter);
+        document.addEventListener('touchstart', closeMobileFilter);
+        document.addEventListener('keydown', closeMobileFilterOnEscape);
+
+        return () => {
+            document.removeEventListener('mousedown', closeMobileFilter);
+            document.removeEventListener('touchstart', closeMobileFilter);
+            document.removeEventListener('keydown', closeMobileFilterOnEscape);
+        };
+    }, [mobileFilterOpen]);
+
+    useEffect(() => {
         if (!pendingReturnRestore || loading) return undefined;
 
         const leadId = String(pendingReturnRestore.leadId || '');
@@ -858,6 +916,8 @@ const TelesalesCrm = () => {
     };
 
     const toggleLeadActionMenu = (leadId) => {
+        if (!canUseLeadActions) return;
+
         const normalizedLeadId = String(leadId || '');
         if (!normalizedLeadId) return;
 
@@ -868,6 +928,10 @@ const TelesalesCrm = () => {
 
     const openEditLead = (lead) => {
         setActionMenuLeadId(null);
+        if (!canUpdateTelesales) {
+            setErrorMessage('Tài khoản của bạn chỉ có quyền xem CRM Telesales.');
+            return;
+        }
 
         if (!lead?.id) {
             setErrorMessage('Không tìm thấy khách để sửa thông tin.');
@@ -905,6 +969,10 @@ const TelesalesCrm = () => {
 
     const handleLeadEditSubmit = async (event) => {
         event.preventDefault();
+        if (!canUpdateTelesales) {
+            setLeadEditError('Tài khoản của bạn chỉ có quyền xem CRM Telesales.');
+            return;
+        }
 
         const lead = leadEditLead;
         if (!lead?.id) {
@@ -970,6 +1038,10 @@ const TelesalesCrm = () => {
 
     const handleDeleteLead = async (lead) => {
         if (!lead?.id) return;
+        if (!canDeleteTelesales) {
+            setErrorMessage('Tài khoản của bạn không có quyền xóa khách CRM Telesales.');
+            return;
+        }
 
         const targetLabel = lead.customer_name || lead.phone || 'khách này';
 
@@ -1000,6 +1072,10 @@ const TelesalesCrm = () => {
 
     const handleInlineLeadUpdate = async (lead, payload, options = 'Đã cập nhật khách.') => {
         if (!lead?.id) return null;
+        if (!canUpdateTelesales) {
+            setErrorMessage('Tài khoản của bạn chỉ có quyền xem CRM Telesales.');
+            return null;
+        }
 
         const updateOptions = typeof options === 'string'
             ? { successMessage: options }
@@ -1125,6 +1201,10 @@ const TelesalesCrm = () => {
 
     const deleteHistoryNote = async (lead, note) => {
         if (!lead?.id || !note?.id) return;
+        if (!canDeleteTelesales) {
+            setErrorMessage('Tài khoản của bạn không có quyền xóa ghi chú CRM Telesales.');
+            return;
+        }
         setInlineSaving(lead.id, true);
         setErrorMessage('');
         setToast('');
@@ -1173,6 +1253,10 @@ const TelesalesCrm = () => {
 
     const openCreateOrder = (lead) => {
         if (!lead?.id) return;
+        if (!canCreateOrderFromLead) {
+            setErrorMessage('Tài khoản của bạn không có quyền tạo đơn hàng từ CRM Telesales.');
+            return;
+        }
 
         if (lead.status_config?.blocks_order_create) {
             setErrorMessage('Trạng thái hiện tại của khách đang chặn thao tác tạo đơn.');
@@ -1296,6 +1380,10 @@ const TelesalesCrm = () => {
 
     const handleImportSubmit = async (event) => {
         event.preventDefault();
+        if (!canCreateTelesales) {
+            setErrorMessage('Tài khoản của bạn không có quyền nhập khách CRM Telesales.');
+            return;
+        }
         setImporting(true);
         setErrorMessage('');
         setImportResult(null);
@@ -1367,6 +1455,11 @@ const TelesalesCrm = () => {
     };
 
     const createStatus = async () => {
+        if (!canConfigureTelesales) {
+            setErrorMessage('Tài khoản của bạn không có quyền cấu hình CRM Telesales.');
+            return;
+        }
+
         if (!newStatusForm.name.trim()) {
             setErrorMessage('Tên trạng thái không được để trống.');
             return;
@@ -1401,6 +1494,11 @@ const TelesalesCrm = () => {
     };
 
     const deleteStatus = async (status) => {
+        if (!canConfigureTelesales) {
+            setErrorMessage('Tài khoản của bạn không có quyền cấu hình CRM Telesales.');
+            return;
+        }
+
         if (!window.confirm(`Xóa trạng thái "${status.name}"?`)) return;
 
         setStatusSaving(status.id, true);
@@ -1438,6 +1536,11 @@ const TelesalesCrm = () => {
     };
 
     const saveConfigurationDrafts = async () => {
+        if (!canConfigureTelesales) {
+            setErrorMessage('Tài khoản của bạn không có quyền cấu hình CRM Telesales.');
+            return;
+        }
+
         const blankStatus = statusDrafts.find((status) => !status.name?.trim());
         if (blankStatus) {
             setErrorMessage('Tên trạng thái không được để trống.');
@@ -1490,6 +1593,11 @@ const TelesalesCrm = () => {
     };
 
     const createPotential = async () => {
+        if (!canConfigureTelesales) {
+            setErrorMessage('Tài khoản của bạn không có quyền cấu hình CRM Telesales.');
+            return;
+        }
+
         if (!newPotentialForm.name.trim()) {
             setErrorMessage('Tên mức tiềm năng không được để trống.');
             return;
@@ -1524,6 +1632,11 @@ const TelesalesCrm = () => {
     };
 
     const deletePotential = async (potential) => {
+        if (!canConfigureTelesales) {
+            setErrorMessage('Tài khoản của bạn không có quyền cấu hình CRM Telesales.');
+            return;
+        }
+
         if (!window.confirm(`Xóa mức tiềm năng "${potential.name}"?`)) return;
 
         setPotentialSaving(potential.id, true);
@@ -1575,6 +1688,7 @@ const TelesalesCrm = () => {
 
     const renderStatusManager = () => {
         if (!statusManagerOpen) return null;
+        if (!canConfigureTelesales) return null;
         const isStatusTab = statusManagerTab === 'statuses';
         const configurationSaving = Boolean(statusSavingIds.bulk || potentialSavingIds.bulk);
         const tabClassName = (active) => `inline-flex h-10 items-center justify-center gap-2 rounded-sm border px-4 text-[13px] font-black transition ${active ? 'border-teal-600 bg-teal-50 text-teal-800' : 'border-slate-200 bg-white text-slate-600 hover:border-teal-300 hover:text-teal-700'}`;
@@ -1990,6 +2104,7 @@ const TelesalesCrm = () => {
 
     const renderImportModal = () => {
         if (!importOpen) return null;
+        if (!canCreateTelesales) return null;
 
         return (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4">
@@ -2191,6 +2306,7 @@ const TelesalesCrm = () => {
 
     const renderLeadEditModal = () => {
         if (!leadEditOpen) return null;
+        if (!canUpdateTelesales) return null;
 
         const editingLead = leadEditLead;
 
@@ -2309,7 +2425,7 @@ const TelesalesCrm = () => {
                                             <button
                                                 type="button"
                                                 onClick={() => deleteHistoryNote(lead, note)}
-                                                disabled={inlineSaving}
+                                                disabled={inlineSaving || !canDeleteTelesales}
                                                 className="inline-flex size-8 items-center justify-center rounded-sm border border-red-100 bg-white text-red-500 shadow-sm hover:border-red-300 hover:bg-red-50 disabled:cursor-wait disabled:opacity-50"
                                                 title="Xóa ghi chú này"
                                             >
@@ -2344,7 +2460,6 @@ const TelesalesCrm = () => {
         if (!mobileFilterOpen) return null;
 
         const titleMap = {
-            search: 'Tìm khách',
             work: 'Trạng thái xử lý',
             date: 'Lọc ngày',
             status: 'Trạng thái khách',
@@ -2352,7 +2467,7 @@ const TelesalesCrm = () => {
         };
 
         return (
-            <div className="absolute left-2 right-2 top-[54px] z-30 rounded-sm border border-teal-200 bg-teal-50 p-2.5 shadow-xl">
+            <div className="absolute left-2 right-2 top-[96px] z-30 rounded-sm border border-teal-200 bg-teal-50 p-2.5 shadow-xl">
                 <div className="mb-2 flex items-center justify-between gap-2">
                     <div className="text-[13px] font-black text-slate-950">{titleMap[mobileFilterOpen]}</div>
                     <button
@@ -2363,21 +2478,6 @@ const TelesalesCrm = () => {
                         Đóng
                     </button>
                 </div>
-
-                {mobileFilterOpen === 'search' ? (
-                    <div className="relative">
-                        <span className="material-symbols-outlined pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-slate-400">search</span>
-                        <input
-                            value={search}
-                            onChange={(event) => {
-                                setSearch(event.target.value);
-                                setPage(1);
-                            }}
-                            className={`${inputClassName} pl-10`}
-                            placeholder="Tìm tên khách, SĐT, mã lead..."
-                        />
-                    </div>
-                ) : null}
 
                 {mobileFilterOpen === 'work' ? (
                     <div className="grid grid-cols-3 gap-1.5">
@@ -2524,6 +2624,8 @@ const TelesalesCrm = () => {
         const statusValue = lead.lead_status_id ? String(lead.lead_status_id) : '';
         const potentialValue = lead.potential_level || '';
         const noteValue = inlineNoteDrafts[lead.id] ?? lead.latest_note_content ?? lead.latest_note_excerpt ?? '';
+        const currentNoteValue = String(lead.latest_note_content ?? lead.latest_note_excerpt ?? '').trim();
+        const mobileNoteChanged = noteValue.trim() !== '' && noteValue.trim() !== currentNoteValue;
         const potentialOption = activePotentials.find((potential) => potential.value === potentialValue);
         const historyOpen = Boolean(historyOpenIds[lead.id]);
         const zaloSameAsPhone = normalizePhoneDigits(lead.zalo_phone || lead.phone) === normalizePhoneDigits(lead.phone);
@@ -2531,23 +2633,21 @@ const TelesalesCrm = () => {
         const potentialSelectValue = potentialOption ? potentialValue : '';
         const leadAddedAt = lead.added_at || lead.placed_at || lead.created_at;
         const customerAddedLabel = formatDateTimeLocalLabel(leadAddedAt) || lead.added_label || lead.placed_label || '';
-        const reminderAddedDateLabel = formatDateOnlyLabel(leadAddedAt);
         const currentTask = lead.current_task || null;
         const workTask = lead.work_task || currentTask;
         const reminderProcessed = workTask?.status === 'completed';
         const taskStatusDisplay = getTaskStatusDisplay(currentTask);
         const currentStatusOption = activeStatuses.find((status) => String(status.id) === String(statusValue));
         const currentStatusColor = taskStatusDisplay?.color || currentStatusOption?.color || '#2563eb';
-        const currentTaskDue = workTask?.due_label || '';
         const actionMenuOpenForLead = String(actionMenuLeadId || '') === String(lead.id);
         const leadDeleting = String(deletingLeadId || '') === String(lead.id);
         const statusLabel = taskStatusDisplay?.label || currentStatusOption?.name || 'Số mới';
-        const reminderLabel = labelForReminder(lead);
+        const reminderLabel = formatMobileReminderLabel(labelForReminder(lead));
 
         return (
             <article key={lead.id} className={`overflow-hidden rounded-sm border border-slate-200 bg-white shadow-sm ${String(restoredLeadId || '') === String(lead.id) ? 'ring-2 ring-teal-300' : ''}`}>
-                <div className="grid grid-cols-[26px_minmax(0,1fr)_auto] items-start gap-2 border-b border-slate-100 px-2.5 py-2.5">
-                    <div ref={actionMenuOpenForLead ? mobileActionMenuRef : null} className="relative">
+                <div className={`grid items-start gap-2 border-b border-slate-100 px-2.5 py-2.5 ${canUseLeadActions ? 'grid-cols-[26px_minmax(0,1fr)_auto]' : 'grid-cols-[minmax(0,1fr)_auto]'}`}>
+                    {canUseLeadActions ? <div ref={actionMenuOpenForLead ? mobileActionMenuRef : null} className="relative">
                         <button
                             type="button"
                             onClick={() => toggleLeadActionMenu(lead.id)}
@@ -2561,27 +2661,31 @@ const TelesalesCrm = () => {
 
                         {actionMenuOpenForLead ? (
                             <div className="absolute left-0 top-8 z-40 w-[142px] rounded-sm border border-slate-200 bg-white p-1.5 text-left shadow-xl">
-                                <button
-                                    type="button"
-                                    onClick={() => openEditLead(lead)}
-                                    disabled={leadEditSaving || leadDeleting}
-                                    className="flex h-9 w-full items-center gap-2 rounded-sm px-2 text-[13px] font-bold text-slate-700 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-wait disabled:text-slate-300"
-                                >
-                                    <span className="material-symbols-outlined text-[18px]">edit</span>
-                                    Sửa khách
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => handleDeleteLead(lead)}
-                                    disabled={leadDeleting}
-                                    className="flex h-9 w-full items-center gap-2 rounded-sm px-2 text-[13px] font-bold text-red-600 hover:bg-red-50 disabled:cursor-wait disabled:text-slate-300"
-                                >
-                                    <span className="material-symbols-outlined text-[18px]">delete</span>
-                                    {leadDeleting ? 'Đang xóa...' : 'Xóa khách'}
-                                </button>
+                                {canUpdateTelesales ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => openEditLead(lead)}
+                                        disabled={leadEditSaving || leadDeleting}
+                                        className="flex h-9 w-full items-center gap-2 rounded-sm px-2 text-[13px] font-bold text-slate-700 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-wait disabled:text-slate-300"
+                                    >
+                                        <span className="material-symbols-outlined text-[18px]">edit</span>
+                                        Sửa khách
+                                    </button>
+                                ) : null}
+                                {canDeleteTelesales ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => handleDeleteLead(lead)}
+                                        disabled={leadDeleting}
+                                        className="flex h-9 w-full items-center gap-2 rounded-sm px-2 text-[13px] font-bold text-red-600 hover:bg-red-50 disabled:cursor-wait disabled:text-slate-300"
+                                    >
+                                        <span className="material-symbols-outlined text-[18px]">delete</span>
+                                        {leadDeleting ? 'Đang xóa...' : 'Xóa khách'}
+                                    </button>
+                                ) : null}
                             </div>
                         ) : null}
-                    </div>
+                    </div> : null}
 
                     <div className="min-w-0">
                         <div className="truncate text-[14px] font-black text-slate-950">{lead.customer_name || 'Khách chưa có tên'}</div>
@@ -2611,7 +2715,7 @@ const TelesalesCrm = () => {
                                 <input
                                     type="checkbox"
                                     checked={zaloSameAsPhone}
-                                    disabled={inlineSaving}
+                                    disabled={inlineSaving || !canUpdateTelesales}
                                     onChange={(event) => handleZaloSameAsPhoneChange(lead, event.target.checked)}
                                     className="size-3.5 accent-teal-700"
                                 />
@@ -2635,7 +2739,7 @@ const TelesalesCrm = () => {
                             <span className="shrink-0 text-slate-600">Sale:</span>
                             <select
                                 value={lead.assigned_staff_id ? String(lead.assigned_staff_id) : ''}
-                                disabled={inlineSaving}
+                                disabled={inlineSaving || !canUpdateTelesales}
                                 onChange={(event) => handleInlineStaffChange(lead, event.target.value)}
                                 className="min-w-0 flex-1 appearance-none bg-transparent text-[11px] font-black text-slate-900 outline-none disabled:text-slate-400"
                                 aria-label={`Sửa sale ${lead.customer_name || lead.phone || lead.id}`}
@@ -2651,7 +2755,7 @@ const TelesalesCrm = () => {
                             <span className="shrink-0 text-slate-600">Tiềm năng:</span>
                             <select
                                 value={potentialSelectValue}
-                                disabled={inlineSaving}
+                                disabled={inlineSaving || !canUpdateTelesales}
                                 onChange={(event) => handleInlinePotentialChange(lead, event.target.value)}
                                 className="min-w-0 flex-1 appearance-none bg-transparent text-[11px] font-black outline-none disabled:text-slate-400"
                                 style={{ color: potentialOption?.color || '#0f172a' }}
@@ -2671,16 +2775,14 @@ const TelesalesCrm = () => {
                         <span className={`shrink-0 truncate text-[12px] font-black ${reminderProcessed ? 'text-emerald-700' : lead.do_not_call ? 'text-slate-600' : workTask?.is_overdue ? 'text-red-600' : 'text-teal-800'}`}>
                             {reminderLabel}
                         </span>
-                        {currentTaskDue ? <span className="shrink-0 text-slate-600">| hạn {currentTaskDue}</span> : null}
-                        {reminderAddedDateLabel ? <span className="min-w-0 truncate text-slate-600">| thêm {reminderAddedDateLabel}</span> : null}
                     </div>
 
                     <div className="mt-2 grid grid-cols-[minmax(0,1fr)_auto_auto] gap-1.5">
                         <input
                             type="text"
                             value={noteValue}
-                            disabled={inlineSaving}
-                            placeholder="Nhập ghi chú rồi Enter..."
+                            disabled={inlineSaving || !canUpdateTelesales}
+                            placeholder="Nhập ghi chú..."
                             onChange={(event) => setInlineNoteDrafts((prev) => ({ ...prev, [lead.id]: event.target.value }))}
                             onKeyDown={(event) => {
                                 if (event.key === 'Enter') {
@@ -2700,8 +2802,13 @@ const TelesalesCrm = () => {
                             className="h-8 min-w-0 rounded-sm border border-slate-200 bg-white px-2 text-[12px] font-semibold text-slate-700 shadow-sm outline-none focus:border-teal-500"
                             aria-label={`Sửa ghi chú ${lead.customer_name || lead.phone || lead.id}`}
                         />
-                        <button type="button" onClick={() => openCreateOrder(lead)} className="inline-flex h-8 items-center justify-center rounded-sm border border-teal-600 bg-white px-2.5 text-[12px] font-black text-teal-700 shadow-sm">
-                            Tạo đơn
+                        <button
+                            type="button"
+                            onClick={() => saveInlineNote(lead)}
+                            disabled={inlineSaving || !canUpdateTelesales || !mobileNoteChanged}
+                            className="inline-flex h-8 items-center justify-center rounded-sm border border-teal-600 bg-white px-2.5 text-[12px] font-black text-teal-700 shadow-sm disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-300"
+                        >
+                            Lưu
                         </button>
                         <button type="button" onClick={() => toggleHistory(lead)} disabled={inlineSaving} className="inline-flex size-8 shrink-0 items-center justify-center rounded-sm border border-teal-300 bg-white text-teal-700 shadow-sm" title="Xem lịch sử cũ">
                             <span className="material-symbols-outlined text-[18px]">{historyOpen ? 'keyboard_arrow_up' : 'keyboard_arrow_down'}</span>
@@ -2807,15 +2914,29 @@ const TelesalesCrm = () => {
                 </div>
 
                 <div className="min-w-0 overflow-visible rounded-sm border-0 bg-transparent shadow-none lg:overflow-hidden lg:border lg:border-slate-200 lg:bg-white lg:shadow-sm">
-                    <div className="relative mb-3 rounded-sm border border-slate-200 bg-white p-2 shadow-sm lg:hidden">
-                        <div className="flex h-9 items-center gap-1.5 overflow-hidden">
-                            <button type="button" onClick={() => setImportOpen(true)} className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-sm bg-teal-700 px-3 text-[12px] font-black text-white shadow-sm">
-                                <span className="material-symbols-outlined text-[17px]">add</span>
-                                Nhập
-                            </button>
-                            <button type="button" onClick={() => toggleMobileFilter('search')} className={mobileFilterButtonClass('search', Boolean(search))} aria-label="Tìm khách">
-                                <span className="material-symbols-outlined text-[19px]">search</span>
-                            </button>
+                    <div ref={mobileFilterRef} className="relative mb-3 rounded-sm border border-slate-200 bg-white p-2 shadow-sm lg:hidden">
+                        <div className={`grid items-center gap-1.5 ${canCreateTelesales ? 'grid-cols-[82px_minmax(0,1fr)]' : 'grid-cols-1'}`}>
+                            {canCreateTelesales ? (
+                                <button type="button" onClick={() => setImportOpen(true)} className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-sm bg-teal-700 px-3 text-[12px] font-black text-white shadow-sm">
+                                    <span className="material-symbols-outlined text-[17px]">add</span>
+                                    Nhập
+                                </button>
+                            ) : null}
+                            <div className="relative min-w-0">
+                                <span className="material-symbols-outlined pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[18px] text-slate-400">search</span>
+                                <input
+                                    value={search}
+                                    onChange={(event) => {
+                                        setSearch(event.target.value);
+                                        setPage(1);
+                                    }}
+                                    className="h-9 w-full rounded-sm border border-slate-200 bg-white pl-9 pr-2 text-[12px] font-semibold text-slate-900 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-teal-500 focus:ring-2 focus:ring-teal-500/10"
+                                    placeholder="Tìm khách, SĐT..."
+                                />
+                            </div>
+                        </div>
+
+                        <div className="mt-1.5 flex h-9 items-center gap-1.5 overflow-hidden">
                             <button type="button" onClick={() => toggleMobileFilter('work')} className={mobileFilterButtonClass('work', workStatus !== 'all')} aria-label="Lọc xử lý">
                                 <span className="material-symbols-outlined text-[19px]">fact_check</span>
                             </button>
@@ -2833,11 +2954,13 @@ const TelesalesCrm = () => {
                     </div>
 
                     <div className="hidden border-b border-slate-200 p-3 lg:block">
-                        <div className="grid grid-cols-1 gap-2 xl:grid-cols-[136px_minmax(150px,1fr)_150px_156px_128px_132px_160px_180px_180px_152px] xl:items-center">
-                            <button type="button" onClick={() => setImportOpen(true)} className={primaryButtonClassName}>
-                                <span className="material-symbols-outlined text-[18px]">add</span>
-                                Nhập khách
-                            </button>
+                        <div className="grid grid-cols-1 gap-2 xl:items-center" style={{ gridTemplateColumns: desktopToolbarColumns }}>
+                            {canCreateTelesales ? (
+                                <button type="button" onClick={() => setImportOpen(true)} className={primaryButtonClassName}>
+                                    <span className="material-symbols-outlined text-[18px]">add</span>
+                                    Nhập khách
+                                </button>
+                            ) : null}
 
                             <div className="relative min-w-0">
                                 <span className="material-symbols-outlined pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-slate-400">search</span>
@@ -2936,10 +3059,12 @@ const TelesalesCrm = () => {
                                 Thống kê
                             </button>
 
-                            <button type="button" onClick={() => setStatusManagerOpen(true)} className={secondaryButtonClassName}>
-                                <span className="material-symbols-outlined text-[18px]">settings</span>
-                                Trạng thái
-                            </button>
+                            {canConfigureTelesales ? (
+                                <button type="button" onClick={() => setStatusManagerOpen(true)} className={secondaryButtonClassName}>
+                                    <span className="material-symbols-outlined text-[18px]">settings</span>
+                                    Trạng thái
+                                </button>
+                            ) : null}
 
                             <select
                                 value={staffFilter}
@@ -2992,7 +3117,9 @@ const TelesalesCrm = () => {
 
                                 {columnSettingsOpen ? (
                                     <div className="absolute right-0 top-12 z-30 w-[220px] rounded-sm border border-slate-200 bg-white p-2 shadow-xl">
-                                        {columnOptions.map((column) => (
+                                        {columnOptions
+                                            .filter((column) => column.key !== 'createOrder' || canCreateOrderFromLead)
+                                            .map((column) => (
                                             <label key={column.key} className="flex h-9 items-center gap-2 rounded-sm px-2 text-[13px] font-semibold text-slate-700 hover:bg-slate-50">
                                                 <input
                                                     type="checkbox"
@@ -3025,15 +3152,17 @@ const TelesalesCrm = () => {
                         <table className="min-w-[1632px] table-fixed border-collapse">
                             <thead className="sticky top-0 z-20">
                                 <tr className="bg-slate-50 text-left text-[12px] font-bold text-slate-500">
-                                    <th className="w-[48px] border border-slate-200 px-2 py-3 text-center">
-                                        <span className="material-symbols-outlined text-[18px] text-slate-400" title="Thao tác khách">more_horiz</span>
-                                    </th>
+                                    {canUseLeadActions ? (
+                                        <th className="w-[48px] border border-slate-200 px-2 py-3 text-center">
+                                            <span className="material-symbols-outlined text-[18px] text-slate-400" title="Thao tác khách">more_horiz</span>
+                                        </th>
+                                    ) : null}
                                     {visibleColumns.customer ? <th className="w-[190px] border border-slate-200 px-3 py-3">Khách hàng</th> : null}
                                     {visibleColumns.phone ? <th className="w-[210px] border border-slate-200 px-3 py-3">SĐT / Zalo</th> : null}
                                     {visibleColumns.staff ? <th className="w-[140px] border border-slate-200 px-3 py-3">Sale phụ trách</th> : null}
                                     {visibleColumns.status ? <th className="w-[190px] border border-slate-200 px-3 py-3">Trạng thái</th> : null}
                                     {visibleColumns.potential ? <th className="w-[190px] border border-slate-200 px-3 py-3">Tiềm năng</th> : null}
-                                    {visibleColumns.createOrder ? <th className="w-[145px] border border-slate-200 px-3 py-3">Tạo đơn</th> : null}
+                                    {visibleColumns.createOrder && canCreateOrderFromLead ? <th className="w-[145px] border border-slate-200 px-3 py-3">Tạo đơn</th> : null}
                                     {visibleColumns.reminder ? <th className="w-[250px] border border-slate-200 px-3 py-3">Việc cần xử lý</th> : null}
                                     {visibleColumns.note ? <th className="w-[365px] border border-slate-200 px-3 py-3">Ghi chú</th> : null}
                                 </tr>
@@ -3079,7 +3208,7 @@ const TelesalesCrm = () => {
                                     return (
                                         <React.Fragment key={lead.id}>
                                             <tr id={`telesales-lead-${lead.id}`} data-telesales-lead-row={lead.id} className={`border-b border-slate-200 text-[13px] transition ${rowWasRestored || actionMenuOpenForLead ? 'bg-teal-50' : 'bg-white hover:bg-teal-50/40'}`}>
-                                                <td className="border border-slate-200 px-2 py-3 text-center align-middle">
+                                                {canUseLeadActions ? <td className="border border-slate-200 px-2 py-3 text-center align-middle">
                                                     <div ref={actionMenuOpenForLead ? actionMenuRef : null} className="relative inline-flex">
                                                         <button
                                                             type="button"
@@ -3095,28 +3224,32 @@ const TelesalesCrm = () => {
 
                                                         {actionMenuOpenForLead ? (
                                                             <div className="absolute left-0 top-10 z-40 w-[150px] rounded-sm border border-slate-200 bg-white p-1.5 text-left shadow-xl">
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={() => openEditLead(lead)}
-                                                                    disabled={leadEditSaving || leadDeleting}
-                                                                    className="flex h-9 w-full items-center gap-2 rounded-sm px-2 text-[13px] font-bold text-slate-700 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-wait disabled:text-slate-300 disabled:hover:bg-white"
-                                                                >
-                                                                    <span className="material-symbols-outlined text-[18px]">edit</span>
-                                                                    Sửa khách
-                                                                </button>
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={() => handleDeleteLead(lead)}
-                                                                    disabled={leadDeleting}
-                                                                    className="flex h-9 w-full items-center gap-2 rounded-sm px-2 text-[13px] font-bold text-red-600 hover:bg-red-50 disabled:cursor-wait disabled:text-slate-300 disabled:hover:bg-white"
-                                                                >
-                                                                    <span className="material-symbols-outlined text-[18px]">delete</span>
-                                                                    {leadDeleting ? 'Đang xóa...' : 'Xóa khách'}
-                                                                </button>
+                                                                {canUpdateTelesales ? (
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => openEditLead(lead)}
+                                                                        disabled={leadEditSaving || leadDeleting}
+                                                                        className="flex h-9 w-full items-center gap-2 rounded-sm px-2 text-[13px] font-bold text-slate-700 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-wait disabled:text-slate-300 disabled:hover:bg-white"
+                                                                    >
+                                                                        <span className="material-symbols-outlined text-[18px]">edit</span>
+                                                                        Sửa khách
+                                                                    </button>
+                                                                ) : null}
+                                                                {canDeleteTelesales ? (
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => handleDeleteLead(lead)}
+                                                                        disabled={leadDeleting}
+                                                                        className="flex h-9 w-full items-center gap-2 rounded-sm px-2 text-[13px] font-bold text-red-600 hover:bg-red-50 disabled:cursor-wait disabled:text-slate-300 disabled:hover:bg-white"
+                                                                    >
+                                                                        <span className="material-symbols-outlined text-[18px]">delete</span>
+                                                                        {leadDeleting ? 'Đang xóa...' : 'Xóa khách'}
+                                                                    </button>
+                                                                ) : null}
                                                             </div>
                                                         ) : null}
                                                     </div>
-                                                </td>
+                                                </td> : null}
 
                                                 {visibleColumns.customer ? <td className="border border-slate-200 px-3 py-3 align-middle">
                                                     <div className="min-w-0">
@@ -3136,7 +3269,7 @@ const TelesalesCrm = () => {
                                                         <input
                                                             type="checkbox"
                                                             checked={zaloSameAsPhone}
-                                                            disabled={inlineSaving}
+                                                            disabled={inlineSaving || !canUpdateTelesales}
                                                             onChange={(event) => handleZaloSameAsPhoneChange(lead, event.target.checked)}
                                                             className="size-3.5 accent-teal-700"
                                                         />
@@ -3156,7 +3289,7 @@ const TelesalesCrm = () => {
                                                 {visibleColumns.staff ? <td className="border border-slate-200 px-3 py-3 align-middle">
                                                     <select
                                                         value={lead.assigned_staff_id ? String(lead.assigned_staff_id) : ''}
-                                                        disabled={inlineSaving}
+                                                        disabled={inlineSaving || !canUpdateTelesales}
                                                         onChange={(event) => handleInlineStaffChange(lead, event.target.value)}
                                                         className={inlineSelectClassName}
                                                         aria-label={`Sửa sale ${lead.customer_name || lead.phone || lead.id}`}
@@ -3173,7 +3306,7 @@ const TelesalesCrm = () => {
                                                         <span className="pointer-events-none absolute left-3 top-1/2 z-10 size-3 -translate-y-1/2 rounded-full shadow-sm" style={{ backgroundColor: currentStatusColor }} />
                                                         <select
                                                             value={statusSelectValue}
-                                                            disabled={inlineSaving}
+                                                            disabled={inlineSaving || !canUpdateTelesales}
                                                             onChange={(event) => handleInlineStatusChange(lead, event.target.value)}
                                                             className={`${inlineSelectClassName} pl-8`}
                                                             style={{
@@ -3199,7 +3332,7 @@ const TelesalesCrm = () => {
                                                         <span className="pointer-events-none absolute left-3 top-1/2 z-10 size-3 -translate-y-1/2 rounded-full shadow-sm" style={{ backgroundColor: potentialOption?.color || '#94a3b8' }} />
                                                         <select
                                                             value={potentialSelectValue}
-                                                            disabled={inlineSaving}
+                                                            disabled={inlineSaving || !canUpdateTelesales}
                                                             onChange={(event) => handleInlinePotentialChange(lead, event.target.value)}
                                                             className={`${inlineSelectClassName} pl-8`}
                                                             style={{
@@ -3217,7 +3350,7 @@ const TelesalesCrm = () => {
                                                     </div>
                                                 </td> : null}
 
-                                                {visibleColumns.createOrder ? <td className="border border-slate-200 px-3 py-3 align-middle">
+                                                {visibleColumns.createOrder && canCreateOrderFromLead ? <td className="border border-slate-200 px-3 py-3 align-middle">
                                                     <button type="button" onClick={() => openCreateOrder(lead)} className="inline-flex h-9 w-full items-center justify-center rounded-sm bg-teal-700 px-2 text-[12px] font-bold text-white shadow-sm hover:bg-teal-800">
                                                         Tạo đơn
                                                     </button>
@@ -3247,7 +3380,7 @@ const TelesalesCrm = () => {
                                                             <input
                                                                 type="checkbox"
                                                                 checked={Boolean(lead.do_not_call)}
-                                                                disabled={inlineSaving}
+                                                                disabled={inlineSaving || !canUpdateTelesales}
                                                                 onChange={(event) => handleToggleDoNotCall(lead, event.target.checked)}
                                                                 className="size-3.5 accent-teal-700"
                                                             />
@@ -3261,7 +3394,7 @@ const TelesalesCrm = () => {
                                                         <input
                                                             type="text"
                                                             value={noteValue}
-                                                            disabled={inlineSaving}
+                                                            disabled={inlineSaving || !canUpdateTelesales}
                                                             placeholder="Nhập ghi chú rồi Enter..."
                                                             onChange={(event) => setInlineNoteDrafts((prev) => ({ ...prev, [lead.id]: event.target.value }))}
                                                             onKeyDown={(event) => {

@@ -7914,7 +7914,7 @@ const OrderForm = () => {
     const isEdit = !!id;
     const navigate = useNavigate();
     const { user } = useAuth();
-    const { showModal } = useUI();
+    const { showModal, showToast } = useUI();
     const canCreateOrders = hasAdminPermission(user, 'orders.create');
     const canUpdateOrders = hasAdminPermission(user, 'orders.update');
     const canViewCost = hasAdminDataPermission(user, 'cost.view');
@@ -8818,8 +8818,11 @@ const OrderForm = () => {
                     : item.cost_price;
                 const latestProductId = Number(latest?.product_id ?? latest?.id ?? 0) || 0;
                 const itemProductId = Number(item?.product_id ?? 0) || 0;
+                const mergedOptions = latestProductId === itemProductId
+                    ? mergeOrderLineOptions(item.options, extractOrderItemOptionsFromProductPayload(latest))
+                    : item.options;
                 const latestName = latestProductId === itemProductId
-                    ? resolveLatestOrderItemName(item, latest)
+                    ? resolveLatestOrderItemName({ ...item, options: mergedOptions }, latest)
                     : '';
                 const hasPlaceholderName = isPlaceholderProductName(item?.name, itemProductId);
                 const hasPlaceholderSnapshotName = isPlaceholderProductName(item?.snapshot_name, itemProductId);
@@ -8833,6 +8836,8 @@ const OrderForm = () => {
                     : '';
                 const currentSku = normalizeCanvasText(item?.sku);
                 const shouldHydrateSku = latestSku && (!currentSku || currentSku === 'N/A');
+                const latestParentProductId = Number(latest?.parent_product_id ?? mergedOptions?.variant_parent_id ?? 0) || 0;
+                const currentParentProductId = Number(item?.parent_product_id ?? item?.options?.variant_parent_id ?? 0) || 0;
 
                 return {
                     ...item,
@@ -8851,6 +8856,8 @@ const OrderForm = () => {
                     base_cost_price: shouldHydrateCostPrice
                         ? resolveRoundedImportCostValue(latest.cost_price ?? latest.expected_cost, nextCostPrice)
                         : item.base_cost_price,
+                    options: mergedOptions,
+                    parent_product_id: latestParentProductId || currentParentProductId || item.parent_product_id,
                     ...resolveInventorySnapshot(latest, item),
                     ...resolveProductSourceFields(latest, item),
                 };
@@ -10509,6 +10516,13 @@ const OrderForm = () => {
     }, []);
 
     const handleOpenOrderAiReplacePicker = useCallback((lineId, seedTerm = '', triggerElement = null) => {
+        const currentLine = formData.items.find((item) => normalizeCanvasText(item?.line_id) === normalizeCanvasText(lineId));
+        const currentLineProductId = Number(currentLine?.product_id ?? 0) || 0;
+        const currentLineFamilyParentId = getOrderLineReplacementFamilyParentId(currentLine);
+        if (currentLine && (!currentLineFamilyParentId || currentLineFamilyParentId === currentLineProductId)) {
+            void refreshOrderItemInventorySnapshot([currentLine]);
+        }
+
         orderAiReplaceAnchorRef.current = triggerElement;
         setShowSearchDropdown(false);
         setShowSearchHistory(false);
@@ -10529,7 +10543,7 @@ const OrderForm = () => {
         setOrderAiReplaceWarehouseSearchTerm('');
         setOrderAiReplaceWarehouseResults([]);
         setOrderAiReplaceWarehouseLoading(false);
-    }, [formData.items, selectedLineItemIds]);
+    }, [formData.items, refreshOrderItemInventorySnapshot, selectedLineItemIds]);
     const handleOpenActualProductPicker = useCallback((lineId, seedTerm = '', triggerElement = null) => {
         actualProductPickerAnchorRef.current = triggerElement;
         setShowSearchDropdown(false);
@@ -16341,6 +16355,18 @@ const OrderForm = () => {
                 : await orderApi.store(payload);
             const savedOrder = response?.data || null;
             const savedOrderKind = getNormalizedOrderKind(savedOrder?.order_kind || payload.order_kind);
+            const savedOrderNumber = String(savedOrder?.order_number || '').trim();
+            const savedOrderLabel = savedOrderNumber ? ` ${savedOrderNumber}` : '';
+
+            showToast({
+                type: 'success',
+                message: isEdit
+                    ? `Đã cập nhật đơn${savedOrderLabel}.`
+                    : savedOrderKind === DRAFT_ORDER_KIND
+                        ? `Đã lưu đơn nháp${savedOrderLabel}.`
+                        : `Đã lưu đơn mới${savedOrderLabel}.`,
+                duration: 2600,
+            });
 
             leaveGuardBypassRef.current = true;
             leaveGuardBaselineSnapshotRef.current = latestLeaveGuardSnapshot;

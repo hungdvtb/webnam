@@ -918,6 +918,109 @@ class OrderController extends Controller
             });
     }
 
+    private function applyOrderKindLookupConstraint($query, string $requestedKind, string $table = 'orders'): void
+    {
+        $query->where(function ($kindQuery) use ($requestedKind, $table) {
+            $kindQuery
+                ->where("{$table}.order_kind", $requestedKind)
+                ->orWhere(function ($fallbackQuery) use ($requestedKind, $table) {
+                    if ($requestedKind !== self::ORDER_KIND_OFFICIAL) {
+                        $fallbackQuery->whereRaw('1 = 0');
+                        return;
+                    }
+
+                    $fallbackQuery
+                        ->whereNull("{$table}.order_kind")
+                        ->orWhere("{$table}.order_kind", '');
+                });
+        });
+    }
+
+    private function matchingOrderSearchTermIdsFromIndexedLookups(
+        string $term,
+        int $accountId,
+        string $requestedKind,
+        bool $applyKind = true
+    ): array {
+        $containsLike = $this->containsLike($term);
+
+        if ($containsLike === null || $accountId <= 0) {
+            return [];
+        }
+
+        $ids = collect($this->matchingOrderNameIdsFromIndexedLookups($term, $accountId));
+
+        $orderQuery = Order::withTrashed()
+            ->where('account_id', $accountId)
+            ->where(function ($orderSearchQuery) use ($containsLike) {
+                $this->applyInsensitiveLike($orderSearchQuery, 'order_number', $containsLike);
+                $this->applyPhoneFieldConstraint($orderSearchQuery, 'customer_phone', $containsLike, true);
+                $this->applyInsensitiveLike($orderSearchQuery, 'shipping_address', $containsLike, true);
+                $this->applyInsensitiveLike($orderSearchQuery, 'notes', $containsLike, true);
+                $this->applyInsensitiveLike($orderSearchQuery, 'shipping_tracking_code', $containsLike, true);
+                $this->applyInsensitiveLike($orderSearchQuery, 'return_tracking_code', $containsLike, true);
+            });
+
+        if ($applyKind) {
+            $this->applyOrderKindLookupConstraint($orderQuery, $requestedKind);
+        }
+
+        $ids = $ids->merge($orderQuery->pluck('id'));
+
+        $itemQuery = DB::table('order_items')
+            ->join('orders', 'orders.id', '=', 'order_items.order_id')
+            ->where('orders.account_id', $accountId)
+            ->where(function ($itemSearchQuery) use ($containsLike) {
+                $this->applyInsensitiveLike($itemSearchQuery, 'order_items.product_sku_snapshot', $containsLike);
+                $this->applyInsensitiveLike($itemSearchQuery, 'order_items.product_name_snapshot', $containsLike, true);
+            });
+
+        if ($applyKind) {
+            $this->applyOrderKindLookupConstraint($itemQuery, $requestedKind, 'orders');
+        }
+
+        $ids = $ids->merge($itemQuery->pluck('order_items.order_id'));
+
+        $productQuery = DB::table('order_items')
+            ->join('orders', 'orders.id', '=', 'order_items.order_id')
+            ->join('products', 'products.id', '=', 'order_items.product_id')
+            ->where('orders.account_id', $accountId)
+            ->where(function ($productSearchQuery) use ($containsLike) {
+                $this->applyInsensitiveLike($productSearchQuery, 'products.sku', $containsLike);
+                $this->applyInsensitiveLike($productSearchQuery, 'products.name', $containsLike, true);
+            });
+
+        if ($applyKind) {
+            $this->applyOrderKindLookupConstraint($productQuery, $requestedKind, 'orders');
+        }
+
+        $ids = $ids->merge($productQuery->pluck('order_items.order_id'));
+
+        $shipmentQuery = DB::table('shipments')
+            ->join('orders', 'orders.id', '=', 'shipments.order_id')
+            ->where('orders.account_id', $accountId)
+            ->where(function ($shipmentSearchQuery) use ($containsLike) {
+                $this->applyInsensitiveLike($shipmentSearchQuery, 'shipments.customer_name', $containsLike);
+                $this->applyInsensitiveLike($shipmentSearchQuery, 'shipments.shipment_number', $containsLike);
+                $this->applyInsensitiveLike($shipmentSearchQuery, 'shipments.tracking_number', $containsLike, true);
+                $this->applyInsensitiveLike($shipmentSearchQuery, 'shipments.carrier_tracking_code', $containsLike, true);
+                $this->applyInsensitiveLike($shipmentSearchQuery, 'shipments.external_order_number', $containsLike, true);
+            });
+
+        if ($applyKind) {
+            $this->applyOrderKindLookupConstraint($shipmentQuery, $requestedKind, 'orders');
+        }
+
+        $ids = $ids->merge($shipmentQuery->pluck('shipments.order_id'));
+
+        return $ids
+            ->map(fn ($id) => (int) $id)
+            ->filter(fn (int $id) => $id > 0)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
     private function resolveOrderDisplayCustomerName(Order $order, array $nameAttributeIds = []): string
     {
         $customerName = trim((string) ($order->customer_name ?? ''));
@@ -3948,6 +4051,7 @@ class OrderController extends Controller
         $accountId = $this->resolveAccountId($request);
         $searchTerms = $this->extractSearchTerms($request);
         $searchScope = $this->normalizeOrderSearchScope($request->input('search_scope'));
+        $shouldApplyKindScope = $request->input('trashed') != '1';
 
         if ($request->input('trashed') == '1') {
             $query->onlyTrashed();
@@ -4001,11 +4105,11 @@ class OrderController extends Controller
         $this->applyInventoryOrderDrilldownFilters($query, $request);
 
         $query
-            ->when(!empty($searchTerms), function ($q) use ($searchTerms, $accountId, $searchScope) {
-                $q->where(function ($searchQuery) use ($searchTerms, $accountId, $searchScope) {
+            ->when(!empty($searchTerms), function ($q) use ($searchTerms, $accountId, $searchScope, $requestedKind, $shouldApplyKindScope) {
+                $q->where(function ($searchQuery) use ($searchTerms, $accountId, $searchScope, $requestedKind, $shouldApplyKindScope) {
                     foreach ($searchTerms as $index => $term) {
                         $method = $index === 0 ? 'where' : 'orWhere';
-                        $searchQuery->{$method}(function ($termQuery) use ($term, $accountId, $searchScope) {
+                        $searchQuery->{$method}(function ($termQuery) use ($term, $accountId, $searchScope, $requestedKind, $shouldApplyKindScope) {
                             if (
                                 $searchScope === self::ORDER_SEARCH_SCOPE_CUSTOMER_PHONE
                                 || ($searchScope === null && $this->isLikelyCustomerPhoneSearchTerm($term))
@@ -4016,6 +4120,23 @@ class OrderController extends Controller
 
                             if ($searchScope === self::ORDER_SEARCH_SCOPE_CUSTOMER_NAME) {
                                 $this->applyOrderNameSearch($termQuery, $term, $accountId, false, false);
+                                return;
+                            }
+
+                            if ($this->usesPostgresSearchDriver() && $accountId > 0) {
+                                $matchingIds = $this->matchingOrderSearchTermIdsFromIndexedLookups(
+                                    $term,
+                                    $accountId,
+                                    $requestedKind,
+                                    $shouldApplyKindScope
+                                );
+
+                                if (empty($matchingIds)) {
+                                    $termQuery->whereRaw('1 = 0');
+                                } else {
+                                    $termQuery->whereIn('orders.id', $matchingIds);
+                                }
+
                                 return;
                             }
 
@@ -4381,6 +4502,10 @@ class OrderController extends Controller
 
     private function calculateOrderListSummary($query): array
     {
+        if ($this->usesPostgresSearchDriver()) {
+            return $this->calculateOrderListSummaryWithAggregate($query);
+        }
+
         $summary = $this->emptyOrderListSummary();
 
         $summaryQuery = clone $query;
@@ -4428,6 +4553,78 @@ class OrderController extends Controller
             'report_revenue_total' => round((float) $summary['report_revenue_total'], 2),
             'report_cost_total' => round((float) $summary['report_cost_total'], 2),
             'report_profit_total' => round((float) $summary['report_profit_total'], 2),
+        ];
+    }
+
+    private function calculateOrderListSummaryWithAggregate($query): array
+    {
+        $summaryQuery = clone $query;
+        $summaryQuery->setEagerLoads([]);
+        $summaryQuery->select([
+            'id',
+            'total_price',
+            'cost_total',
+            'internal_shipping_fee',
+            'external_delivery_meta',
+            'report_revenue_total',
+            'report_cost_total',
+            'report_profit_total',
+        ]);
+
+        $externalShippingFeeSql = "
+            CASE
+                WHEN summary_orders.external_delivery_meta IS NULL THEN 0
+                WHEN summary_orders.external_delivery_meta->>'shipping_cost' ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                    THEN GREATEST(0, (summary_orders.external_delivery_meta->>'shipping_cost')::numeric)
+                ELSE 0
+            END
+        ";
+        $shipmentShippingFeeSql = "
+            (
+                SELECT GREATEST(0, COALESCE(shipments.shipping_cost, 0))
+                FROM shipments
+                WHERE shipments.order_id = summary_orders.id
+                    AND COALESCE(shipments.shipment_status, '') <> 'canceled'
+                ORDER BY shipments.created_at DESC, shipments.id DESC
+                LIMIT 1
+            )
+        ";
+        $recordedShippingFeeSql = "GREATEST(
+            GREATEST(0, COALESCE(summary_orders.internal_shipping_fee, 0)),
+            {$externalShippingFeeSql},
+            COALESCE({$shipmentShippingFeeSql}, 0)
+        )";
+        $estimatedShippingFeeSql = "CASE
+            WHEN {$recordedShippingFeeSql} > 0 THEN 0
+            ELSE ROUND(GREATEST(0, COALESCE(summary_orders.total_price, 0)) * 0.05, 2)
+        END";
+
+        $row = DB::query()
+            ->fromSub($summaryQuery->toBase(), 'summary_orders')
+            ->selectRaw('COUNT(*) AS order_count')
+            ->selectRaw('COALESCE(SUM(ROUND(COALESCE(summary_orders.total_price, 0)::numeric, 2)), 0) AS total_price')
+            ->selectRaw("COALESCE(SUM(ROUND(({$recordedShippingFeeSql})::numeric, 2)), 0) AS shipping_fee_recorded")
+            ->selectRaw("COALESCE(SUM({$estimatedShippingFeeSql}), 0) AS shipping_fee_estimated")
+            ->selectRaw("COALESCE(SUM(ROUND(({$recordedShippingFeeSql} + {$estimatedShippingFeeSql})::numeric, 2)), 0) AS shipping_fee_total")
+            ->selectRaw('COALESCE(SUM(ROUND(COALESCE(summary_orders.cost_total, 0)::numeric, 2)), 0) AS goods_total')
+            ->selectRaw('COALESCE(SUM(ROUND(COALESCE(summary_orders.report_revenue_total, summary_orders.total_price, 0)::numeric, 2)), 0) AS report_revenue_total')
+            ->selectRaw('COALESCE(SUM(ROUND(COALESCE(summary_orders.report_cost_total, summary_orders.cost_total, 0)::numeric, 2)), 0) AS report_cost_total')
+            ->selectRaw('COALESCE(SUM(ROUND(COALESCE(summary_orders.report_profit_total, 0)::numeric, 2)), 0) AS report_profit_total')
+            ->first();
+
+        $shippingFeeTotal = round((float) ($row->shipping_fee_total ?? 0), 2);
+
+        return [
+            'order_count' => (int) ($row->order_count ?? 0),
+            'total_price' => round((float) ($row->total_price ?? 0), 2),
+            'shipping_fee_recorded' => round((float) ($row->shipping_fee_recorded ?? 0), 2),
+            'shipping_fee_estimated' => round((float) ($row->shipping_fee_estimated ?? 0), 2),
+            'shipping_fee_total' => $shippingFeeTotal,
+            'shipping_fee' => $shippingFeeTotal,
+            'goods_total' => round((float) ($row->goods_total ?? 0), 2),
+            'report_revenue_total' => round((float) ($row->report_revenue_total ?? 0), 2),
+            'report_cost_total' => round((float) ($row->report_cost_total ?? 0), 2),
+            'report_profit_total' => round((float) ($row->report_profit_total ?? 0), 2),
         ];
     }
 

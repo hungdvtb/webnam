@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { authApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
-import { normalizeAdminPermissions } from '../utils/adminPermissions';
+import { hasAdminPermission, normalizeAdminPermissions } from '../utils/adminPermissions';
 
 const LOOPBACK_HOST_PATTERN = /^(localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|::1)$/i;
 
@@ -64,7 +64,11 @@ const Login = () => {
                 // If they have zero permissions (empty array), fall back to user dashboard.
                 const staffPermissions = normalizeAdminPermissions(response.data.user);
                 if (staffPermissions.length > 0) {
-                    navigate('/admin');
+                    navigate(
+                        staffPermissions.includes('dashboard') || !hasAdminPermission(response.data.user, 'telesales.view')
+                            ? '/admin'
+                            : '/admin/telesales'
+                    );
                 } else {
                     navigate('/dashboard');
                 }

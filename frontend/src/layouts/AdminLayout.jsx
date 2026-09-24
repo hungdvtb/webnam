@@ -312,6 +312,7 @@ const AdminLayout = () => {
     const visibleInventoryNavItems = INVENTORY_NAV_ITEMS.filter(canAccessInventoryItem);
 
     const canAccessLeadBoard = canAccess('leads');
+    const canAccessTelesalesCrm = canAccess('telesales') || hasAdminPermission(user, 'telesales.view');
     const canAccessReports = canAccess('reports');
     const canAccessPayroll = canAccess('payroll');
     const canAccessInventoryMenu = visibleInventoryNavItems.length > 0;
@@ -335,7 +336,7 @@ const AdminLayout = () => {
         if (path.startsWith('/admin/reviews')) return 'products';
         if (path.startsWith('/admin/product-faqs')) return 'products';
         if (path.startsWith('/admin/categories')) return 'categories';
-        if (path.startsWith('/admin/telesales')) return 'leads';
+        if (path.startsWith('/admin/telesales')) return 'telesales.view';
         if (path.startsWith('/admin/quick-replies')) return 'leads';
         if (path.startsWith('/admin/leads')) return 'leads';
         if (path.startsWith('/admin/orders')) return 'orders';
@@ -606,7 +607,7 @@ const AdminLayout = () => {
                         </Link>
                     )}
 
-                    {(canAccess('orders') || canAccess('customers') || canAccess('leads')) && (
+                    {(canAccess('orders') || canAccess('customers') || canAccess('leads') || canAccessTelesalesCrm) && (
                         <div className="space-y-1">
                             <button
                                 onClick={() => setIsOrdersOpen(!isOrdersOpen)}
@@ -650,7 +651,7 @@ const AdminLayout = () => {
                                             </SidebarText>
                                         </Link>
                                     )}
-                                    {canAccessLeadBoard && (
+                                    {canAccessTelesalesCrm && (
                                         <Link
                                             to="/admin/telesales"
                                             title="CRM Telesales"

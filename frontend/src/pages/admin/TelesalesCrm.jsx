@@ -2635,10 +2635,10 @@ const TelesalesCrm = () => {
         const currentTask = lead.current_task || null;
         const taskStatusDisplay = getTaskStatusDisplay(currentTask);
         const currentStatusOption = activeStatuses.find((status) => String(status.id) === String(statusValue));
+        const statusSelectValue = taskStatusDisplay ? taskStatusDisplay.value : (currentStatusOption ? statusValue : '');
         const currentStatusColor = taskStatusDisplay?.color || currentStatusOption?.color || '#2563eb';
         const actionMenuOpenForLead = String(actionMenuLeadId || '') === String(lead.id);
         const leadDeleting = String(deletingLeadId || '') === String(lead.id);
-        const statusLabel = taskStatusDisplay?.label || currentStatusOption?.name || 'Số mới';
         const reminderLabel = formatMobileReminderLabel(labelForReminder(lead));
 
         return (
@@ -2686,20 +2686,11 @@ const TelesalesCrm = () => {
 
                     <div className="min-w-0">
                         <div className="truncate text-[14px] font-black text-slate-950">{lead.customer_name || 'Khách chưa có tên'}</div>
-                        <div className="mt-0.5 truncate text-[12px] font-semibold text-slate-700">{customerAddedLabel || 'Chưa có ngày thêm'}</div>
                     </div>
 
-                    <span
-                        className="inline-flex h-7 max-w-[132px] items-center gap-1.5 truncate rounded-sm border px-2 text-[11px] font-black"
-                        style={{
-                            borderColor: `${currentStatusColor}55`,
-                            color: currentStatusColor,
-                            backgroundColor: `${currentStatusColor}10`,
-                        }}
-                    >
-                        <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: currentStatusColor }} />
-                        <span className="truncate">{statusLabel}</span>
-                    </span>
+                    <div className="max-w-[132px] truncate pt-0.5 text-right text-[12px] font-semibold text-slate-700">
+                        {customerAddedLabel || 'Chưa có ngày thêm'}
+                    </div>
                 </div>
 
                 <div className="px-2.5 py-2.5">
@@ -2724,17 +2715,21 @@ const TelesalesCrm = () => {
 
                     <div className="mt-2 grid grid-cols-2 gap-1.5">
                         <label className="flex min-h-[34px] items-center gap-1 rounded-sm bg-slate-50 px-2 text-[11px] font-black text-slate-700">
-                            <span className="shrink-0 text-slate-600">Sale:</span>
+                            <span className="shrink-0 text-slate-600">Trạng thái:</span>
                             <select
-                                value={lead.assigned_staff_id ? String(lead.assigned_staff_id) : ''}
+                                value={statusSelectValue}
                                 disabled={inlineSaving || !canUpdateTelesales}
-                                onChange={(event) => handleInlineStaffChange(lead, event.target.value)}
-                                className="min-w-0 flex-1 appearance-none bg-transparent text-[11px] font-black text-slate-900 outline-none disabled:text-slate-400"
-                                aria-label={`Sửa sale ${lead.customer_name || lead.phone || lead.id}`}
+                                onChange={(event) => handleInlineStatusChange(lead, event.target.value)}
+                                className="min-w-0 flex-1 appearance-none bg-transparent text-[11px] font-black outline-none disabled:text-slate-400"
+                                style={{ color: currentStatusColor }}
+                                aria-label={`Sửa trạng thái ${lead.customer_name || lead.phone || lead.id}`}
                             >
-                                <option value="">Chưa gán</option>
-                                {bootstrap.staffs.map((staff) => (
-                                    <option key={staff.id} value={staff.id}>{staff.name}</option>
+                                {taskStatusDisplay ? (
+                                    <option value={taskStatusDisplay.value} disabled>{taskStatusDisplay.label}</option>
+                                ) : null}
+                                <option value="">Chưa chọn</option>
+                                {activeStatuses.map((status) => (
+                                    <option key={status.id} value={status.id}>{status.name}</option>
                                 ))}
                             </select>
                         </label>

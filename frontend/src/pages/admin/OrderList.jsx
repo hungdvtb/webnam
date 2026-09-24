@@ -109,11 +109,16 @@ DEFAULT_COLUMNS.splice(3, 0, { id: 'profit_center', label: 'Người quản lý'
 const ORDER_TABLE_COLUMNS = [...DEFAULT_COLUMNS];
 const ORDER_LIST_STORAGE_KEY = 'order_list';
 const ORDER_LIST_VIEW_STATE_STORAGE_KEY = 'order_list_view_state_v1';
+const ORDER_LIST_FAST_RETURN_STORAGE_KEY = 'order_list_fast_return_v1';
+const ORDER_LIST_SAVED_ORDER_HANDOFF_STORAGE_KEY = 'order_list_saved_order_handoff_v1';
+const ORDER_LIST_FAST_RETURN_TTL_MS = 5 * 60 * 1000;
 const ORDER_COST_TOTAL_COLUMN_ID = 'cost_total';
 const SHIPPING_FEE_COLUMN_ID = 'shipping_fee';
 const ORDER_SOURCE_COLUMN_ID = 'source';
 const ORDER_PROFIT_CENTER_COLUMN_ID = 'profit_center';
 const ORDER_COLUMN_STORAGE_SCOPE_PAGE = 'order_list';
+const ORDER_LIST_AUTO_REFRESH_INTERVAL_MS = 7000;
+const ORDER_LIST_AUTO_REFRESH_FOCUS_COOLDOWN_MS = 1500;
 const WAREHOUSE_PICKING_HISTORY_STORAGE_KEY_PREFIX = 'warehouse_picking_replacement_history_v1';
 const WAREHOUSE_PICKING_HISTORY_LIMIT = 6;
 const WAREHOUSE_PICKING_HISTORY_MAX_SOURCES = 400;
@@ -3647,6 +3652,310 @@ const normalizeOrderListSummary = (value, fallbackCount = 0) => {
     };
 };
 
+const normalizeFastReturnTimestamp = (value) => {
+    const timestamp = Date.parse(value || '');
+    return Number.isFinite(timestamp) ? timestamp : 0;
+};
+
+const isFreshOrderListFastReturnState = (value) => (
+    Date.now() - normalizeFastReturnTimestamp(value?.updated_at) <= ORDER_LIST_FAST_RETURN_TTL_MS
+);
+
+const normalizeFastReturnPagination = (value, fallback = {}) => ({
+    current_page: Math.max(1, Number.parseInt(value?.current_page ?? fallback.current_page, 10) || 1),
+    last_page: Math.max(1, Number.parseInt(value?.last_page ?? fallback.last_page, 10) || 1),
+    total: Math.max(0, Number.parseInt(value?.total ?? fallback.total, 10) || 0),
+    per_page: Math.max(1, Number.parseInt(value?.per_page ?? fallback.per_page, 10) || 20),
+});
+
+const buildOrderListFastReturnScopeKey = ({ view, accountId, filters, pagination } = {}) => {
+    const normalizedPagination = normalizeFastReturnPagination(pagination);
+
+    return JSON.stringify({
+        view: view || 'main',
+        account_id: String(accountId || ''),
+        filters: normalizeStoredOrderFilters(filters),
+        page: normalizedPagination.current_page,
+        per_page: normalizedPagination.per_page,
+    });
+};
+
+const normalizeOptimisticOrderItem = (item = {}, index = 0) => {
+    const productId = Number(item.product_id) || null;
+    const actualProductId = Number(item.actual_product_id) || null;
+    const name = String(item.product_name_snapshot || item.name || '').trim();
+    const sku = String(item.product_sku_snapshot || item.sku || '').trim();
+    const actualName = String(item.actual_product_name_snapshot || item.actual_name || '').trim();
+    const actualSku = String(item.actual_product_sku_snapshot || item.actual_sku || '').trim();
+
+    return {
+        id: item.id || item.order_item_id || `optimistic-${productId || index}-${index + 1}`,
+        order_id: item.order_id || null,
+        product_id: productId,
+        actual_product_id: actualProductId,
+        product_name_snapshot: name,
+        product_sku_snapshot: sku,
+        actual_product_name_snapshot: actualName,
+        actual_product_sku_snapshot: actualSku,
+        sort_order: Number(item.sort_order) || index + 1,
+        quantity: Number(item.quantity) || 0,
+        price: Number(item.price) || 0,
+        product: productId ? { id: productId, name, sku } : null,
+        actual_product: actualProductId ? { id: actualProductId, name: actualName, sku: actualSku } : null,
+    };
+};
+
+const buildOptimisticOrderListRow = (handoff = {}) => {
+    const order = handoff.order || {};
+    const submittedItems = Array.isArray(handoff.items) ? handoff.items : [];
+    const orderKind = order.order_kind || handoff.order_kind || MAIN_ORDER_KIND;
+
+    return {
+        ...order,
+        id: Number(order.id) || null,
+        order_kind: orderKind,
+        order_type: normalizeOrderType(order.order_type || ORDER_TYPE_STANDARD),
+        customer_name: order.customer_name || '',
+        customer_phone: order.customer_phone || '',
+        shipping_address: order.shipping_address || '',
+        status: order.status || 'new',
+        source: order.source || UNKNOWN_ORDER_SOURCE,
+        total_price: Number(order.total_price) || 0,
+        cost_total: Number(order.cost_total) || 0,
+        internal_shipping_fee: Number(order.internal_shipping_fee ?? order.shipping_fee) || 0,
+        shipping_fee: Number(order.shipping_fee ?? order.internal_shipping_fee) || 0,
+        print_count: Number(order.print_count) || 0,
+        displayed_at: order.displayed_at || order.officialized_at || order.draft_created_at || order.created_at || new Date().toISOString(),
+        active_shipment: order.active_shipment || null,
+        activeShipment: order.activeShipment || null,
+        inventory_slip_summary: order.inventory_slip_summary || null,
+        items: (Array.isArray(order.items) && order.items.length ? order.items : submittedItems)
+            .map(normalizeOptimisticOrderItem),
+        is_optimistic_saved_order: true,
+    };
+};
+
+const mergeSavedOrderIntoFastReturnOrders = (orders = [], savedRow = null, mode = 'create') => {
+    if (!savedRow?.id) {
+        return Array.isArray(orders) ? orders : [];
+    }
+
+    const normalizedOrders = Array.isArray(orders) ? orders : [];
+    const existingIndex = normalizedOrders.findIndex((order) => Number(order?.id) === Number(savedRow.id));
+    const withoutSavedOrder = normalizedOrders.filter((order) => Number(order?.id) !== Number(savedRow.id));
+
+    if (mode === 'update' && existingIndex >= 0) {
+        const nextOrders = [...normalizedOrders];
+        nextOrders[existingIndex] = {
+            ...normalizedOrders[existingIndex],
+            ...savedRow,
+            items: savedRow.items?.length ? savedRow.items : normalizedOrders[existingIndex]?.items,
+        };
+        return nextOrders;
+    }
+
+    return [savedRow, ...withoutSavedOrder];
+};
+
+const mergeSavedOrderIntoFastReturnSummary = (summary, savedRow, mode = 'create') => {
+    const normalizedSummary = normalizeOrderListSummary(summary);
+    if (!savedRow?.id || mode === 'update') {
+        return normalizedSummary;
+    }
+
+    const shippingFee = Number(savedRow.internal_shipping_fee ?? savedRow.shipping_fee) || 0;
+    const totalPrice = Number(savedRow.total_price) || 0;
+    const costTotal = Number(savedRow.cost_total) || 0;
+
+    return {
+        ...normalizedSummary,
+        order_count: normalizedSummary.order_count + 1,
+        total_price: normalizedSummary.total_price + totalPrice,
+        shipping_fee_recorded: normalizedSummary.shipping_fee_recorded + shippingFee,
+        shipping_fee_total: normalizedSummary.shipping_fee_total + shippingFee,
+        shipping_fee: normalizedSummary.shipping_fee + shippingFee,
+        goods_total: normalizedSummary.goods_total + costTotal,
+        report_revenue_total: normalizedSummary.report_revenue_total + totalPrice,
+        report_cost_total: normalizedSummary.report_cost_total + costTotal,
+    };
+};
+
+const readAndClearSavedOrderHandoff = ({ expectedView, accountId } = {}) => {
+    if (typeof window === 'undefined') {
+        return null;
+    }
+
+    try {
+        const rawValue = window.sessionStorage.getItem(ORDER_LIST_SAVED_ORDER_HANDOFF_STORAGE_KEY);
+        if (!rawValue) {
+            return null;
+        }
+
+        window.sessionStorage.removeItem(ORDER_LIST_SAVED_ORDER_HANDOFF_STORAGE_KEY);
+        const parsedValue = JSON.parse(rawValue);
+        if (!parsedValue || typeof parsedValue !== 'object' || Array.isArray(parsedValue)) {
+            return null;
+        }
+
+        if (!isFreshOrderListFastReturnState(parsedValue)) {
+            return null;
+        }
+
+        if (String(parsedValue.account_id || '') !== String(accountId || '')) {
+            return null;
+        }
+
+        if (String(parsedValue.view || '') !== String(expectedView || '')) {
+            return null;
+        }
+
+        return parsedValue;
+    } catch (error) {
+        console.warn('Cannot restore saved order handoff.', error);
+        return null;
+    }
+};
+
+const readOrderListFastReturnState = ({ expectedView, accountId, expectedFilters, fallbackPagination } = {}) => {
+    if (typeof window === 'undefined') {
+        return null;
+    }
+
+    try {
+        const rawValue = window.sessionStorage.getItem(ORDER_LIST_FAST_RETURN_STORAGE_KEY);
+        if (!rawValue) {
+            return null;
+        }
+
+        const parsedValue = JSON.parse(rawValue);
+        if (!parsedValue || typeof parsedValue !== 'object' || Array.isArray(parsedValue)) {
+            return null;
+        }
+
+        if (!isFreshOrderListFastReturnState(parsedValue)) {
+            window.sessionStorage.removeItem(ORDER_LIST_FAST_RETURN_STORAGE_KEY);
+            return null;
+        }
+
+        if (String(parsedValue.account_id || '') !== String(accountId || '')) {
+            return null;
+        }
+
+        if (String(parsedValue.view || '') !== String(expectedView || '')) {
+            return null;
+        }
+
+        const expectedScopeKey = buildOrderListFastReturnScopeKey({
+            view: expectedView,
+            accountId,
+            filters: expectedFilters,
+            pagination: fallbackPagination,
+        });
+        const parsedScopeKey = parsedValue.scope_key || buildOrderListFastReturnScopeKey({
+            view: parsedValue.view,
+            accountId: parsedValue.account_id,
+            filters: parsedValue.filters,
+            pagination: parsedValue.pagination,
+        });
+
+        if (parsedScopeKey !== expectedScopeKey) {
+            return null;
+        }
+
+        return {
+            orders: Array.isArray(parsedValue.orders) ? parsedValue.orders : [],
+            summary: normalizeOrderListSummary(parsedValue.summary, parsedValue.pagination?.total),
+            outsideDeliveryUnpaidSummary: normalizeOrderListSummary(parsedValue.outside_delivery_unpaid_summary),
+            pagination: normalizeFastReturnPagination(parsedValue.pagination, fallbackPagination),
+        };
+    } catch (error) {
+        console.warn('Cannot restore order list fast-return state.', error);
+        return null;
+    }
+};
+
+const buildInitialOrderListFastReturnState = ({ expectedView, accountId, expectedFilters, fallbackPagination } = {}) => {
+    const fastReturnState = readOrderListFastReturnState({
+        expectedView,
+        accountId,
+        expectedFilters,
+        fallbackPagination,
+    });
+    const savedOrderHandoff = readAndClearSavedOrderHandoff({ expectedView, accountId });
+
+    if (!fastReturnState && !savedOrderHandoff) {
+        return null;
+    }
+
+    const baseState = fastReturnState || {
+        orders: [],
+        summary: createEmptyOrderListSummary(),
+        outsideDeliveryUnpaidSummary: createEmptyOrderListSummary(),
+        pagination: normalizeFastReturnPagination(fallbackPagination),
+    };
+
+    if (!savedOrderHandoff) {
+        return baseState;
+    }
+
+    const savedRow = buildOptimisticOrderListRow(savedOrderHandoff);
+    const mode = savedOrderHandoff.mode || 'create';
+    const orders = mergeSavedOrderIntoFastReturnOrders(baseState.orders, savedRow, mode);
+    const summary = mergeSavedOrderIntoFastReturnSummary(baseState.summary, savedRow, mode);
+    const pagination = {
+        ...baseState.pagination,
+        total: Math.max(
+            orders.length,
+            Number(baseState.pagination?.total) + (mode === 'update' ? 0 : 1)
+        ),
+    };
+
+    return {
+        ...baseState,
+        orders,
+        summary,
+        pagination,
+    };
+};
+
+const writeOrderListFastReturnState = ({
+    view,
+    accountId,
+    filters,
+    orders,
+    summary,
+    outsideDeliveryUnpaidSummary,
+    pagination,
+} = {}) => {
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    try {
+        const normalizedPagination = normalizeFastReturnPagination(pagination);
+        const normalizedFilters = normalizeStoredOrderFilters(filters);
+
+        window.sessionStorage.setItem(ORDER_LIST_FAST_RETURN_STORAGE_KEY, JSON.stringify({
+            view,
+            account_id: accountId || '',
+            filters: normalizedFilters,
+            scope_key: buildOrderListFastReturnScopeKey({
+                view,
+                accountId,
+                filters: normalizedFilters,
+                pagination: normalizedPagination,
+            }),
+            orders: Array.isArray(orders) ? orders.slice(0, 100) : [],
+            summary: normalizeOrderListSummary(summary, pagination?.total),
+            outside_delivery_unpaid_summary: normalizeOrderListSummary(outsideDeliveryUnpaidSummary),
+            pagination: normalizedPagination,
+            updated_at: new Date().toISOString(),
+        }));
+    } catch (error) {
+        console.warn('Cannot persist order list fast-return state.', error);
+    }
+};
+
 const buildOrderStatusFilterSelections = (value, statusMap) => (
     normalizeOrderListFilterValues(value).map((statusCode) => ({
         code: statusCode,
@@ -5388,18 +5697,54 @@ const OrderList = () => {
     const returnWorkbenchStorageScopeKey = `${activeAccountStorageKey}::${activeSiteStorageKey}`;
     const filterRef = useRef(null);
     const columnSettingsRef = useRef(null);
+    const initialListParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
+    const routeOrderScope = useMemo(() => parseOrderListRouteScope(location.search), [location.search]);
+    const routeReportScope = useMemo(
+        () => readOrderReportDrilldownScope(routeOrderScope.reportScopeKey),
+        [routeOrderScope.reportScopeKey],
+    );
+    const routeScopedOrderIds = useMemo(
+        () => parseOrderIdList(routeReportScope?.filters?.order_ids?.length ? routeReportScope.filters.order_ids : routeOrderScope.orderIds),
+        [routeOrderScope.orderIds, routeReportScope?.filters?.order_ids],
+    );
+    const routeOrderIdsKey = routeScopedOrderIds.join(',');
+    const routeScopedFilters = useMemo(() => (
+        routeReportScope?.filters
+            ? normalizeStoredOrderFilters(routeReportScope.filters, '', routeScopedOrderIds)
+            : null
+    ), [routeOrderIdsKey, routeReportScope?.filters]);
+    const routeScopedFiltersKey = routeReportScope?.filters
+        ? `report:${routeOrderScope.reportScopeKey}`
+        : (routeOrderIdsKey ? `orders:${routeOrderIdsKey}` : '');
+    const hasRouteScopedFilters = Boolean(routeScopedFiltersKey);
+    const initialView = useMemo(() => getOrderListViewFromParams(initialListParams), [initialListParams]);
+    const initialStoredListState = useMemo(() => readPersistedOrderListState({
+        expectedView: initialView,
+        fallbackSearch: routeScopedOrderIds.length
+            ? ''
+            : (typeof window === 'undefined' ? '' : (window.localStorage.getItem('order_list_search_current') || '')),
+        orderIds: routeScopedOrderIds,
+    }), [initialView, routeOrderIdsKey, routeScopedOrderIds]);
+    const initialFastReturnState = useMemo(() => buildInitialOrderListFastReturnState({
+        expectedView: initialView,
+        accountId: activeAccountId,
+        expectedFilters: routeScopedFilters || initialStoredListState.filters,
+        fallbackPagination: initialStoredListState.pagination,
+    }), [activeAccountId, initialStoredListState.filters, initialStoredListState.pagination, initialView, routeScopedFilters]);
     const [orderStatuses, setOrderStatuses] = useState([]);
     const [profitCenters, setProfitCenters] = useState([]);
-    const [orders, setOrders] = useState([]);
-    const [orderSummary, setOrderSummary] = useState(() => createEmptyOrderListSummary());
-    const [outsideDeliveryUnpaidSummary, setOutsideDeliveryUnpaidSummary] = useState(() => createEmptyOrderListSummary());
+    const [orders, setOrders] = useState(() => initialFastReturnState?.orders || []);
+    const [orderSummary, setOrderSummary] = useState(() => initialFastReturnState?.summary || createEmptyOrderListSummary());
+    const [outsideDeliveryUnpaidSummary, setOutsideDeliveryUnpaidSummary] = useState(() => (
+        initialFastReturnState?.outsideDeliveryUnpaidSummary || createEmptyOrderListSummary()
+    ));
     const [allAttributes, setAllAttributes] = useState([]);
     const [tableColumns, setTableColumns] = useState(() => ORDER_TABLE_COLUMNS);
     const permittedTableColumns = useMemo(
         () => (canViewCost ? tableColumns : tableColumns.filter((column) => column.id !== ORDER_COST_TOTAL_COLUMN_ID)),
         [canViewCost, tableColumns]
     );
-    const [loading, setLoading] = useState(true);
+    const [loading, setLoading] = useState(() => !initialFastReturnState);
     const [selectedIds, setSelectedIdsState] = useState([]);
     const selectedIdsRef = useRef(selectedIds);
     const setSelectedIds = useCallback((value) => {
@@ -5431,34 +5776,6 @@ const OrderList = () => {
     const [showColumnSettings, setShowColumnSettings] = useState(false);
     const [bulkAttributeOpen, setBulkAttributeOpen] = useState(false);
     const [bulkAttributeSubmitting, setBulkAttributeSubmitting] = useState(false);
-    const initialListParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
-    const routeOrderScope = useMemo(() => parseOrderListRouteScope(location.search), [location.search]);
-    const routeReportScope = useMemo(
-        () => readOrderReportDrilldownScope(routeOrderScope.reportScopeKey),
-        [routeOrderScope.reportScopeKey],
-    );
-    const routeScopedOrderIds = useMemo(
-        () => parseOrderIdList(routeReportScope?.filters?.order_ids?.length ? routeReportScope.filters.order_ids : routeOrderScope.orderIds),
-        [routeOrderScope.orderIds, routeReportScope?.filters?.order_ids],
-    );
-    const routeOrderIdsKey = routeScopedOrderIds.join(',');
-    const routeScopedFilters = useMemo(() => (
-        routeReportScope?.filters
-            ? normalizeStoredOrderFilters(routeReportScope.filters, '', routeScopedOrderIds)
-            : null
-    ), [routeOrderIdsKey, routeReportScope?.filters]);
-    const routeScopedFiltersKey = routeReportScope?.filters
-        ? `report:${routeOrderScope.reportScopeKey}`
-        : (routeOrderIdsKey ? `orders:${routeOrderIdsKey}` : '');
-    const hasRouteScopedFilters = Boolean(routeScopedFiltersKey);
-    const initialView = useMemo(() => getOrderListViewFromParams(initialListParams), [initialListParams]);
-    const initialStoredListState = useMemo(() => readPersistedOrderListState({
-        expectedView: initialView,
-        fallbackSearch: routeScopedOrderIds.length
-            ? ''
-            : (typeof window === 'undefined' ? '' : (window.localStorage.getItem('order_list_search_current') || '')),
-        orderIds: routeScopedOrderIds,
-    }), [initialView, routeOrderIdsKey, routeScopedOrderIds]);
     const [currentView, setCurrentView] = useState(() => initialView);
     const [copiedText, setCopiedText] = useState(null);
     const [statusMenuOrderId, setStatusMenuOrderId] = useState(null);
@@ -5570,6 +5887,7 @@ const OrderList = () => {
     const shippingAlertRef = useRef(null);
     const previousUnreadRef = useRef([]);
     const orderRequestAbortRef = useRef(null);
+    const orderListAutoRefreshLastRunRef = useRef(0);
     const clearSearchResponseCacheRef = useRef(new Map());
     const suppressSearchSyncRef = useRef(false);
     const previousSearchDraftRef = useRef('');
@@ -5577,7 +5895,7 @@ const OrderList = () => {
     const initialRestoredPageRef = useRef(initialStoredListState.pagination.current_page || 1);
     const hasInitializedCurrentViewRef = useRef(false);
 
-    const [pagination, setPagination] = useState(() => initialStoredListState.pagination);
+    const [pagination, setPagination] = useState(() => initialFastReturnState?.pagination || initialStoredListState.pagination);
     const [filters, setFilters] = useState(() => routeScopedFilters || initialStoredListState.filters);
 
     const [sortConfig, setSortConfig] = useState(() => {
@@ -5637,7 +5955,7 @@ const OrderList = () => {
         { resetDefaultToSystem: true }
     );
 
-    const [hasLoadedOrdersOnce, setHasLoadedOrdersOnce] = useState(false);
+    const [hasLoadedOrdersOnce, setHasLoadedOrdersOnce] = useState(() => Boolean(initialFastReturnState));
     const isTrashView = currentView === 'trash';
     const isDraftView = currentView === 'draft';
     const isMainView = currentView === 'main';
@@ -5986,17 +6304,32 @@ const OrderList = () => {
     };
 
     const applyOrderListResponse = useCallback((payload = {}) => {
-        setOrders(Array.isArray(payload.data) ? payload.data : []);
-        setOrderSummary(normalizeOrderListSummary(payload.summary, payload.total));
-        setOutsideDeliveryUnpaidSummary(normalizeOrderListSummary(payload.outside_delivery_unpaid_summary));
-        setPagination({
+        const nextOrders = Array.isArray(payload.data) ? payload.data : [];
+        const nextSummary = normalizeOrderListSummary(payload.summary, payload.total);
+        const nextOutsideDeliveryUnpaidSummary = normalizeOrderListSummary(payload.outside_delivery_unpaid_summary);
+        const nextPagination = {
             current_page: payload.current_page || 1,
             last_page: payload.last_page || 1,
             total: payload.total || 0,
             per_page: payload.per_page || pagination.per_page || 20,
-        });
+        };
+
+        setOrders(nextOrders);
+        setOrderSummary(nextSummary);
+        setOutsideDeliveryUnpaidSummary(nextOutsideDeliveryUnpaidSummary);
+        setPagination(nextPagination);
         setHasLoadedOrdersOnce(true);
-    }, [pagination.per_page]);
+
+        writeOrderListFastReturnState({
+            view: currentView,
+            accountId: activeAccountId,
+            filters,
+            orders: nextOrders,
+            summary: nextSummary,
+            outsideDeliveryUnpaidSummary: nextOutsideDeliveryUnpaidSummary,
+            pagination: nextPagination,
+        });
+    }, [activeAccountId, currentView, filters, pagination.per_page]);
 
     const rememberClearSearchResponse = useCallback((params, payload) => {
         if (!isOrderClearSearchCacheableParams(params)) {
@@ -6116,6 +6449,21 @@ const OrderList = () => {
             }
         }
     }, [applyOrderListResponse, canViewCustomerPhone, filters, isActiveAccountReady, isDraftView, isMainView, isReturnFollowupView, isReturnWorkbenchView, isTrashView, pagination.per_page, rememberClearSearchResponse, returnWorkbenchIds, sortConfig]);
+
+    const refreshOrdersSilently = useCallback(() => {
+        if (!isActiveAccountReady || isReturnFollowupView || hasRouteScopedFilters) return;
+        if (orderRequestAbortRef.current) return;
+        if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+
+        orderListAutoRefreshLastRunRef.current = Date.now();
+        fetchOrders(
+            pagination.current_page || 1,
+            filters,
+            pagination.per_page,
+            sortConfig,
+            { silentRefresh: true }
+        );
+    }, [fetchOrders, filters, hasRouteScopedFilters, isActiveAccountReady, isReturnFollowupView, pagination.current_page, pagination.per_page, sortConfig]);
 
     const handleOutsideDeliveryUnpaidToggle = useCallback(() => {
         const nextActive = !isOutsideDeliveryUnpaidFilterActive;
@@ -6493,6 +6841,7 @@ const OrderList = () => {
                 inventory_stock_scope: '',
             };
             const targetPage = hasInitializedCurrentViewRef.current ? 1 : initialRestoredPageRef.current;
+            const shouldRefreshSilently = Boolean(initialFastReturnState) && !hasInitializedCurrentViewRef.current;
             hasInitializedCurrentViewRef.current = true;
 
             if (filters.order_ids?.length || filters.inventory_product_ids?.length || filters.inventory_stock_scope) {
@@ -6505,9 +6854,41 @@ const OrderList = () => {
                 } : prev));
             }
 
-            fetchOrders(targetPage, nextFilters);
+            fetchOrders(targetPage, nextFilters, pagination.per_page, sortConfig, {
+                silentRefresh: shouldRefreshSilently,
+            });
         }
-    }, [currentView, fetchOrders, filters, hasRouteScopedFilters, isActiveAccountReady]);
+    }, [currentView, fetchOrders, filters, hasRouteScopedFilters, initialFastReturnState, isActiveAccountReady, pagination.per_page, sortConfig]);
+
+    useEffect(() => {
+        if (!hasLoadedOrdersOnce || !isActiveAccountReady || isReturnFollowupView || hasRouteScopedFilters) {
+            return undefined;
+        }
+
+        const refreshWhenVisible = () => {
+            const now = Date.now();
+            if (now - orderListAutoRefreshLastRunRef.current < ORDER_LIST_AUTO_REFRESH_FOCUS_COOLDOWN_MS) {
+                return;
+            }
+
+            refreshOrdersSilently();
+        };
+        const handleVisibilityChange = () => {
+            if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+                refreshWhenVisible();
+            }
+        };
+
+        const intervalId = window.setInterval(refreshOrdersSilently, ORDER_LIST_AUTO_REFRESH_INTERVAL_MS);
+        window.addEventListener('focus', refreshWhenVisible);
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+
+        return () => {
+            window.clearInterval(intervalId);
+            window.removeEventListener('focus', refreshWhenVisible);
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+        };
+    }, [hasLoadedOrdersOnce, hasRouteScopedFilters, isActiveAccountReady, isReturnFollowupView, refreshOrdersSilently]);
 
     useEffect(() => {
         if (hasRouteScopedFilters) {

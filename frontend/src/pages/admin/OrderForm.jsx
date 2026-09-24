@@ -2984,6 +2984,28 @@ const DRAFT_ORDER_KIND = 'draft';
 const isDraftOrderKind = (orderKind) => String(orderKind || MAIN_ORDER_KIND) === DRAFT_ORDER_KIND;
 const getNormalizedOrderKind = (orderKind) => (isDraftOrderKind(orderKind) ? DRAFT_ORDER_KIND : MAIN_ORDER_KIND);
 const buildOrderListUrl = (orderKind = MAIN_ORDER_KIND) => (isDraftOrderKind(orderKind) ? '/admin/orders?view=draft' : '/admin/orders');
+const ORDER_LIST_SAVED_ORDER_HANDOFF_STORAGE_KEY = 'order_list_saved_order_handoff_v1';
+const writeOrderListSavedOrderHandoff = ({ order, payload, mode = 'create' } = {}) => {
+    if (typeof window === 'undefined' || !order?.id) {
+        return;
+    }
+
+    const orderKind = getNormalizedOrderKind(order.order_kind || payload?.order_kind);
+
+    try {
+        window.sessionStorage.setItem(ORDER_LIST_SAVED_ORDER_HANDOFF_STORAGE_KEY, JSON.stringify({
+            mode,
+            view: isDraftOrderKind(orderKind) ? 'draft' : 'main',
+            account_id: getOrderFormActiveAccountId(),
+            order_kind: orderKind,
+            order,
+            items: Array.isArray(payload?.items) ? payload.items : [],
+            updated_at: new Date().toISOString(),
+        }));
+    } catch (error) {
+        console.warn('Cannot persist saved order handoff.', error);
+    }
+};
 const ORDER_FORM_LEAVE_GUARD_HISTORY_KEY = '__orderFormLeaveGuard';
 const hasNonEmptyText = (value) => String(value ?? '').trim() !== '';
 const normalizeOrderFormGuardText = (value) => String(value ?? '').trim();
@@ -16335,6 +16357,11 @@ const OrderForm = () => {
             leaveGuardBypassRef.current = true;
             leaveGuardBaselineSnapshotRef.current = latestLeaveGuardSnapshot;
             leaveGuardBaselineReadyRef.current = true;
+            writeOrderListSavedOrderHandoff({
+                order: savedOrder,
+                payload,
+                mode: isEdit ? 'update' : 'create',
+            });
 
             if (leadId) {
                 if (savedOrderKind === MAIN_ORDER_KIND && returnTo) {

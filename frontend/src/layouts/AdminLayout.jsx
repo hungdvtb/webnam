@@ -999,7 +999,7 @@ const AdminLayout = () => {
 
             <main className={`relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-background-light ${shouldReserveSidebarSpace ? 'col-start-2' : 'h-full w-full'}`}>
                 <LeadRealtimeNotifier enabled={canAccessLeadBoard} />
-                {isSidebarDrawerMode && !isFundRoute && (
+                {isSidebarDrawerMode && !isFundRoute && !isTelesalesRoute && (
                     <div className="relative z-[80] shrink-0 border-b border-primary/10 bg-background-light/95 px-3 py-3 backdrop-blur">
                         <button
                             type="button"

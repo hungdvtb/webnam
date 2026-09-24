@@ -2628,14 +2628,11 @@ const TelesalesCrm = () => {
         const mobileNoteChanged = noteValue.trim() !== '' && noteValue.trim() !== currentNoteValue;
         const potentialOption = activePotentials.find((potential) => potential.value === potentialValue);
         const historyOpen = Boolean(historyOpenIds[lead.id]);
-        const zaloSameAsPhone = normalizePhoneDigits(lead.zalo_phone || lead.phone) === normalizePhoneDigits(lead.phone);
         const phoneCarrierLabel = detectVietnamMobileCarrier(lead.phone);
         const potentialSelectValue = potentialOption ? potentialValue : '';
         const leadAddedAt = lead.added_at || lead.placed_at || lead.created_at;
         const customerAddedLabel = formatDateTimeLocalLabel(leadAddedAt) || lead.added_label || lead.placed_label || '';
         const currentTask = lead.current_task || null;
-        const workTask = lead.work_task || currentTask;
-        const reminderProcessed = workTask?.status === 'completed';
         const taskStatusDisplay = getTaskStatusDisplay(currentTask);
         const currentStatusOption = activeStatuses.find((status) => String(status.id) === String(statusValue));
         const currentStatusColor = taskStatusDisplay?.color || currentStatusOption?.color || '#2563eb';
@@ -2711,16 +2708,7 @@ const TelesalesCrm = () => {
                             <div className="truncate text-[13px] font-black text-teal-700">
                                 {lead.phone || '-'}{phoneCarrierLabel ? ` - ${phoneCarrierLabel}` : ''}
                             </div>
-                            <label className="mt-0.5 flex items-center gap-1 text-[11px] font-semibold text-slate-600">
-                                <input
-                                    type="checkbox"
-                                    checked={zaloSameAsPhone}
-                                    disabled={inlineSaving || !canUpdateTelesales}
-                                    onChange={(event) => handleZaloSameAsPhoneChange(lead, event.target.checked)}
-                                    className="size-3.5 accent-teal-700"
-                                />
-                                SĐT là Zalo
-                            </label>
+                            <div className="mt-0.5 truncate text-[11px] font-semibold text-slate-400">{reminderLabel}</div>
                         </div>
 
                         <div className="flex shrink-0 items-center gap-1.5">
@@ -2767,14 +2755,6 @@ const TelesalesCrm = () => {
                                 ))}
                             </select>
                         </label>
-                    </div>
-
-                    <div className={`mt-2 flex min-h-[34px] items-center gap-1.5 overflow-hidden rounded-sm border px-2.5 text-[11px] font-semibold ${
-                        reminderProcessed ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : lead.do_not_call ? 'border-slate-200 bg-slate-50 text-slate-600' : 'border-teal-200 bg-teal-50 text-slate-700'
-                    }`}>
-                        <span className={`shrink-0 truncate text-[12px] font-black ${reminderProcessed ? 'text-emerald-700' : lead.do_not_call ? 'text-slate-600' : workTask?.is_overdue ? 'text-red-600' : 'text-teal-800'}`}>
-                            {reminderLabel}
-                        </span>
                     </div>
 
                     <div className="mt-2 grid grid-cols-[minmax(0,1fr)_auto_auto] gap-1.5">

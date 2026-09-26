@@ -858,34 +858,76 @@ class ProductController extends Controller
         return $selectedVariant instanceof Product ? $selectedVariant : null;
     }
 
+    private function resolveProductNumericAttribute(Product $product, string $attribute): ?float
+    {
+        $value = $product->getRawOriginal($attribute);
+
+        if ($value === null) {
+            $value = $product->getAttribute($attribute);
+        }
+
+        return $value !== null && is_numeric($value) ? (float) $value : null;
+    }
+
+    private function resolveProductStoredCurrentPrice(Product $product): ?float
+    {
+        $specialPrice = $this->resolveProductNumericAttribute($product, 'special_price');
+
+        if ($specialPrice !== null) {
+            $now = now();
+            $specialPriceFrom = $product->getRawOriginal('special_price_from') ?? $product->special_price_from;
+            $specialPriceTo = $product->getRawOriginal('special_price_to') ?? $product->special_price_to;
+
+            if (
+                (!$specialPriceFrom || $specialPriceFrom <= $now)
+                && (!$specialPriceTo || $specialPriceTo >= $now)
+            ) {
+                return $specialPrice;
+            }
+        }
+
+        return $this->resolveProductNumericAttribute($product, 'price');
+    }
+
     private function resolveBundleItemCurrentUnitPrice($bundleItem, ?Product $selectedVariant): float
     {
         $bundlePrice = data_get($bundleItem, 'pivot.price');
 
         if ($selectedVariant instanceof Product) {
-            $variantPrice = $selectedVariant->current_price ?? $selectedVariant->price;
+            $variantPrice = $this->resolveProductStoredCurrentPrice($selectedVariant);
 
-            if ($variantPrice !== null && is_numeric($variantPrice)) {
-                return (float) $variantPrice;
+            if ($variantPrice !== null) {
+                return $variantPrice;
             }
         }
 
-        if ($bundlePrice !== null && is_numeric($bundlePrice)) {
-            return (float) $bundlePrice;
+        if ($bundleItem instanceof Product) {
+            $itemPrice = $this->resolveProductStoredCurrentPrice($bundleItem);
+
+            if ($itemPrice !== null) {
+                return $itemPrice;
+            }
         }
 
-        $itemPrice = $bundleItem->current_price ?? $bundleItem->price;
-        return $itemPrice !== null && is_numeric($itemPrice) ? (float) $itemPrice : 0.0;
+        return $bundlePrice !== null && is_numeric($bundlePrice) ? (float) $bundlePrice : 0.0;
     }
 
     private function resolveBundleItemBaseUnitPrice($bundleItem, ?Product $selectedVariant, float $fallback = 0.0): float
     {
-        if ($selectedVariant instanceof Product && $selectedVariant->price !== null && is_numeric($selectedVariant->price)) {
-            return (float) $selectedVariant->price;
+        if ($selectedVariant instanceof Product) {
+            $variantPrice = $this->resolveProductNumericAttribute($selectedVariant, 'price');
+
+            if ($variantPrice !== null) {
+                return $variantPrice;
+            }
         }
 
-        if ($bundleItem->price !== null && is_numeric($bundleItem->price)) {
-            return (float) $bundleItem->price;
+        if ($bundleItem instanceof Product) {
+            $itemPrice = $this->resolveProductNumericAttribute($bundleItem, 'price');
+
+            if ($itemPrice !== null) {
+                return $itemPrice;
+            }
         }
 
         return $fallback;

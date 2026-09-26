@@ -12,6 +12,7 @@ import {
   getBundleSourcePosition,
   getBundleSlotKey,
   resolveBundleConfigName,
+  resolveBundleItemUnitPrice,
 } from '@/lib/bundlePricing';
 import { flyToCart } from '@/utils/flyToCart';
 import {
@@ -262,6 +263,7 @@ const normalizeBundleItemState = (item, fallbackIndex = 0) => {
   const sourcePosition = getBundleSourcePosition(item, fallbackIndex);
   const baseProductId = Number(item?.base_product_id ?? item?.id ?? 0);
   const selectedProductId = Number(item?.selected_product_id ?? item?.pivot?.variant_id ?? item?.id ?? 0) || baseProductId;
+  const unitPrice = resolveBundleItemUnitPrice(item);
 
   return {
     ...item,
@@ -274,6 +276,9 @@ const normalizeBundleItemState = (item, fallbackIndex = 0) => {
     selected_product_id: selectedProductId,
     id: selectedProductId,
     qty: item?.qty ?? item?.pivot?.quantity ?? 1,
+    price: unitPrice,
+    unit_price: unitPrice,
+    bundle_unit_price: unitPrice,
   };
 };
 
@@ -708,11 +713,28 @@ export default function ProductDetailContent({
     setBundleItems(prev => prev.map(item => {
       if (item.bundle_item_uid === bundleItemUid) {
         const isSiblingVariant = newProduct?.pivot?.link_type === 'super_link';
+        const selectedProductId = Number(newProduct?.id ?? item.selected_product_id ?? item.id ?? item.base_product_id);
+        const configuredVariantId = Number(item?.pivot?.variant_id ?? 0);
+        const keepConfiguredBundlePrice = Boolean(
+          isSiblingVariant
+          && configuredVariantId > 0
+          && selectedProductId === configuredVariantId
+          && item?.pivot?.price !== null
+          && item?.pivot?.price !== undefined,
+        );
+        const replacementUnitPrice = keepConfiguredBundlePrice
+          ? resolveBundleItemUnitPrice(item)
+          : resolveBundleItemUnitPrice(newProduct);
+
         return normalizeBundleItemState({
           ...newProduct,
           qty: item.qty || 1,
           selected: true,
           removed: false,
+          price: replacementUnitPrice,
+          unit_price: replacementUnitPrice,
+          bundle_unit_price: replacementUnitPrice,
+          bundle_price_source: keepConfiguredBundlePrice ? item.bundle_price_source : 'selection',
           bundle_item_uid: item.bundle_item_uid,
           option_title: item.option_title || item.pivot?.option_title,
           source_position: item.source_position,
@@ -722,12 +744,13 @@ export default function ProductDetailContent({
           base_product_slug: isSiblingVariant
             ? item.base_product_slug
             : (newProduct?.base_product_slug || newProduct?.slug || ''),
-          selected_product_id: Number(newProduct?.id ?? item.selected_product_id ?? item.id ?? item.base_product_id),
+          selected_product_id: selectedProductId,
           pivot: {
             ...item.pivot,
             ...newProduct?.pivot,
+            price: keepConfiguredBundlePrice ? item.pivot.price : (newProduct?.pivot?.price ?? null),
             variant_id: isSiblingVariant
-              ? Number(newProduct?.id ?? item.selected_product_id ?? item.id ?? item.base_product_id)
+              ? selectedProductId
               : (newProduct?.pivot?.variant_id ?? null)
           }
         }, item.source_position);

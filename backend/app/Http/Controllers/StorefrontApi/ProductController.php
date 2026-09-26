@@ -861,21 +861,6 @@ class ProductController extends Controller
     private function resolveBundleItemCurrentUnitPrice($bundleItem, ?Product $selectedVariant): float
     {
         $bundlePrice = data_get($bundleItem, 'pivot.price');
-        $selectedVariantId = $selectedVariant?->id ? (int) $selectedVariant->id : 0;
-        $defaultVariantId = filled(data_get($bundleItem, 'pivot.variant_id'))
-            ? (int) data_get($bundleItem, 'pivot.variant_id')
-            : 0;
-
-        if (
-            $selectedVariant instanceof Product
-            && $bundlePrice !== null
-            && is_numeric($bundlePrice)
-            && $selectedVariantId > 0
-            && $defaultVariantId > 0
-            && $selectedVariantId === $defaultVariantId
-        ) {
-            return (float) $bundlePrice;
-        }
 
         if ($selectedVariant instanceof Product) {
             $variantPrice = $selectedVariant->current_price ?? $selectedVariant->price;
@@ -904,6 +889,17 @@ class ProductController extends Controller
         }
 
         return $fallback;
+    }
+
+    private function applyBundleItemPricingAttributes($bundleItem, ?Product $selectedVariant): void
+    {
+        $currentUnitPrice = $this->resolveBundleItemCurrentUnitPrice($bundleItem, $selectedVariant);
+        $baseUnitPrice = $this->resolveBundleItemBaseUnitPrice($bundleItem, $selectedVariant, $currentUnitPrice);
+
+        $bundleItem->setAttribute('price', $currentUnitPrice);
+        $bundleItem->setAttribute('unit_price', $currentUnitPrice);
+        $bundleItem->setAttribute('bundle_unit_price', $currentUnitPrice);
+        $bundleItem->setAttribute('base_price', $baseUnitPrice);
     }
 
     private function resolveBundleOptionPrimaryImage(?Post $optionPost)
@@ -1629,9 +1625,11 @@ class ProductController extends Controller
                         $item->cost_price = $item->pivot->cost_price;
                     }
 
+                    $selectedVariant = null;
                     $variantId = $item->pivot->variant_id;
                     if ($variantId && $variantMap->has((int) $variantId)) {
                         $variant = $variantMap->get((int) $variantId);
+                        $selectedVariant = $variant;
 
                         if ($item->pivot->price === null) {
                             $item->price = $variant->price;
@@ -1644,6 +1642,8 @@ class ProductController extends Controller
                         $item->sku = $variant->sku;
                         $item->name = $variant->name;
                     }
+
+                    $this->applyBundleItemPricingAttributes($item, $selectedVariant);
                 }
             }
 
@@ -1992,9 +1992,11 @@ class ProductController extends Controller
                         $item->cost_price = $item->pivot->cost_price;
                     }
 
+                    $selectedVariant = null;
                     $vId = $item->pivot->variant_id;
                     if ($vId && $variantMap->has((int) $vId)) {
                         $v = $variantMap->get((int) $vId);
+                        $selectedVariant = $v;
                         // Merge variant data into item. Fallback to variant price if pivot price was missing
                         if ($item->pivot->price === null) $item->price = $v->price;
                         if ($item->pivot->cost_price === null) $item->cost_price = $v->cost_price;
@@ -2012,6 +2014,8 @@ class ProductController extends Controller
                             $item->setRelation('attributeValues', $v->attributeValues);
                         }
                     }
+
+                    $this->applyBundleItemPricingAttributes($item, $selectedVariant);
                 }
 
                 if ($product->type === 'bundle') {
@@ -2282,9 +2286,11 @@ class ProductController extends Controller
                     $item->cost_price = $item->pivot->cost_price;
                 }
 
+                $selectedVariant = null;
                 $variantId = $item->pivot->variant_id;
                 if ($variantId && $variantMap->has((int) $variantId)) {
                     $variant = $variantMap->get((int) $variantId);
+                    $selectedVariant = $variant;
 
                     if ($item->pivot->price === null) {
                         $item->price = $variant->price;
@@ -2306,6 +2312,8 @@ class ProductController extends Controller
                         $item->setRelation('attributeValues', $variant->attributeValues);
                     }
                 }
+
+                $this->applyBundleItemPricingAttributes($item, $selectedVariant);
             }
 
             $bundleOptionCatalog = $this->buildBundleOptionCatalogForItems(

@@ -22,6 +22,15 @@ const toFiniteNumber = (value, fallback = 0) => {
   return Number.isFinite(normalized) ? normalized : fallback;
 };
 
+const toOptionalFiniteNumber = (value) => {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+
+  const normalized = Number(value);
+  return Number.isFinite(normalized) ? normalized : null;
+};
+
 const toInteger = (value, fallback = 0) => {
   const normalized = Number.parseInt(value, 10);
   return Number.isFinite(normalized) ? normalized : fallback;
@@ -159,6 +168,25 @@ export const resolveBundleConfigName = (items = []) => (
   || ''
 );
 
+export const resolveBundleItemUnitPrice = (item = {}) => {
+  const candidates = [
+    item?.unit_price,
+    item?.bundle_unit_price,
+    item?.current_price,
+    item?.price,
+    item?.pivot?.price ?? item?.bundle_pivot_price ?? item?.bundle_price,
+  ];
+
+  for (const candidate of candidates) {
+    const price = toOptionalFiniteNumber(candidate);
+    if (price !== null) {
+      return price;
+    }
+  }
+
+  return 0;
+};
+
 export const createBundleCartEntry = (item = {}, fallbackIndex = 0) => {
   const optionTitle = getBundleOptionTitle(item);
   const sourcePosition = getBundleSourcePosition(item, fallbackIndex);
@@ -186,7 +214,7 @@ export const createBundleCartEntry = (item = {}, fallbackIndex = 0) => {
     ?? 1,
     1,
   );
-  const unitPrice = toFiniteNumber(item?.unit_price ?? item?.price ?? 0, 0);
+  const unitPrice = resolveBundleItemUnitPrice(item);
 
   return {
     ...cloneBundleValue(item),

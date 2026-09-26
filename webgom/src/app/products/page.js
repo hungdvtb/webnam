@@ -25,7 +25,7 @@ export const metadata = {
 const PRODUCTS_PER_PAGE = 40;
 const PAGE_GAP = 'gap';
 const FALLBACK_CATEGORY_BANNER = '/banner-store.png';
-const BUNDLE_DETAIL_CACHE_VERSION = 8;
+const BUNDLE_DETAIL_CACHE_VERSION = 9;
 const BUNDLE_DETAIL_PREFIX = 'webgom:bundle-option-detail:';
 
 const normalizeText = (value = '') => String(value ?? '').trim();

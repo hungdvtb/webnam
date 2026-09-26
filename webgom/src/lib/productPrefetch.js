@@ -5,7 +5,8 @@ import config from './config';
 
 const SNAPSHOT_PREFIX = 'webgom:bundle-option-snapshot:';
 const DETAIL_PREFIX = 'webgom:bundle-option-detail:';
-const CACHE_VERSION = 8;
+const CACHE_VERSION = 9;
+const DETAIL_CACHE_MAX_AGE_MS = 15 * 1000;
 const MAX_IDLE_PREFETCHES = 12;
 const MAX_CONCURRENT_PREFETCHES = 2;
 const pendingPrefetches = new Map();
@@ -140,7 +141,10 @@ export function readCachedBundleOptionDetail(slug = '', optionKey = '', optionTi
     const raw = window.sessionStorage.getItem(`${DETAIL_PREFIX}${cacheKey}`);
     const payload = raw ? JSON.parse(raw) : null;
 
-    if (Number(payload?.cache_version || 0) === CACHE_VERSION) {
+    const cachedAt = Number(payload?.cached_at || 0);
+    const cacheIsFresh = cachedAt > 0 && Date.now() - cachedAt <= DETAIL_CACHE_MAX_AGE_MS;
+
+    if (Number(payload?.cache_version || 0) === CACHE_VERSION && cacheIsFresh) {
       return payload;
     }
 
@@ -281,6 +285,7 @@ export function prefetchBundleOptionDetail(product = {}, href = '') {
   }
 
   const prefetchPromise = fetch(`${config.apiUrl}${request.endpoint}`, {
+    cache: 'no-store',
     headers: {
       Accept: 'application/json',
       'X-Site-Code': config.siteCode,

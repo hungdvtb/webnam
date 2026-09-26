@@ -1062,6 +1062,30 @@ class ProductController extends Controller
         })->all();
     }
 
+    private function resolveBundleCatalogDependencySignature(Product $product): string
+    {
+        if (!$product->id) {
+            return 'no-product';
+        }
+
+        $dependencyRow = DB::table('product_links')
+            ->leftJoin('products as linked_products', 'linked_products.id', '=', 'product_links.linked_product_id')
+            ->leftJoin('products as selected_variants', 'selected_variants.id', '=', 'product_links.variant_id')
+            ->where('product_links.product_id', (int) $product->id)
+            ->where('product_links.link_type', 'bundle')
+            ->selectRaw('MAX(product_links.updated_at) as links_updated_at')
+            ->selectRaw('MAX(linked_products.updated_at) as linked_products_updated_at')
+            ->selectRaw('MAX(selected_variants.updated_at) as selected_variants_updated_at')
+            ->first();
+
+        return implode(':', [
+            (string) ($product->updated_at?->timestamp ?? 0),
+            (string) ($dependencyRow?->links_updated_at ?? 'no-links'),
+            (string) ($dependencyRow?->linked_products_updated_at ?? 'no-linked-products'),
+            (string) ($dependencyRow?->selected_variants_updated_at ?? 'no-selected-variants'),
+        ]);
+    }
+
     private function buildBundleOptionCatalogForItems($bundleItems, Collection $variantMap, Collection $optionPosts, ?Product $bundleProduct = null, bool $includeInternalOptions = false): array
     {
         $catalog = [];
@@ -1994,7 +2018,8 @@ class ProductController extends Controller
                     // Cache the bundle option catalog for 60 seconds per product+account.
                     // The catalog computation (pricing, discounts, option grouping) is
                     // expensive and identical for all visitors viewing the same product.
-                    $catalogCacheKey = 'bundle_catalog:' . StorefrontDomainScope::cacheSegment($request, $storeIds, $accountIds) . ':' . ($accountId ?? 'all') . ':' . $product->id . ':' . ($product->updated_at?->timestamp ?? 0);
+                    $catalogDependencySignature = $this->resolveBundleCatalogDependencySignature($product);
+                    $catalogCacheKey = 'bundle_catalog:' . StorefrontDomainScope::cacheSegment($request, $storeIds, $accountIds) . ':' . ($accountId ?? 'all') . ':' . $product->id . ':' . md5($catalogDependencySignature);
                     $bundleOptionCatalog = Cache::remember(
                         $catalogCacheKey,
                         60,

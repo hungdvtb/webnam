@@ -278,6 +278,15 @@ export default function ProductDetailClientShell({
       };
     }
 
+    const params = {
+      bundle_option_uid: requestedBundleOptionUid,
+      bundle_option_key: requestedBundleOptionKey,
+      bundle_option: requestedBundleOptionTitle,
+    };
+    const freshDetailRequest = hasRequestedBundleOption
+      ? getWebProductBundleOptionDetail(slug, params)
+      : getWebProductDetail(slug);
+
     window.setTimeout(() => {
       if (cancelled) {
         return;
@@ -288,6 +297,32 @@ export default function ProductDetailClientShell({
         setFullProductReady(true);
       }
     }, 0);
+
+    freshDetailRequest
+      .then((freshProduct) => {
+        if (cancelled || !freshProduct) {
+          return;
+        }
+
+        setProduct(freshProduct);
+        setCriticalFetchFailed(false);
+        cacheBundleProductDetail(
+          freshProduct,
+          slug,
+          requestedBundleOptionKey,
+          requestedBundleOptionTitle,
+          requestedBundleOptionUid,
+        );
+
+        if (!hasRequestedBundleOption && !freshProduct?.is_bundle_option_lite) {
+          setFullProductReady(true);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          console.error('Failed to refresh cached bundle product detail:', error);
+        }
+      });
 
     return () => {
       cancelled = true;

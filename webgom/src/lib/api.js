@@ -164,8 +164,7 @@ export async function getWebProductDetail(slug, options = {}) {
     }
 
     const query = urlParams.toString();
-    // Cache for 1 minute
-    return fetchFromApi(`/web-api/products/${slug}${query ? `?${query}` : ''}`, { next: { revalidate: 60 }, publicHost: options.publicHost, siteCode: options.siteCode });
+    return fetchFromApi(`/web-api/products/${slug}${query ? `?${query}` : ''}`, { cache: 'no-store', publicHost: options.publicHost, siteCode: options.siteCode });
 }
 
 export async function getWebProductBundleOptionDetail(slug, params = {}, options = {}) {
@@ -179,7 +178,7 @@ export async function getWebProductBundleOptionDetail(slug, params = {}, options
     const query = urlParams.toString();
     return fetchFromApi(
         `/web-api/products/${slug}/bundle-option-detail${query ? `?${query}` : ''}`,
-        { next: { revalidate: 60 }, publicHost: options.publicHost || params.public_host, siteCode: options.siteCode || params.site_code },
+        { cache: 'no-store', publicHost: options.publicHost || params.public_host, siteCode: options.siteCode || params.site_code },
     );
 }
 

@@ -30,11 +30,15 @@ export default function BundleProductPrefetchBootstrap({ descriptors = [] }) {
   window.__webgomBundlePrefetch=window.__webgomBundlePrefetch||{active:0,queue:[],seen:{}};
   var state=window.__webgomBundlePrefetch;
   var maxActive=2;
+  var maxCacheAge=15000;
   function isCached(entry){
     try{
       var raw=window.sessionStorage.getItem(entry.storageKey);
       var payload=raw?JSON.parse(raw):null;
-      return Number(payload&&payload.cache_version)===Number(entry.cacheVersion);
+      var cachedAt=Number(payload&&payload.cached_at||0);
+      return Number(payload&&payload.cache_version)===Number(entry.cacheVersion)
+        && cachedAt>0
+        && Date.now()-cachedAt<=maxCacheAge;
     }catch(error){return false;}
   }
   function cache(entry,payload){
@@ -53,7 +57,7 @@ export default function BundleProductPrefetchBootstrap({ descriptors = [] }) {
     var publicHost=String(window.location&&window.location.host||"").trim();
     var headers={Accept:"application/json","X-Site-Code":entry.siteCode||""};
     if(publicHost){headers["X-Public-Host"]=publicHost;}
-    fetch(entry.url,{headers:headers})
+    fetch(entry.url,{cache:"no-store",headers:headers})
       .then(function(response){return response.ok?response.json():null;})
       .then(function(payload){cache(entry,payload);})
       .catch(function(){})

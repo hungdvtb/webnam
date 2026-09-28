@@ -8,6 +8,13 @@ import {
 
 const AuthContext = createContext();
 
+const isValidAuthUser = (value) => (
+    value
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && Object.prototype.hasOwnProperty.call(value, 'id')
+);
+
 export const AuthProvider = ({ children }) => {
     const [user, setUser] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -18,6 +25,9 @@ export const AuthProvider = ({ children }) => {
             if (token) {
                 try {
                     const response = await authApi.getUser();
+                    if (!isValidAuthUser(response.data)) {
+                        throw new Error('Invalid auth user payload');
+                    }
                     setUser(response.data);
                 } catch (error) {
                     console.error("Auth check failed", error);

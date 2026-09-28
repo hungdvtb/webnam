@@ -1,6 +1,7 @@
 import axios from 'axios';
 
 const DEFAULT_API_BASE_URL = '/api';
+const HOSTED_ADMIN_API_BASE_URL = 'https://api.gomdaithanh.com/api';
 const ADMIN_HOST_PATTERN = /(^|\.)admin\.gomdaithanh\.com$/i;
 const API_HOST_PATTERN = /(^|\.)api\.gomdaithanh\.com$/i;
 const LOOPBACK_HOST_PATTERN = /^(localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|::1)$/i;
@@ -79,8 +80,43 @@ const shouldUseSameOriginFallback = (value) => {
     }
 };
 
+const isCurrentAdminApiBaseUrl = (value) => {
+    if (typeof window === 'undefined') {
+        return false;
+    }
+
+    try {
+        const configuredUrl = new URL(value, window.location.origin);
+        const currentHostname = normalizeHostname(window.location.hostname);
+
+        return ADMIN_HOST_PATTERN.test(currentHostname)
+            && normalizeHostname(configuredUrl.hostname) === currentHostname
+            && trimTrailingSlash(configuredUrl.pathname) === DEFAULT_API_BASE_URL;
+    } catch {
+        return false;
+    }
+};
+
+const hostedApiBaseUrlForCurrentHost = () => {
+    if (typeof window === 'undefined') {
+        return '';
+    }
+
+    const hostname = normalizeHostname(window.location?.hostname || '');
+    if (ADMIN_HOST_PATTERN.test(hostname)) {
+        return HOSTED_ADMIN_API_BASE_URL;
+    }
+
+    return '';
+};
+
 const resolveApiBaseUrl = (value) => {
     const resolvedValue = trimTrailingSlash(value || DEFAULT_API_BASE_URL) || DEFAULT_API_BASE_URL;
+    const hostedApiBaseUrl = hostedApiBaseUrlForCurrentHost();
+
+    if (hostedApiBaseUrl && (isCurrentAdminApiBaseUrl(resolvedValue) || shouldUseSameOriginFallback(resolvedValue))) {
+        return hostedApiBaseUrl;
+    }
 
     if (shouldUseSameOriginFallback(resolvedValue)) {
         return DEFAULT_API_BASE_URL;
@@ -1338,7 +1374,10 @@ export const authApi = {
     login: (credentials) => api.post('/login', credentials),
     register: (data) => api.post('/register', data),
     logout: () => api.post('/logout'),
-    getUser: () => api.get('/user'),
+    getUser: () => api.get('/user', {
+        timeout: 8000,
+        retryPolicy: 'never',
+    }),
 };
 
 export const userSettingsApi = {

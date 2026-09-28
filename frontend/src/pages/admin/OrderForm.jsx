@@ -153,6 +153,13 @@ const ORDER_FORM_REPLACE_PICKER_MIN_HEIGHT = 320;
 const ORDER_FORM_REPLACE_PICKER_PREFETCH_DELAY_MS = 0;
 const ORDER_FORM_REPLACE_PICKER_PREFETCH_FAMILY_LIMIT = 24;
 const ORDER_FORM_REPLACE_PICKER_REQUEST_TIMEOUT_MS = 7000;
+const ORDER_FORM_PRODUCT_PICKER_WARMUP_DELAY_MS = 120;
+const ORDER_FORM_PRODUCT_PICKER_WARMUP_SEARCH_TERM = '__warmup__';
+const ORDER_FORM_PRODUCT_PICKER_HISTORY_WARMUP_LIMIT = 4;
+const ORDER_FORM_PRODUCT_PICKER_HISTORY_WARMUP_GAP_MS = 140;
+const ORDER_FORM_REPLACE_LOOKUP_WARMUP_DELAY_MS = 180;
+const ORDER_FORM_REPLACE_LOOKUP_WARMUP_LIMIT = 8;
+const ORDER_FORM_REPLACE_LOOKUP_WARMUP_BATCH_SIZE = 3;
 const ORDER_FORM_REPLACE_FAMILY_CACHE_VERSION = 2;
 const ACTUAL_PRODUCT_CATEGORY_GROUP_MAX_PRODUCT_PAGES = 8;
 const ACTUAL_PRODUCT_CATEGORY_GROUP_STYLE_WORDS = new Set([
@@ -8100,6 +8107,10 @@ const OrderForm = () => {
     const productSearchPrefetchAbortRef = useRef(null);
     const productSearchPrefetchKeyRef = useRef('');
     const productSearchPrefetchPromiseRef = useRef(null);
+    const productPickerWarmupControllersRef = useRef(new Map());
+    const replacementPickerWarmupAbortRef = useRef(null);
+    const replacementPickerWarmupSignatureRef = useRef('');
+    const warehouseLookupWarmupAbortRef = useRef(null);
     const productQuickFilterStorageKeyRef = useRef(productQuickFilterStorageKey);
     const skipNextProductQuickFilterPersistRef = useRef(false);
     const lastProductQuickFilterDurableSignatureRef = useRef(
@@ -13107,9 +13118,202 @@ const OrderForm = () => {
         setDebouncedSearchTerm(searchTerm);
         fetchProducts(searchTerm, {
             applyQuickFilter: false,
-            skipPendingPrefetch: true,
         });
     }, [fetchProducts, searchTerm]);
+
+    const warmProductSearchCache = useCallback((term = '', filterOverrides = {}) => {
+        const { params, cacheKey } = buildProductSearchRequest(term, filterOverrides);
+        if (productSearchCacheRef.current.has(cacheKey) || productPickerWarmupControllersRef.current.has(cacheKey)) {
+            return;
+        }
+
+        const controller = new AbortController();
+        productPickerWarmupControllersRef.current.set(cacheKey, controller);
+
+        productApi.getAll(params, controller.signal)
+            .then((response) => {
+                if (controller.signal.aborted) return;
+                const nextProducts = normalizeProductSearchResponseRows(response.data?.data || [], term);
+                storeProductSearchCacheEntry(productSearchCacheRef.current, cacheKey, nextProducts);
+            })
+            .catch((error) => {
+                if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
+                console.error('Error warming product search cache', error);
+            })
+            .finally(() => {
+                if (productPickerWarmupControllersRef.current.get(cacheKey) === controller) {
+                    productPickerWarmupControllersRef.current.delete(cacheKey);
+                }
+            });
+    }, [buildProductSearchRequest]);
+
+    const warmReplacementPickerCaches = useCallback(() => {
+        const params = appendCrossSellSourceParams({
+            picker: 1,
+            fast_picker: 1,
+            light_picker: 1,
+            replace_picker: 1,
+            allow_variants: 1,
+            per_page: 20,
+            search: ORDER_FORM_PRODUCT_PICKER_WARMUP_SEARCH_TERM,
+            filter_bundle_options_by_search: 1,
+        });
+        const cacheKey = JSON.stringify(params);
+        const signature = JSON.stringify({ replacement_picker: true, params });
+
+        if (
+            replacementPickerWarmupSignatureRef.current === signature
+            && orderAiReplaceSearchCacheRef.current.has(cacheKey)
+            && actualProductPickerSearchCacheRef.current.has(cacheKey)
+        ) {
+            return;
+        }
+
+        replacementPickerWarmupAbortRef.current?.abort();
+        replacementPickerWarmupSignatureRef.current = signature;
+        const controller = new AbortController();
+        replacementPickerWarmupAbortRef.current = controller;
+
+        const productWarmup = productApi.getAll(params, controller.signal)
+            .then((response) => {
+                if (controller.signal.aborted) return;
+                const entries = buildSourceAwareOrderAiPickerEntries(response.data?.data || []);
+                orderAiReplaceSearchCacheRef.current.set(cacheKey, entries);
+                actualProductPickerSearchCacheRef.current.set(cacheKey, entries);
+            });
+        const replacementGroupWarmup = productReplacementApi.getAll({ per_page: 1 }, controller.signal);
+
+        Promise.allSettled([productWarmup, replacementGroupWarmup])
+            .then((results) => {
+                results.forEach((result) => {
+                    if (result.status !== 'rejected') return;
+                    const error = result.reason;
+                    if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
+                    console.error('Error warming replacement picker cache', error);
+                });
+            })
+            .finally(() => {
+                if (replacementPickerWarmupAbortRef.current === controller) {
+                    replacementPickerWarmupAbortRef.current = null;
+                }
+            });
+    }, [appendCrossSellSourceParams, buildSourceAwareOrderAiPickerEntries]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return undefined;
+
+        const timerIds = [];
+        const scheduleWarmup = (callback, delay) => {
+            const timerId = window.setTimeout(callback, delay);
+            timerIds.push(timerId);
+        };
+
+        scheduleWarmup(() => {
+            warmProductSearchCache('', { applyQuickFilter: false });
+            warmProductSearchCache(ORDER_FORM_PRODUCT_PICKER_WARMUP_SEARCH_TERM, { applyQuickFilter: false });
+            if (hasActiveProductQuickFilter) {
+                warmProductSearchCache('', { applyQuickFilter: true });
+            }
+
+            Array.from(new Map(
+                (Array.isArray(searchHistory) ? searchHistory : [])
+                    .map(normalizeCanvasText)
+                    .filter((term) => term.length >= 2)
+                    .map((term) => [normalizeProductSearchText(term), term])
+            ).entries())
+                .filter(([normalizedTerm]) => normalizedTerm !== normalizeProductSearchText(ORDER_FORM_PRODUCT_PICKER_WARMUP_SEARCH_TERM))
+                .slice(0, ORDER_FORM_PRODUCT_PICKER_HISTORY_WARMUP_LIMIT)
+                .forEach(([, term], index) => {
+                    scheduleWarmup(() => {
+                        warmProductSearchCache(term, { applyQuickFilter: false });
+                        if (hasActiveProductQuickFilter) {
+                            warmProductSearchCache(term, { applyQuickFilter: true });
+                        }
+                    }, (index + 1) * ORDER_FORM_PRODUCT_PICKER_HISTORY_WARMUP_GAP_MS);
+                });
+
+            warmReplacementPickerCaches();
+        }, ORDER_FORM_PRODUCT_PICKER_WARMUP_DELAY_MS);
+
+        return () => {
+            timerIds.forEach((timerId) => window.clearTimeout(timerId));
+        };
+    }, [hasActiveProductQuickFilter, searchHistory, warmProductSearchCache, warmReplacementPickerCaches]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return undefined;
+
+        const pendingLookups = [];
+        const seenKeys = new Set();
+        (Array.isArray(formData.items) ? formData.items : []).some((item) => {
+            const meta = buildWarehousePickingLookupMeta(item, { scopeKey: activeAccountId });
+            if (!meta.canLookup || seenKeys.has(meta.cacheKey) || warehousePickingLookupCacheRef.current.has(meta.cacheKey)) {
+                return false;
+            }
+
+            seenKeys.add(meta.cacheKey);
+            pendingLookups.push(meta);
+            return pendingLookups.length >= ORDER_FORM_REPLACE_LOOKUP_WARMUP_LIMIT;
+        });
+
+        if (pendingLookups.length === 0) return undefined;
+
+        warehouseLookupWarmupAbortRef.current?.abort();
+        const controller = new AbortController();
+        warehouseLookupWarmupAbortRef.current = controller;
+
+        const timerId = window.setTimeout(async () => {
+            try {
+                for (let index = 0; index < pendingLookups.length; index += ORDER_FORM_REPLACE_LOOKUP_WARMUP_BATCH_SIZE) {
+                    if (controller.signal.aborted) return;
+                    const lookupBatch = pendingLookups.slice(index, index + ORDER_FORM_REPLACE_LOOKUP_WARMUP_BATCH_SIZE);
+
+                    await Promise.all(lookupBatch.map(async (meta) => {
+                        try {
+                            const response = await productReplacementApi.lookup(meta.params, controller.signal);
+                            if (controller.signal.aborted) return;
+
+                            const payload = response.data?.data || {};
+                            const suggestions = Array.isArray(payload.suggestions)
+                                ? payload.suggestions
+                                : (Array.isArray(payload.alternatives) ? payload.alternatives : []);
+                            const groupId = payload.group?.id || null;
+                            const sourceEntry = payload.product
+                                ? {
+                                    ...payload.product,
+                                    is_declared_replacement: Boolean(groupId),
+                                    is_original_order_product: true,
+                                    replacement_group_id: groupId || payload.product?.replacement_group_id || null,
+                                }
+                                : null;
+                            const replacementEntries = suggestions.map((entry) => ({
+                                ...entry,
+                                is_declared_replacement: true,
+                                replacement_group_id: groupId || entry?.replacement_group_id || null,
+                            }));
+
+                            warehousePickingLookupCacheRef.current.set(
+                                meta.cacheKey,
+                                mergeActualProductReplacementEntries(sourceEntry ? [sourceEntry] : [], replacementEntries)
+                            );
+                        } catch (error) {
+                            if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
+                            console.error('Error warming warehouse replacement lookup', error);
+                        }
+                    }));
+                }
+            } finally {
+                if (warehouseLookupWarmupAbortRef.current === controller) {
+                    warehouseLookupWarmupAbortRef.current = null;
+                }
+            }
+        }, ORDER_FORM_REPLACE_LOOKUP_WARMUP_DELAY_MS);
+
+        return () => {
+            controller.abort();
+            window.clearTimeout(timerId);
+        };
+    }, [activeAccountId, formData.items]);
     const handleSelectReplacementDeclarationSource = useCallback((entry) => {
         const sourceEntry = normalizeProductPickerEntry(entry);
         if (!sourceEntry || !getProductReplacementDeclarationSku(sourceEntry)) {
@@ -14418,6 +14622,10 @@ const OrderForm = () => {
     useEffect(() => () => {
         productSearchAbortRef.current?.abort();
         productSearchPrefetchAbortRef.current?.abort();
+        productPickerWarmupControllersRef.current.forEach((controller) => controller?.abort?.());
+        productPickerWarmupControllersRef.current.clear();
+        replacementPickerWarmupAbortRef.current?.abort();
+        warehouseLookupWarmupAbortRef.current?.abort();
         productQuickFilterScopeAbortRef.current?.abort();
         productQuickSetupAbortRef.current?.abort();
         productQuickSetupRefreshAbortRef.current?.abort();

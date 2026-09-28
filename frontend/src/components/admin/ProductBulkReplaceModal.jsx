@@ -1007,6 +1007,15 @@ const ProductBulkReplaceModal = ({
         setErrors({});
         const nextMap = {};
         const nextErrors = {};
+        const requestCache = new Map();
+        const fetchReplacementCandidates = (params) => {
+            const requestKey = JSON.stringify(params);
+            if (!requestCache.has(requestKey)) {
+                requestCache.set(requestKey, productApi.getAll(params));
+            }
+
+            return requestCache.get(requestKey);
+        };
 
         try {
             await Promise.all(
@@ -1023,7 +1032,6 @@ const ProductBulkReplaceModal = ({
                             picker: 1,
                             per_page: 200,
                             allow_variants: 1,
-                            _bulk_replace: `${Date.now()}-${item.line_id || item.product_id || ''}`,
                         };
 
                         if (parent_id) nextParams.parent_id = parent_id;
@@ -1074,7 +1082,7 @@ const ProductBulkReplaceModal = ({
                             if (seenAttempts.has(attemptKey)) continue;
                             seenAttempts.add(attemptKey);
 
-                            response = await productApi.getAll(attemptParams);
+                            response = await fetchReplacementCandidates(attemptParams);
                             candidates = (response.data?.data || []).filter(isVariationProduct);
                             usedParams = attemptParams;
                             if (candidates.length > 0) break;

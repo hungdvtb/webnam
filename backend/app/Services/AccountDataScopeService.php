@@ -11,6 +11,9 @@ class AccountDataScopeService
     public const SCOPE_CATALOG = 'catalog';
     public const SCOPE_INVENTORY = 'inventory';
 
+    private array $scopedAccountIdCache = [];
+    private array $linkedAccountIdCache = [];
+
     public function rawActiveAccountId(?Request $request = null): ?int
     {
         $request ??= request();
@@ -61,11 +64,20 @@ class AccountDataScopeService
             return null;
         }
 
-        return match ($scope) {
+        $cacheKey = "{$scope}:{$normalizedAccountId}";
+        if (array_key_exists($cacheKey, $this->scopedAccountIdCache)) {
+            return $this->scopedAccountIdCache[$cacheKey];
+        }
+
+        $resolvedAccountId = match ($scope) {
             self::SCOPE_CATALOG => $this->resolveLinkedAccountId($normalizedAccountId, 'catalog_account_id'),
             self::SCOPE_INVENTORY => $this->resolveLinkedAccountId($normalizedAccountId, 'inventory_account_id'),
             default => $normalizedAccountId,
         };
+
+        $this->scopedAccountIdCache[$cacheKey] = $resolvedAccountId;
+
+        return $resolvedAccountId;
     }
 
     public function resolveScopedAccountIds(iterable $accountIds, string $scope = self::SCOPE_ACTIVE): array
@@ -121,12 +133,19 @@ class AccountDataScopeService
 
     private function resolveLinkedAccountId(int $accountId, string $column): int
     {
+        $cacheKey = "{$column}:{$accountId}";
+        if (array_key_exists($cacheKey, $this->linkedAccountIdCache)) {
+            return $this->linkedAccountIdCache[$cacheKey];
+        }
+
         $currentAccountId = $accountId;
         $visited = [];
+        $resolvedAccountId = $accountId;
 
         for ($attempt = 0; $attempt < 10; $attempt++) {
             if (isset($visited[$currentAccountId])) {
-                return $currentAccountId;
+                $resolvedAccountId = $currentAccountId;
+                break;
             }
 
             $visited[$currentAccountId] = true;
@@ -136,17 +155,22 @@ class AccountDataScopeService
 
             $nextAccountId = $this->normalizeAccountId($nextAccountId);
             if ($nextAccountId === null || $nextAccountId === $currentAccountId) {
-                return $currentAccountId;
+                $resolvedAccountId = $currentAccountId;
+                break;
             }
 
             $targetExists = Account::query()->whereKey($nextAccountId)->exists();
             if (!$targetExists) {
-                return $currentAccountId;
+                $resolvedAccountId = $currentAccountId;
+                break;
             }
 
             $currentAccountId = $nextAccountId;
+            $resolvedAccountId = $currentAccountId;
         }
 
-        return $currentAccountId;
+        $this->linkedAccountIdCache[$cacheKey] = $resolvedAccountId;
+
+        return $resolvedAccountId;
     }
 }

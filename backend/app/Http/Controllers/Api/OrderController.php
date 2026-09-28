@@ -1407,9 +1407,11 @@ class OrderController extends Controller
     private function mutationResponsePayload(Order $order): array
     {
         $order->refresh();
-        $order->loadMissing([
-            'activeShipment:id,order_id,shipping_cost',
-        ]);
+        if ($this->shouldManageInventory((string) $order->order_kind)) {
+            $order->loadMissing([
+                'activeShipment:id,order_id,shipping_cost',
+            ]);
+        }
 
         return array_merge($this->appendOrderTimePayload([
             'id' => (int) $order->id,
@@ -2542,6 +2544,10 @@ class OrderController extends Controller
         $this->ensureProductsAccessibleForOrder($products->values(), $order);
 
         $createdItems = [];
+        $totalPrice = 0.0;
+        $costTotalSum = 0.0;
+        $profitTotalSum = 0.0;
+        $timestamp = now();
 
         foreach ($normalizedItems as $item) {
             /** @var Product $product */
@@ -2560,13 +2566,16 @@ class OrderController extends Controller
             $costTotal = ImportCostRounding::lineTotal($costPrice, $quantity);
             $profitTotal = round(($price * $quantity) - $costTotal, 2);
             $sourceAccounts = $this->resolveOrderItemSourceAccounts($order, $product, $actualProduct ?: $product, $item);
+            $options = $item['options'] ?? null;
 
-            $createdItems[] = $order->items()->create([
+            $createdItems[] = [
                 'account_id' => $order->account_id,
+                'order_id' => $order->id,
                 'product_id' => $product->id,
                 'actual_product_id' => $actualProduct?->id,
                 'product_source_account_id' => $sourceAccounts['product_source_account_id'],
                 'inventory_source_account_id' => $sourceAccounts['inventory_source_account_id'],
+                'product_group_id' => !empty($item['product_group_id']) ? (int) $item['product_group_id'] : null,
                 'product_name_snapshot' => OrderProductSnapshot::submittedNameOrCatalog($item['name'] ?? null, $product),
                 'actual_product_name_snapshot' => $actualProduct
                     ? OrderProductSnapshot::submittedNameOrCatalog(
@@ -2587,15 +2596,25 @@ class OrderController extends Controller
                 'cost_price' => $costPrice,
                 'cost_total' => $costTotal,
                 'profit_total' => $profitTotal,
-                'options' => $item['options'] ?? null,
-            ]);
+                'options' => $options === null ? null : json_encode($options, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                'created_at' => $timestamp,
+                'updated_at' => $timestamp,
+            ];
+
+            $totalPrice += $price * $quantity;
+            $costTotalSum += $costTotal;
+            $profitTotalSum += $profitTotal;
+        }
+
+        if (!empty($createdItems)) {
+            OrderItem::query()->insert($createdItems);
         }
 
         return [
             'items' => $createdItems,
-            'total_price' => round(collect($createdItems)->sum(fn ($row) => (float) $row->price * InventoryQuantity::normalize($row->quantity)), 2),
-            'cost_total' => round(collect($createdItems)->sum(fn ($row) => (float) $row->cost_total), 2),
-            'profit_total' => round(collect($createdItems)->sum(fn ($row) => (float) $row->profit_total), 2),
+            'total_price' => round($totalPrice, 2),
+            'cost_total' => round($costTotalSum, 2),
+            'profit_total' => round($profitTotalSum, 2),
         ];
     }
 
@@ -6332,7 +6351,11 @@ class OrderController extends Controller
             );
             $supplementSummary = $this->isSupplementWorkflowOrderType($orderType)
                 ? $this->syncSupplementItems($order, (array) $request->input('supplement_items', []))
-                : $this->syncSupplementItems($order, []);
+                : [
+                    'items' => [],
+                    'total_price' => 0,
+                    'cost_total' => 0,
+                ];
             $this->syncPartialDeliveryAdjustmentState(
                 $order,
                 $request,
@@ -6386,14 +6409,18 @@ class OrderController extends Controller
                 ])->save();
             }
 
-            $this->syncPartialDeliveryAdjustmentState(
-                $order,
-                $request,
-                $orderType,
-                [],
-                (float) ($order->supplement_items_total_price ?? 0)
-            );
-            $this->syncExchangeReturnRefundNote($order);
+            if ($this->isSupplementWorkflowOrderType($orderType)) {
+                $this->syncPartialDeliveryAdjustmentState(
+                    $order,
+                    $request,
+                    $orderType,
+                    [],
+                    (float) ($order->supplement_items_total_price ?? 0)
+                );
+            }
+            if ($this->normalizeOrderType($orderType) === self::ORDER_TYPE_EXCHANGE_RETURN) {
+                $this->syncExchangeReturnRefundNote($order);
+            }
 
             return response()->json($this->mutationResponsePayload($order), 201);
             });

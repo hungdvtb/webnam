@@ -14771,7 +14771,7 @@ const OrderForm = () => {
     const fetchOrder = async (targetId, isDuplicating = false) => {
         try {
             setLoading(true);
-            const response = await orderApi.getOne(targetId);
+            const response = await orderApi.getOneCached(targetId);
             const order = response.data;
             const nextOrderKind = getNormalizedOrderKind(order.order_kind);
             const nextOrderType = normalizeOrderType(order.order_type);

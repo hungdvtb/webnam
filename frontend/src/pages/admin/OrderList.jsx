@@ -5956,6 +5956,11 @@ const OrderList = () => {
     );
 
     const [hasLoadedOrdersOnce, setHasLoadedOrdersOnce] = useState(() => Boolean(initialFastReturnState));
+    const hasLoadedOrdersOnceRef = useRef(Boolean(initialFastReturnState));
+
+    useEffect(() => {
+        hasLoadedOrdersOnceRef.current = hasLoadedOrdersOnce;
+    }, [hasLoadedOrdersOnce]);
     const isTrashView = currentView === 'trash';
     const isDraftView = currentView === 'draft';
     const isMainView = currentView === 'main';
@@ -6318,6 +6323,7 @@ const OrderList = () => {
         setOrderSummary(nextSummary);
         setOutsideDeliveryUnpaidSummary(nextOutsideDeliveryUnpaidSummary);
         setPagination(nextPagination);
+        hasLoadedOrdersOnceRef.current = true;
         setHasLoadedOrdersOnce(true);
 
         writeOrderListFastReturnState({
@@ -6374,7 +6380,7 @@ const OrderList = () => {
     const fetchOrders = useCallback(async (page = 1, currentFilters = filters, perPage = pagination.per_page, currentSort = sortConfig, options = {}) => {
         if (!isActiveAccountReady) {
             orderRequestAbortRef.current?.abort();
-            setLoading(true);
+            setLoading(!hasLoadedOrdersOnceRef.current);
             return;
         }
 
@@ -6390,7 +6396,7 @@ const OrderList = () => {
         orderRequestAbortRef.current?.abort();
         const controller = new AbortController();
         orderRequestAbortRef.current = controller;
-        const shouldShowLoading = !options.silentRefresh;
+        const shouldShowLoading = !options.silentRefresh && (options.forceLoading || !hasLoadedOrdersOnceRef.current);
         setPagination((current) => ({
             ...current,
             current_page: nextPage,
@@ -6417,6 +6423,7 @@ const OrderList = () => {
                     last_page: 1,
                     total: 0,
                 }));
+                hasLoadedOrdersOnceRef.current = true;
                 setHasLoadedOrdersOnce(true);
                 return;
             }
@@ -7121,7 +7128,7 @@ const OrderList = () => {
             return;
         }
 
-        fetchOrders(1);
+        fetchOrders(1, filters, pagination.per_page, sortConfig, { forceLoading: true });
     };
 
     const openImportCostRefreshModal = useCallback(() => {

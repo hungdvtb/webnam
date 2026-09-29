@@ -153,6 +153,8 @@ const ORDER_FORM_REPLACE_PICKER_MIN_HEIGHT = 320;
 const ORDER_FORM_REPLACE_PICKER_PREFETCH_DELAY_MS = 0;
 const ORDER_FORM_REPLACE_PICKER_PREFETCH_FAMILY_LIMIT = 24;
 const ORDER_FORM_REPLACE_PICKER_REQUEST_TIMEOUT_MS = 7000;
+const ORDER_FORM_PRODUCT_SEARCH_REQUEST_TIMEOUT_MS = 8000;
+const ORDER_FORM_REPLACE_PICKER_MANUAL_LOOKUP_GRACE_MS = 900;
 const ORDER_FORM_PRODUCT_PICKER_WARMUP_DELAY_MS = 120;
 const ORDER_FORM_PRODUCT_PICKER_WARMUP_SEARCH_TERM = '__warmup__';
 const ORDER_FORM_PRODUCT_PICKER_HISTORY_WARMUP_LIMIT = 4;
@@ -8121,6 +8123,25 @@ const OrderForm = () => {
     const productQuickSetupAbortRef = useRef(null);
     const productQuickSetupCacheRef = useRef(new Map());
     const productQuickSetupRefreshAbortRef = useRef(null);
+    const abortProductPickerBackgroundRequests = useCallback(({ includeProductSearchPrefetch = false } = {}) => {
+        if (includeProductSearchPrefetch) {
+            productSearchPrefetchAbortRef.current?.abort();
+            productSearchPrefetchAbortRef.current = null;
+            productSearchPrefetchKeyRef.current = '';
+            productSearchPrefetchPromiseRef.current = null;
+        }
+
+        productPickerWarmupControllersRef.current.forEach((controller) => controller?.abort?.());
+        productPickerWarmupControllersRef.current.clear();
+        replacementPickerWarmupAbortRef.current?.abort();
+        replacementPickerWarmupAbortRef.current = null;
+        warehouseLookupWarmupAbortRef.current?.abort();
+        warehouseLookupWarmupAbortRef.current = null;
+        productQuickFilterScopeAbortRef.current?.abort();
+        productQuickFilterScopeAbortRef.current = null;
+        productQuickSetupRefreshAbortRef.current?.abort();
+        productQuickSetupRefreshAbortRef.current = null;
+    }, []);
     const productQuickSetupListRef = useRef(null);
     const productQuickSetupSearchInputRef = useRef(null);
     const pendingProductQuickSetupViewportRef = useRef(null);
@@ -12449,6 +12470,8 @@ const OrderForm = () => {
             return undefined;
         }
 
+        abortProductPickerBackgroundRequests();
+
         const currentLine = activeActualProductPickerLine;
         const searchTerm = actualProductPickerSearchTerm.trim();
         const isWarehousePickingMode = actualProductPickerActiveTab === ACTUAL_PRODUCT_PICKER_TAB_WAREHOUSE;
@@ -12515,7 +12538,7 @@ const OrderForm = () => {
         setActualProductPickerLoading(initialPickerEntries.length === 0);
 
         const timerId = window.setTimeout(async () => {
-            const declaredReplacementRequest = lookupMeta.canLookup
+            const loadDeclaredReplacementEntries = () => (lookupMeta.canLookup
                 ? (async () => {
                     if (Array.isArray(cachedDeclaredEntries)) {
                         return cachedDeclaredEntries;
@@ -12572,7 +12595,7 @@ const OrderForm = () => {
                         return [];
                     }
                 })()
-                : Promise.resolve([]);
+                : Promise.resolve([]));
             const manualSearchRequest = hasSearchTerm
                 ? (() => {
                     const params = appendCrossSellSourceParams({
@@ -12607,16 +12630,39 @@ const OrderForm = () => {
                 : Promise.resolve([]);
 
             try {
-                const [declaredReplacementEntries, manualSearchEntries] = await Promise.all([
-                    declaredReplacementRequest,
-                    manualSearchRequest,
-                ]);
+                if (hasSearchTerm) {
+                    const manualSearchEntries = await manualSearchRequest;
+                    if (controller.signal.aborted) return;
+
+                    setActualProductPickerResults(mergeActualProductReplacementEntries(
+                        immediateLineEntry ? [immediateLineEntry] : [],
+                        manualSearchEntries
+                    ));
+                    setActualProductPickerLoading(false);
+
+                    const declaredReplacementEntries = await new Promise((resolve) => {
+                        const timeoutId = window.setTimeout(() => resolve([]), ORDER_FORM_REPLACE_PICKER_MANUAL_LOOKUP_GRACE_MS);
+                        loadDeclaredReplacementEntries()
+                            .then((entries) => resolve(Array.isArray(entries) ? entries : []))
+                            .catch(() => resolve([]))
+                            .finally(() => window.clearTimeout(timeoutId));
+                    });
+                    if (controller.signal.aborted) return;
+
+                    setActualProductPickerResults(mergeActualProductReplacementEntries(
+                        immediateLineEntry ? [immediateLineEntry] : [],
+                        declaredReplacementEntries,
+                        manualSearchEntries
+                    ));
+                    return;
+                }
+
+                const declaredReplacementEntries = await loadDeclaredReplacementEntries();
                 if (controller.signal.aborted) return;
 
                 setActualProductPickerResults(mergeActualProductReplacementEntries(
                     immediateLineEntry ? [immediateLineEntry] : [],
-                    declaredReplacementEntries,
-                    manualSearchEntries
+                    declaredReplacementEntries
                 ));
             } finally {
                 if (actualProductPickerAbortRef.current === controller) {
@@ -12638,6 +12684,7 @@ const OrderForm = () => {
         actualProductPickerSearchTerm,
         activeActualProductPickerLine,
         activeActualProductPickerLineNumber,
+        abortProductPickerBackgroundRequests,
         appendCrossSellSourceParams,
         buildSourceAwareOrderAiPickerEntries,
     ]);
@@ -13059,6 +13106,7 @@ const OrderForm = () => {
 
     const fetchProducts = useCallback(async (term = '', filterOverrides = {}) => {
         const skipPendingPrefetch = Boolean(filterOverrides.skipPendingPrefetch);
+        abortProductPickerBackgroundRequests({ includeProductSearchPrefetch: skipPendingPrefetch });
         const { params, cacheKey } = buildProductSearchRequest(term, filterOverrides);
         productSearchRequestKeyRef.current = cacheKey;
         productSearchAbortRef.current?.abort();
@@ -13097,6 +13145,11 @@ const OrderForm = () => {
 
         const controller = new AbortController();
         productSearchAbortRef.current = controller;
+        let requestTimedOut = false;
+        const requestTimeoutId = window.setTimeout(() => {
+            requestTimedOut = true;
+            controller.abort();
+        }, ORDER_FORM_PRODUCT_SEARCH_REQUEST_TIMEOUT_MS);
 
         try {
             const prodRes = await productApi.getAll(params, controller.signal);
@@ -13106,18 +13159,25 @@ const OrderForm = () => {
             storeProductSearchCacheEntry(productSearchCacheRef.current, cacheKey, nextProducts);
             setProducts(nextProducts);
         } catch (error) {
-            if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
+            if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') {
+                if (requestTimedOut && productSearchRequestKeyRef.current === cacheKey) {
+                    setProducts([]);
+                }
+                return;
+            }
             console.error("Error fetching products", error);
         } finally {
+            window.clearTimeout(requestTimeoutId);
             if (productSearchAbortRef.current === controller) {
                 productSearchAbortRef.current = null;
             }
         }
-    }, [buildProductSearchRequest]);
+    }, [abortProductPickerBackgroundRequests, buildProductSearchRequest]);
     const switchToUnfilteredProductSearch = useCallback(() => {
         setDebouncedSearchTerm(searchTerm);
         fetchProducts(searchTerm, {
             applyQuickFilter: false,
+            skipPendingPrefetch: true,
         });
     }, [fetchProducts, searchTerm]);
 

@@ -8123,6 +8123,7 @@ const OrderForm = () => {
     const productQuickSetupAbortRef = useRef(null);
     const productQuickSetupCacheRef = useRef(new Map());
     const productQuickSetupRefreshAbortRef = useRef(null);
+    const productQuickSetupSnapshotRefreshKeyRef = useRef('');
     const abortProductPickerBackgroundRequests = useCallback(({ includeProductSearchPrefetch = false } = {}) => {
         if (includeProductSearchPrefetch) {
             productSearchPrefetchAbortRef.current?.abort();
@@ -14645,14 +14646,27 @@ const OrderForm = () => {
     }, [currentProductQuickSetupKey, productQuickSetupMode, searchTerm]);
 
     useEffect(() => {
-        if (activeProductQuickSetupItems.length === 0) return;
+        if (activeProductQuickSetupItems.length === 0) {
+            productQuickSetupSnapshotRefreshKeyRef.current = '';
+            return undefined;
+        }
+
+        const refreshSignature = JSON.stringify({
+            accountId: activeAccountId || '',
+            scope: activeProductQuickSetupRefreshScopeKey,
+        });
+        if (productQuickSetupSnapshotRefreshKeyRef.current === refreshSignature) {
+            return undefined;
+        }
+        productQuickSetupSnapshotRefreshKeyRef.current = refreshSignature;
 
         let isDisposed = false;
+        const refreshItems = activeProductQuickSetupItems;
 
         const refreshActiveQuickSetupItems = async () => {
             try {
                 const response = await productApi.refreshOrderItems({
-                    items: activeProductQuickSetupItems
+                    items: refreshItems
                         .map((item) => buildProductRefreshPayload(item))
                         .filter(Boolean)
                 });
@@ -14677,7 +14691,7 @@ const OrderForm = () => {
         return () => {
             isDisposed = true;
         };
-    }, [activeProductQuickSetupItems, syncLatestProductsIntoLocalSources]);
+    }, [activeAccountId, activeProductQuickSetupItems, activeProductQuickSetupRefreshScopeKey, syncLatestProductsIntoLocalSources]);
 
     useEffect(() => () => {
         productSearchAbortRef.current?.abort();

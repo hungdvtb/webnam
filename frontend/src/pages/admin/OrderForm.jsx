@@ -4938,6 +4938,29 @@ const buildProductRefreshPayload = (item, { useEffectiveInventoryProduct = false
 
     return payload;
 };
+const buildOrderItemsRefreshPayloads = (itemsToRefresh = [], options = {}) => Array.from(new Map(
+    (Array.isArray(itemsToRefresh) ? itemsToRefresh : [])
+        .map((item) => {
+            const payload = buildProductRefreshPayload(item, options);
+            if (!payload) return null;
+
+            const key = payload.entry_kind === SEARCH_ENTRY_BUNDLE_OPTION
+                ? [
+                    SEARCH_ENTRY_BUNDLE_OPTION,
+                    payload.bundle_parent_id || '',
+                    payload.bundle_option_uid || '',
+                    payload.bundle_option_key || '',
+                    payload.bundle_option_post_id || '',
+                    payload.bundle_option_title || '',
+                    payload.bundle_item_base_product_id || '',
+                    payload.product_id || '',
+                ].join('::')
+                : String(payload.product_id || '');
+
+            return [key, payload];
+        })
+        .filter(Boolean)
+).values());
 const resolveSubmittedOrderItemName = (item, productId = 0) => {
     const normalizedProductId = Number(productId) || Number(item?.product_id) || 0;
     const candidates = [
@@ -8123,7 +8146,6 @@ const OrderForm = () => {
     const productQuickSetupAbortRef = useRef(null);
     const productQuickSetupCacheRef = useRef(new Map());
     const productQuickSetupRefreshAbortRef = useRef(null);
-    const productQuickSetupSnapshotRefreshKeyRef = useRef('');
     const abortProductPickerBackgroundRequests = useCallback(({ includeProductSearchPrefetch = false } = {}) => {
         if (includeProductSearchPrefetch) {
             productSearchPrefetchAbortRef.current?.abort();
@@ -8941,39 +8963,21 @@ const OrderForm = () => {
         return refreshedMap;
     }, [syncLatestProductsIntoLocalSources]);
     const refreshOrderItemInventorySnapshot = useCallback(async (itemsToRefresh = []) => {
-        const normalizedItems = Array.from(new Map(
-            (Array.isArray(itemsToRefresh) ? itemsToRefresh : [])
-                .map((item) => {
-                    const payload = buildProductRefreshPayload(item, { useEffectiveInventoryProduct: true });
-                    if (!payload) return null;
-
-                    const key = payload.entry_kind === SEARCH_ENTRY_BUNDLE_OPTION
-                        ? [
-                            SEARCH_ENTRY_BUNDLE_OPTION,
-                            payload.bundle_parent_id || '',
-                            payload.bundle_option_uid || '',
-                            payload.bundle_option_key || '',
-                            payload.bundle_option_post_id || '',
-                            payload.bundle_option_title || '',
-                            payload.bundle_item_base_product_id || '',
-                            payload.product_id || '',
-                        ].join('::')
-                        : String(payload.product_id || '');
-
-                    return [key, payload];
-                })
-                .filter(Boolean)
-        ).values());
+        const normalizedItems = buildOrderItemsRefreshPayloads(itemsToRefresh, { useEffectiveInventoryProduct: true });
 
         if (normalizedItems.length === 0) {
-            return;
+            return { items: [], issues: [] };
         }
 
         try {
             const response = await productApi.refreshOrderItems({ items: normalizedItems });
-            applyInventorySnapshotToOrderState(response.data?.items);
+            const refreshedItems = Array.isArray(response.data?.items) ? response.data.items : [];
+            const issues = Array.isArray(response.data?.issues) ? response.data.issues : [];
+            applyInventorySnapshotToOrderState(refreshedItems);
+            return { items: refreshedItems, issues };
         } catch (error) {
             console.error('Error refreshing order item inventory snapshot', error);
+            return { items: [], issues: [], error };
         }
     }, [applyInventorySnapshotToOrderState]);
 
@@ -10575,12 +10579,6 @@ const OrderForm = () => {
     }, []);
 
     const handleOpenOrderAiReplacePicker = useCallback((lineId, seedTerm = '', triggerElement = null) => {
-        const currentLine = formData.items.find((item) => normalizeCanvasText(item?.line_id) === normalizeCanvasText(lineId));
-        const currentLineProductId = Number(currentLine?.product_id ?? 0) || 0;
-        const currentLineFamilyParentId = getOrderLineReplacementFamilyParentId(currentLine);
-        if (currentLine && (!currentLineFamilyParentId || currentLineFamilyParentId === currentLineProductId)) {
-            void refreshOrderItemInventorySnapshot([currentLine]);
-        }
 
         orderAiReplaceAnchorRef.current = triggerElement;
         setShowSearchDropdown(false);
@@ -10602,7 +10600,7 @@ const OrderForm = () => {
         setOrderAiReplaceWarehouseSearchTerm('');
         setOrderAiReplaceWarehouseResults([]);
         setOrderAiReplaceWarehouseLoading(false);
-    }, [formData.items, refreshOrderItemInventorySnapshot, selectedLineItemIds]);
+    }, [formData.items, selectedLineItemIds]);
     const handleOpenActualProductPicker = useCallback((lineId, seedTerm = '', triggerElement = null) => {
         actualProductPickerAnchorRef.current = triggerElement;
         setShowSearchDropdown(false);
@@ -10738,18 +10736,13 @@ const OrderForm = () => {
         });
 
         closeOrderAiReplacePicker();
-
-        if (nextReplacement && !hasInventorySnapshot(nextReplacement)) {
-            await refreshOrderItemInventorySnapshot([nextReplacement]);
-        }
-
         showTransientNotification(
             'success',
             replacedLineWasAi
                 ? 'Đã đổi nhanh sản phẩm cho dòng AI.'
                 : 'Đã đổi sản phẩm cho dòng trong đơn.'
         );
-    }, [closeOrderAiReplacePicker, formData.items, refreshOrderItemInventorySnapshot, showTransientNotification]);
+    }, [closeOrderAiReplacePicker, formData.items, showTransientNotification]);
 
     const handleClearActualProductOverride = useCallback(async (lineId) => {
         const currentLine = formData.items.find((item) => normalizeCanvasText(item?.line_id) === normalizeCanvasText(lineId));
@@ -10784,9 +10777,8 @@ const OrderForm = () => {
         });
 
         closeActualProductPicker();
-        await refreshOrderItemInventorySnapshot([clearedLine]);
         showTransientNotification('success', 'Đã bỏ gửi sản phẩm khác cho dòng đang chọn.');
-    }, [closeActualProductPicker, formData.items, refreshOrderItemInventorySnapshot, showTransientNotification]);
+    }, [closeActualProductPicker, formData.items, showTransientNotification]);
     const handleSelectActualProductReplacement = useCallback(async (lineId, entry) => {
         if (!entry) return;
 
@@ -10854,9 +10846,8 @@ const OrderForm = () => {
         });
 
         closeActualProductPicker();
-        await refreshOrderItemInventorySnapshot([nextLine]);
         showTransientNotification('success', 'Đã gán sản phẩm gửi thực tế cho dòng đã chọn.');
-    }, [closeActualProductPicker, formData.items, handleClearActualProductOverride, refreshOrderItemInventorySnapshot, showTransientNotification]);
+    }, [closeActualProductPicker, formData.items, handleClearActualProductOverride, showTransientNotification]);
     const handleSelectWarehousePickingReplacement = useCallback(async (lineId, entry) => {
         await handleSelectActualProductReplacement(lineId, entry);
         closeOrderAiReplacePicker();
@@ -10879,8 +10870,6 @@ const OrderForm = () => {
         const replacementByLineId = new Map(
             readyRows.map((row) => [normalizeCanvasText(row.lineId), row.replacementLine])
         );
-        const nextSnapshotLines = [];
-
         readyRows.forEach((row) => {
             if (!row?.item || !row?.replacementLine) return;
 
@@ -10930,8 +10919,6 @@ const OrderForm = () => {
                             || replacement.source_account_id
                             || item.inventory_source_account_id,
                     });
-
-                nextSnapshotLines.push(nextLine);
                 return nextLine;
             });
 
@@ -10943,13 +10930,8 @@ const OrderForm = () => {
         });
 
         closePicker?.();
-
-        if (nextSnapshotLines.length > 0) {
-            await refreshOrderItemInventorySnapshot(nextSnapshotLines);
-        }
-
         showTransientNotification('success', successMessage || `Đã đổi nhóm thực gửi cho ${readyRows.length} dòng.`);
-    }, [refreshOrderItemInventorySnapshot, showTransientNotification]);
+    }, [showTransientNotification]);
     const handleConfirmOrderAiGroupReplacement = useCallback(async () => {
         await handleApplyActualProductGroupReplacement(orderAiReplaceGroupPreview, {
             closePicker: closeOrderAiReplacePicker,
@@ -11069,12 +11051,6 @@ const OrderForm = () => {
                     cost_total: costTotal,
                 };
             });
-
-            const needsInventorySnapshot = sessionAdditions.some((item) => !hasInventorySnapshot(item));
-            if (needsInventorySnapshot) {
-                await refreshOrderItemInventorySnapshot(sessionAdditions);
-            }
-
             const reviewCount = readyItems.filter((item) => item?.match_status !== 'matched').length;
             const bonusCount = readyItems.filter((item) => item?.bonus).length;
 
@@ -11882,12 +11858,6 @@ const OrderForm = () => {
                     cost_total: costTotal,
                 };
             });
-
-            const needsInventorySnapshot = additions.some((item) => !hasInventorySnapshot(item));
-            if (needsInventorySnapshot) {
-                await refreshOrderItemInventorySnapshot(additions);
-            }
-
             const bonusCount = readyItems.filter((item) => item?.bonus).length;
             showTransientNotification(
                 'success',
@@ -11901,7 +11871,7 @@ const OrderForm = () => {
         } finally {
             setOrderAiApplying(false);
         }
-    }, [orderAiPreview, refreshOrderItemInventorySnapshot, showTransientNotification]);
+    }, [orderAiPreview, showTransientNotification]);
 
     const buildReplacementDeclarationSearchParams = useCallback((term = '') => {
         const params = {
@@ -14644,55 +14614,6 @@ const OrderForm = () => {
         setProductQuickSetupProducts([]);
         setProductQuickSetupLoading(false);
     }, [currentProductQuickSetupKey, productQuickSetupMode, searchTerm]);
-
-    useEffect(() => {
-        if (activeProductQuickSetupItems.length === 0) {
-            productQuickSetupSnapshotRefreshKeyRef.current = '';
-            return undefined;
-        }
-
-        const refreshSignature = JSON.stringify({
-            accountId: activeAccountId || '',
-            scope: activeProductQuickSetupRefreshScopeKey,
-        });
-        if (productQuickSetupSnapshotRefreshKeyRef.current === refreshSignature) {
-            return undefined;
-        }
-        productQuickSetupSnapshotRefreshKeyRef.current = refreshSignature;
-
-        let isDisposed = false;
-        const refreshItems = activeProductQuickSetupItems;
-
-        const refreshActiveQuickSetupItems = async () => {
-            try {
-                const response = await productApi.refreshOrderItems({
-                    items: refreshItems
-                        .map((item) => buildProductRefreshPayload(item))
-                        .filter(Boolean)
-                });
-
-                if (isDisposed) return;
-
-                const refreshedItems = Array.isArray(response.data?.items) ? response.data.items : [];
-                if (refreshedItems.length === 0) return;
-
-                syncLatestProductsIntoLocalSources(
-                    buildLatestProductSnapshotMap(refreshedItems)
-                );
-            } catch (error) {
-                if (!isDisposed) {
-                    console.error('Error refreshing quick setup products', error);
-                }
-            }
-        };
-
-        refreshActiveQuickSetupItems();
-
-        return () => {
-            isDisposed = true;
-        };
-    }, [activeAccountId, activeProductQuickSetupItems, activeProductQuickSetupRefreshScopeKey, syncLatestProductsIntoLocalSources]);
-
     useEffect(() => () => {
         productSearchAbortRef.current?.abort();
         productSearchPrefetchAbortRef.current?.abort();
@@ -15073,8 +14994,6 @@ const OrderForm = () => {
                 supplement_items: resolvedSupplementItems,
             }));
             setRegionType(order.district ? 'old' : 'new');
-            void refreshOrderItemInventorySnapshot(resolvedLoadedItems);
-
         } catch (error) {
             console.error("Error fetching order", error);
             if (error.response?.status === 404) {
@@ -15180,7 +15099,6 @@ const OrderForm = () => {
                 status: draft.status || 'new'
             }));
             setRegionType(draft.district ? 'old' : 'new');
-            void refreshOrderItemInventorySnapshot(normalizedDraftItems);
         } catch (error) {
             console.error('Error fetching lead draft', error);
             showModal({
@@ -15577,27 +15495,6 @@ const OrderForm = () => {
     const handleShippingAddressBlur = (e) => {
         detectAdministrativeAddress(e.target.value);
     };
-
-    const hydrateMissingProductCostSnapshot = useCallback(async (product) => {
-        const targetProductId = parseInt(product?.target_product_id ?? product?.product_id ?? product?.id, 10);
-        if (!targetProductId) return;
-
-        try {
-            const response = await productApi.refreshOrderItems({
-                items: [{
-                    product_id: targetProductId,
-                    sku: product?.display_sku || product?.sku || '',
-                    name: product?.display_name || product?.name || '',
-                    ...buildProductSourcePayload(product),
-                }]
-            });
-
-            applyLatestProductsToOrderState(response.data?.items);
-        } catch (error) {
-            console.error('Error hydrating product cost snapshot', error);
-        }
-    }, [applyLatestProductsToOrderState]);
-
     const appendProductToOrder = useCallback((product, options = {}) => {
         const itemsToAppend = buildOrderItemsFromSearchEntry(product);
         if (itemsToAppend.length === 0) return;
@@ -15626,16 +15523,7 @@ const OrderForm = () => {
         });
 
         setShowSearchHistory(false);
-
-        // Always re-sync from the dedicated refresh endpoint after appending.
-        // Search/picker results can come from stale in-memory caches, so trusting
-        // embedded snapshots here is what leaves "Có thể bán" out of sync.
-        void refreshOrderItemInventorySnapshot(itemsToAppend);
-
-        if (entryKind !== SEARCH_ENTRY_BUNDLE_OPTION && !hasProductCostSnapshot(product)) {
-            hydrateMissingProductCostSnapshot(product);
-        }
-    }, [hydrateMissingProductCostSnapshot, pushSearchHistory, refreshOrderItemInventorySnapshot, searchTerm]);
+    }, [pushSearchHistory, searchTerm]);
 
     const addProductById = useCallback((product) => {
         if (!product) return;
@@ -16616,6 +16504,43 @@ const OrderForm = () => {
 
         setSaving(true);
         try {
+            const shouldRefreshInventoryBeforeSubmit = !isDraftOrderKind(mutation.normalizedOrderKind)
+                && Array.isArray(formData.items)
+                && formData.items.length > 0;
+
+            if (shouldRefreshInventoryBeforeSubmit) {
+                const inventoryRefresh = await refreshOrderItemInventorySnapshot(formData.items);
+
+                if (inventoryRefresh?.error) {
+                    showModal({
+                        title: 'Không kiểm tra được tồn kho',
+                        content: inventoryRefresh.error?.response?.data?.message || 'Không thể kiểm tra tồn kho mới nhất. Vui lòng thử lưu lại sau vài giây.',
+                        type: 'error',
+                    });
+                    return;
+                }
+
+                const inventoryIssues = Array.isArray(inventoryRefresh?.issues) ? inventoryRefresh.issues : [];
+                if (inventoryIssues.length > 0) {
+                    const issueContent = inventoryIssues
+                        .map((issue, index) => {
+                            const code = issue.sku ? `<strong>${escapeHtml(issue.sku)}</strong>` : `<strong>#${Number(issue.product_id) || '-'}</strong>`;
+                            const name = escapeHtml(issue.name || `Sản phẩm #${issue.product_id}`);
+                            const message = escapeHtml(issue.message || 'Sản phẩm đang có vấn đề.');
+
+                            return `${index + 1}. ${code} - ${name}: ${message}`;
+                        })
+                        .join('<br/>');
+
+                    showModal({
+                        title: 'Sản phẩm cần kiểm tra',
+                        content: issueContent,
+                        type: 'warning',
+                    });
+                    return;
+                }
+            }
+
             const { normalizedOrderKind, payload } = mutation;
 
             const response = isEdit

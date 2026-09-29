@@ -144,7 +144,7 @@ const ACTUAL_PRODUCT_PICKER_RESULT_TAB_HISTORY = 'history';
 const WAREHOUSE_PICKING_HISTORY_STORAGE_KEY_PREFIX = 'warehouse_picking_replacement_history_v1';
 const WAREHOUSE_PICKING_HISTORY_LIMIT = 6;
 const WAREHOUSE_PICKING_HISTORY_MAX_SOURCES = 400;
-const ORDER_FORM_PRODUCT_SEARCH_DEBOUNCE_MS = 80;
+const ORDER_FORM_PRODUCT_SEARCH_DEBOUNCE_MS = 260;
 const ORDER_FORM_PRODUCT_SEARCH_SHORT_DEBOUNCE_MS = 320;
 const ORDER_FORM_PRODUCT_SEARCH_INCOMPLETE_DEBOUNCE_MS = 420;
 const ORDER_FORM_REPLACE_PICKER_SEARCH_DELAY_MS = 140;
@@ -14433,19 +14433,19 @@ const OrderForm = () => {
         && (searchTerm.trim() !== '' || isProductQuickModeActive || isManualProductQuickModeActive);
 
     useEffect(() => {
-        if (!searchTerm.trim() || isProductQuickModeActive || isManualProductQuickModeActive) {
+        if (!searchTerm.trim()) {
             setDebouncedSearchTerm(searchTerm);
             return undefined;
         }
 
-        const timerId = setTimeout(() => {
+        const timerId = window.setTimeout(() => {
             setDebouncedSearchTerm(searchTerm);
         }, getOrderProductSearchDebounceMs(searchTerm));
 
         return () => {
-            clearTimeout(timerId);
+            window.clearTimeout(timerId);
         };
-    }, [isManualProductQuickModeActive, isProductQuickModeActive, searchTerm]);
+    }, [searchTerm]);
 
     useEffect(() => {
         const timerId = setTimeout(() => {

@@ -13231,30 +13231,36 @@ const navigateBack = useCallback(() => {
         window.localStorage.removeItem(productSearchHistoryStorageKey);
     }, []);
 
+    const shouldResetProductSearchOnQuickFilterChange = isProductQuickModeActive && !hasEnabledCrossSellSources;
+    const resetProductSearchForQuickFilterChange = useCallback(() => {
+        if (!shouldResetProductSearchOnQuickFilterChange) return;
+
+        productSearchCacheRef.current.clear();
+        setProducts([]);
+    }, [shouldResetProductSearchOnQuickFilterChange]);
+
     const handleProductQuickFilterAttributeChange = useCallback((nextAttributeId) => {
         setProductQuickFilterAttributeId(nextAttributeId);
         setProductQuickFilterValues([]);
         setProductQuickFilterValues2([]);
         setProductQuickFilterAttributeId2('');
-        productSearchCacheRef.current.clear();
-        setProducts([]);
+        resetProductSearchForQuickFilterChange();
 
         setShowProductQuickFilterPanel(true);
         setShowProductQuickSetupPanel(false);
         setShowSearchDropdown(true);
         setShowSearchHistory(false);
-    }, []);
+    }, [resetProductSearchForQuickFilterChange]);
 
     const handleProductQuickFilterAttributeChange2 = useCallback((nextAttributeId) => {
         setProductQuickFilterAttributeId2(nextAttributeId);
         setProductQuickFilterValues2([]);
-        productSearchCacheRef.current.clear();
-        setProducts([]);
+        resetProductSearchForQuickFilterChange();
         setShowProductQuickFilterPanel(true);
         setShowProductQuickSetupPanel(false);
         setShowSearchDropdown(true);
         setShowSearchHistory(false);
-    }, []);
+    }, [resetProductSearchForQuickFilterChange]);
 
     const openProductQuickFilterPanel = useCallback((event) => {
         event?.stopPropagation?.();
@@ -13270,8 +13276,7 @@ const navigateBack = useCallback(() => {
 
         const nextValues = normalizedProductQuickFilterValues[0] === normalizedValue ? [] : [normalizedValue];
         setProductQuickFilterValues(nextValues);
-        productSearchCacheRef.current.clear();
-        setProducts([]);
+        resetProductSearchForQuickFilterChange();
 
         // If primary value is cleared, clear secondary as well
         if (nextValues.length === 0) {
@@ -13283,7 +13288,7 @@ const navigateBack = useCallback(() => {
         setShowProductQuickFilterPanel(nextValues.length === 0 || !normalizedProductQuickFilterValues2[0]);
         setShowSearchDropdown(true);
         setShowSearchHistory(false);
-    }, [normalizedProductQuickFilterValues, normalizedProductQuickFilterValues2]);
+    }, [normalizedProductQuickFilterValues, normalizedProductQuickFilterValues2, resetProductSearchForQuickFilterChange]);
 
     const toggleProductQuickFilterValue2 = useCallback((value) => {
         const normalizedValue = normalizeQuickFilterOptionValue(value);
@@ -13291,16 +13296,13 @@ const navigateBack = useCallback(() => {
 
         const nextValues = normalizedProductQuickFilterValues2[0] === normalizedValue ? [] : [normalizedValue];
         setProductQuickFilterValues2(nextValues);
-        productSearchCacheRef.current.clear();
-        setProducts([]);
+        resetProductSearchForQuickFilterChange();
         setShowProductQuickFilterPanel(nextValues.length === 0);
         setShowSearchDropdown(true);
         setShowSearchHistory(false);
-    }, [normalizedProductQuickFilterValues2]);
+    }, [normalizedProductQuickFilterValues2, resetProductSearchForQuickFilterChange]);
 
     const clearProductQuickFilterValues = useCallback(() => {
-        setSearchTerm('');
-        setDebouncedSearchTerm('');
         setProductQuickFilterValues([]);
         setProductQuickFilterValues2([]);
         setProductQuickFilterAttributeId2('');
@@ -13309,15 +13311,14 @@ const navigateBack = useCallback(() => {
         setShowProductQuickSetupPanel(false);
         setShowSearchDropdown(true);
         setShowSearchHistory(false);
-        productSearchCacheRef.current.clear();
-        setProducts([]);
+        resetProductSearchForQuickFilterChange();
 
         if (typeof window !== 'undefined') {
             window.localStorage.removeItem(productQuickFilterStorageKey);
             window.localStorage.removeItem(productQuickFilterAttributeStorageKey);
             window.localStorage.removeItem(productQuickFilterAttribute2MapStorageKey);
         }
-    }, [productQuickFilterStorageKey, productQuickModeDefaultEnabled]);
+    }, [productQuickFilterStorageKey, productQuickModeDefaultEnabled, resetProductSearchForQuickFilterChange]);
     const handleReplacementDeclarationQuickFilterAttributeChange = useCallback((nextAttributeId) => {
         setProductQuickFilterAttributeId(nextAttributeId);
         setProductQuickFilterValues([]);

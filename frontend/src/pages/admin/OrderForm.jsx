@@ -114,6 +114,7 @@ const defaultQuoteSettings = {
     quote_store_phone: ''
 };
 const productSearchHistoryStorageKey = 'order_form_product_search_history';
+const productSearchSessionCacheStorageKey = 'order_form_product_search_cache_v3';
 const productQuickFilterAttributeStorageKey = 'order_form_product_quick_filter_attribute_id';
 const productQuickFilterAttribute2MapStorageKey = 'order_form_product_quick_filter_attribute_id_2_map';
 const productQuickFilterStateStorageKey = 'order_form_product_quick_filter_state_v1';
@@ -144,18 +145,22 @@ const ACTUAL_PRODUCT_PICKER_RESULT_TAB_HISTORY = 'history';
 const WAREHOUSE_PICKING_HISTORY_STORAGE_KEY_PREFIX = 'warehouse_picking_replacement_history_v1';
 const WAREHOUSE_PICKING_HISTORY_LIMIT = 6;
 const WAREHOUSE_PICKING_HISTORY_MAX_SOURCES = 400;
-const ORDER_FORM_PRODUCT_SEARCH_DEBOUNCE_MS = 80;
-const ORDER_FORM_PRODUCT_SEARCH_SHORT_DEBOUNCE_MS = 120;
-const ORDER_FORM_PRODUCT_SEARCH_INCOMPLETE_DEBOUNCE_MS = 160;
+const ORDER_FORM_PRODUCT_SEARCH_DEBOUNCE_MS = 25;
+const ORDER_FORM_PRODUCT_SEARCH_SHORT_DEBOUNCE_MS = 50;
+const ORDER_FORM_PRODUCT_SEARCH_INCOMPLETE_DEBOUNCE_MS = 70;
 const ORDER_FORM_REPLACE_PICKER_SEARCH_DELAY_MS = 140;
 const ORDER_FORM_REPLACE_PICKER_TOP = 104;
 const ORDER_FORM_REPLACE_PICKER_MIN_HEIGHT = 320;
 const ORDER_FORM_REPLACE_PICKER_PREFETCH_DELAY_MS = 0;
 const ORDER_FORM_REPLACE_PICKER_PREFETCH_FAMILY_LIMIT = 24;
 const ORDER_FORM_REPLACE_PICKER_REQUEST_TIMEOUT_MS = 7000;
-const ORDER_FORM_PRODUCT_SEARCH_REQUEST_TIMEOUT_MS = 8000;
+const ORDER_FORM_PRODUCT_SEARCH_REQUEST_TIMEOUT_MS = 12000;
+const ORDER_FORM_PRODUCT_SEARCH_RETRY_DELAY_MS = 220;
+const ORDER_FORM_PRODUCT_SEARCH_SHARED_CACHE_LIMIT = 80;
+const ORDER_FORM_PRODUCT_SEARCH_SESSION_CACHE_LIMIT = 24;
+const ORDER_FORM_PRODUCT_SEARCH_SESSION_CACHE_ROW_LIMIT = 80;
 const ORDER_FORM_REPLACE_PICKER_MANUAL_LOOKUP_GRACE_MS = 900;
-const ORDER_FORM_PRODUCT_PICKER_WARMUP_DELAY_MS = 120;
+const ORDER_FORM_PRODUCT_PICKER_WARMUP_DELAY_MS = 4000;
 const ORDER_FORM_PRODUCT_PICKER_WARMUP_SEARCH_TERM = '__warmup__';
 const ORDER_FORM_PRODUCT_PICKER_HISTORY_WARMUP_LIMIT = 4;
 const ORDER_FORM_PRODUCT_PICKER_HISTORY_WARMUP_GAP_MS = 140;
@@ -211,6 +216,8 @@ const orderFormColumnOrderDefaultStorageKey = 'order_form_column_order_default';
 const orderFormVisibleColumnsDefaultStorageKey = 'order_form_visible_columns_default';
 const orderFormColumnWidthsDefaultStorageKey = 'order_column_widths_default';
 const orderFormColumnWidthModeDefaultStorageKey = 'order_form_column_width_mode_default';
+const orderFormProductSearchSharedCache = new Map();
+let orderFormProductSearchSessionCacheHydrated = false;
 const orderFormCostPriceMigrationStorageKey = 'added_cost_price_migrated_form';
 const orderFormUnitVisibleMigrationStorageKey = 'added_unit_visible_migrated_form';
 const orderFormAvailableToSellVisibleMigrationStorageKey = 'added_available_to_sell_migrated_form';
@@ -5381,7 +5388,63 @@ const normalizeProductSearchResponseRows = (rows = [], term = '') => {
         };
     });
 };
-const storeProductSearchCacheEntry = (cache, cacheKey, products, limit = 60) => {
+const persistOrderFormProductSearchCache = (cache) => {
+    if (typeof window === 'undefined' || !cache) return;
+
+    try {
+        const entries = Array.from(cache.entries())
+            .slice(-ORDER_FORM_PRODUCT_SEARCH_SESSION_CACHE_LIMIT)
+            .map(([key, products]) => [
+                key,
+                (Array.isArray(products) ? products : []).slice(0, ORDER_FORM_PRODUCT_SEARCH_SESSION_CACHE_ROW_LIMIT),
+            ]);
+        window.sessionStorage.setItem(productSearchSessionCacheStorageKey, JSON.stringify(entries));
+    } catch (error) {
+        console.error('Unable to persist product search cache', error);
+    }
+};
+const hydrateOrderFormProductSearchCache = (cache) => {
+    if (orderFormProductSearchSessionCacheHydrated || typeof window === 'undefined' || !cache) {
+        return cache;
+    }
+
+    orderFormProductSearchSessionCacheHydrated = true;
+
+    try {
+        const raw = window.sessionStorage.getItem(productSearchSessionCacheStorageKey);
+        const parsed = raw ? JSON.parse(raw) : [];
+        const entries = Array.isArray(parsed) ? parsed : [];
+
+        entries.forEach((entry) => {
+            const [key, products] = Array.isArray(entry) ? entry : [];
+            if (typeof key === 'string' && Array.isArray(products)) {
+                cache.set(key, products.slice(0, ORDER_FORM_PRODUCT_SEARCH_SESSION_CACHE_ROW_LIMIT));
+            }
+        });
+
+        while (cache.size > ORDER_FORM_PRODUCT_SEARCH_SHARED_CACHE_LIMIT) {
+            const oldestCacheKey = cache.keys().next().value;
+            if (!oldestCacheKey) break;
+            cache.delete(oldestCacheKey);
+        }
+    } catch (error) {
+        console.error('Unable to read product search cache', error);
+    }
+
+    return cache;
+};
+const getOrderFormProductSearchCache = () => hydrateOrderFormProductSearchCache(orderFormProductSearchSharedCache);
+const clearOrderFormProductSearchCache = (cache = orderFormProductSearchSharedCache) => {
+    cache?.clear?.();
+    if (typeof window === 'undefined') return;
+
+    try {
+        window.sessionStorage.removeItem(productSearchSessionCacheStorageKey);
+    } catch (error) {
+        console.error('Unable to clear product search cache', error);
+    }
+};
+const storeProductSearchCacheEntry = (cache, cacheKey, products, limit = ORDER_FORM_PRODUCT_SEARCH_SHARED_CACHE_LIMIT) => {
     if (!cache || !cacheKey) return;
 
     cache.set(cacheKey, Array.isArray(products) ? products : []);
@@ -5389,6 +5452,10 @@ const storeProductSearchCacheEntry = (cache, cacheKey, products, limit = 60) => 
         const oldestCacheKey = cache.keys().next().value;
         if (!oldestCacheKey) break;
         cache.delete(oldestCacheKey);
+    }
+
+    if (cache === orderFormProductSearchSharedCache) {
+        persistOrderFormProductSearchCache(cache);
     }
 };
 const getOrderProductSearchPageSize = (term = '') => {
@@ -8048,11 +8115,14 @@ const OrderForm = () => {
     const previousShowSearchDropdownRef = useRef(false);
     const productSearchAbortRef = useRef(null);
     const productSearchRequestKeyRef = useRef('');
-    const productSearchCacheRef = useRef(new Map());
+    const productSearchCacheRef = useRef(getOrderFormProductSearchCache());
     const productSearchPrefetchAbortRef = useRef(null);
     const productSearchPrefetchKeyRef = useRef('');
     const productSearchPrefetchPromiseRef = useRef(null);
     const productPickerWarmupControllersRef = useRef(new Map());
+    const productPickerWarmupTimerIdsRef = useRef([]);
+    const productSearchRetryTimeoutRef = useRef(null);
+    const productSearchHasUserInteractedRef = useRef(false);
     const replacementPickerWarmupAbortRef = useRef(null);
     const replacementPickerWarmupSignatureRef = useRef('');
     const warehouseLookupWarmupAbortRef = useRef(null);
@@ -8067,6 +8137,16 @@ const OrderForm = () => {
     const productQuickSetupCacheRef = useRef(new Map());
     const productQuickSetupRefreshAbortRef = useRef(null);
     const abortProductPickerBackgroundRequests = useCallback(({ includeProductSearchPrefetch = false } = {}) => {
+        if (typeof window !== 'undefined') {
+            productPickerWarmupTimerIdsRef.current.forEach((timerId) => window.clearTimeout(timerId));
+            productPickerWarmupTimerIdsRef.current = [];
+
+            if (productSearchRetryTimeoutRef.current) {
+                window.clearTimeout(productSearchRetryTimeoutRef.current);
+                productSearchRetryTimeoutRef.current = null;
+            }
+        }
+
         if (includeProductSearchPrefetch) {
             productSearchPrefetchAbortRef.current?.abort();
             productSearchPrefetchAbortRef.current = null;
@@ -8085,6 +8165,10 @@ const OrderForm = () => {
         productQuickSetupRefreshAbortRef.current?.abort();
         productQuickSetupRefreshAbortRef.current = null;
     }, []);
+    const prioritizeProductSearchInput = useCallback(() => {
+        productSearchHasUserInteractedRef.current = true;
+        abortProductPickerBackgroundRequests({ includeProductSearchPrefetch: true });
+    }, [abortProductPickerBackgroundRequests]);
     const productQuickSetupListRef = useRef(null);
     const productQuickSetupSearchInputRef = useRef(null);
     const pendingProductQuickSetupViewportRef = useRef(null);
@@ -8249,7 +8333,7 @@ const OrderForm = () => {
                 ? currentIds.filter((id) => id !== normalizedAccountId)
                 : [...currentIds, normalizedAccountId];
         });
-        productSearchCacheRef.current.clear();
+        clearOrderFormProductSearchCache(productSearchCacheRef.current);
         productQuickFilterScopeCacheRef.current.clear();
         productQuickSetupCacheRef.current.clear();
         orderAiReplaceSearchCacheRef.current.clear();
@@ -9706,12 +9790,26 @@ const navigateBack = useCallback(() => {
     }, []);
 
     const clearProductSearchInput = useCallback(() => {
+        prioritizeProductSearchInput();
         setSearchTerm('');
         setDebouncedSearchTerm('');
+        setProducts([]);
+        setProductSearchLoading(false);
+        setProductSearchLoadingTerm('');
+        setProductSearchLoadedTerm('');
         setShowSearchHistory(false);
-    }, []);
+    }, [prioritizeProductSearchInput]);
+
+    const handleProductSearchTermChange = useCallback((value) => {
+        prioritizeProductSearchInput();
+        setSearchTerm(value);
+        setShowProductQuickSetupPanel(false);
+        setShowSearchDropdown(true);
+        setShowSearchHistory(false);
+    }, [prioritizeProductSearchInput]);
 
     const focusProductSearch = useCallback(() => {
+        prioritizeProductSearchInput();
         setShowProductQuickSetupPanel(false);
         setShowSearchDropdown(true);
         setShowSearchHistory(false);
@@ -9720,7 +9818,7 @@ const navigateBack = useCallback(() => {
             productSearchContainerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
             productSearchInputRef.current?.focus();
         });
-    }, []);
+    }, [prioritizeProductSearchInput]);
 
     const toggleProductSearchPanel = useCallback(() => {
         if (showSearchDropdown) {
@@ -12788,20 +12886,24 @@ const navigateBack = useCallback(() => {
 
     const buildProductSearchRequest = useCallback((term = '', filterOverrides = {}) => {
         const shouldApplyQuickFilter = Boolean(filterOverrides.applyQuickFilter);
+        const shouldRankQuickFilter = Boolean(filterOverrides.rankQuickFilter ?? (!shouldApplyQuickFilter && hasActiveProductQuickFilter));
+        const normalizedTerm = normalizeCanvasText(term);
         const params = {
-            per_page: getOrderProductSearchPageSize(term),
+            per_page: getOrderProductSearchPageSize(normalizedTerm),
             picker: 1,
             fast_picker: 1,
             light_picker: 1,
             fast_text_search: 1,
+            suggest_picker: normalizedTerm ? 1 : 0,
             quick_filter_enabled: shouldApplyQuickFilter ? 1 : 0,
+            quick_filter_rank: shouldRankQuickFilter ? 1 : 0,
         };
-        if (term) {
-            params.search = term;
+        if (normalizedTerm) {
+            params.search = normalizedTerm;
             params.filter_bundle_options_by_search = 1;
         }
 
-        if (shouldApplyQuickFilter) {
+        if (shouldApplyQuickFilter || shouldRankQuickFilter) {
             const activeFilterAttribute = filterOverrides.attribute || activeProductQuickFilterAttribute;
             const activeFilterValues = Array.isArray(filterOverrides.values)
                 ? filterOverrides.values.map(normalizeQuickFilterOptionValue).filter(Boolean)
@@ -12822,6 +12924,7 @@ const navigateBack = useCallback(() => {
         activeProductQuickFilterAttribute,
         activeProductQuickFilterAttribute2,
         appendCrossSellSourceParams,
+        hasActiveProductQuickFilter,
         normalizedProductQuickFilterValues,
         normalizedProductQuickFilterValues2,
     ]);
@@ -12829,8 +12932,9 @@ const navigateBack = useCallback(() => {
     const fetchProducts = useCallback(async (term = '', filterOverrides = {}) => {
         const requestTerm = normalizeCanvasText(term);
         const skipPendingPrefetch = Boolean(filterOverrides.skipPendingPrefetch);
+        const retryAttempt = Boolean(filterOverrides.retryAttempt);
         abortProductPickerBackgroundRequests({ includeProductSearchPrefetch: skipPendingPrefetch });
-        const { params, cacheKey } = buildProductSearchRequest(term, filterOverrides);
+        const { params, cacheKey } = buildProductSearchRequest(requestTerm, filterOverrides);
         productSearchRequestKeyRef.current = cacheKey;
         productSearchAbortRef.current?.abort();
         productSearchAbortRef.current = null;
@@ -12892,13 +12996,26 @@ const navigateBack = useCallback(() => {
             const prodRes = await productApi.getAll(params, controller.signal);
             if (controller.signal.aborted || productSearchRequestKeyRef.current !== cacheKey) return;
 
-            const nextProducts = normalizeProductSearchResponseRows(prodRes.data.data, term);
+            const nextProducts = normalizeProductSearchResponseRows(prodRes.data.data, requestTerm);
             storeProductSearchCacheEntry(productSearchCacheRef.current, cacheKey, nextProducts);
             markCurrentRequestDone(nextProducts);
         } catch (error) {
             if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') {
                 if (requestTimedOut && productSearchRequestKeyRef.current === cacheKey) {
-                    markCurrentRequestDone([]);
+                    if (!retryAttempt && typeof window !== 'undefined') {
+                        productSearchRetryTimeoutRef.current = window.setTimeout(() => {
+                            productSearchRetryTimeoutRef.current = null;
+                            fetchProducts(requestTerm, {
+                                ...filterOverrides,
+                                retryAttempt: true,
+                                skipPendingPrefetch: true,
+                            });
+                        }, ORDER_FORM_PRODUCT_SEARCH_RETRY_DELAY_MS);
+                    } else {
+                        setProductSearchLoadedTerm(requestTerm);
+                        setProductSearchLoading(false);
+                        setProductSearchLoadingTerm('');
+                    }
                 }
                 return;
             }
@@ -12924,6 +13041,8 @@ const navigateBack = useCallback(() => {
     }, [fetchProducts, searchTerm]);
 
     const warmProductSearchCache = useCallback((term = '', filterOverrides = {}) => {
+        if (productSearchHasUserInteractedRef.current) return;
+
         const { params, cacheKey } = buildProductSearchRequest(term, filterOverrides);
         if (productSearchCacheRef.current.has(cacheKey) || productPickerWarmupControllersRef.current.has(cacheKey)) {
             return;
@@ -12950,6 +13069,8 @@ const navigateBack = useCallback(() => {
     }, [buildProductSearchRequest]);
 
     const warmReplacementPickerCaches = useCallback(() => {
+        if (productSearchHasUserInteractedRef.current) return;
+
         const params = appendCrossSellSourceParams({
             picker: 1,
             fast_picker: 1,
@@ -13006,13 +13127,18 @@ const navigateBack = useCallback(() => {
 
         const timerIds = [];
         const scheduleWarmup = (callback, delay) => {
-            const timerId = window.setTimeout(callback, delay);
+            const timerId = window.setTimeout(() => {
+                productPickerWarmupTimerIdsRef.current = productPickerWarmupTimerIdsRef.current
+                    .filter((pendingTimerId) => pendingTimerId !== timerId);
+                if (productSearchHasUserInteractedRef.current) return;
+                callback();
+            }, delay);
             timerIds.push(timerId);
+            productPickerWarmupTimerIdsRef.current.push(timerId);
         };
 
         scheduleWarmup(() => {
             warmProductSearchCache('', { applyQuickFilter: false });
-            warmProductSearchCache(ORDER_FORM_PRODUCT_PICKER_WARMUP_SEARCH_TERM, { applyQuickFilter: false });
             if (hasActiveProductQuickFilter) {
                 warmProductSearchCache('', { applyQuickFilter: true });
             }
@@ -13039,6 +13165,8 @@ const navigateBack = useCallback(() => {
 
         return () => {
             timerIds.forEach((timerId) => window.clearTimeout(timerId));
+            productPickerWarmupTimerIdsRef.current = productPickerWarmupTimerIdsRef.current
+                .filter((timerId) => !timerIds.includes(timerId));
         };
     }, [hasActiveProductQuickFilter, searchHistory, warmProductSearchCache, warmReplacementPickerCaches]);
 
@@ -13259,7 +13387,7 @@ const navigateBack = useCallback(() => {
     const resetProductSearchForQuickFilterChange = useCallback(() => {
         if (!shouldResetProductSearchOnQuickFilterChange) return;
 
-        productSearchCacheRef.current.clear();
+        clearOrderFormProductSearchCache(productSearchCacheRef.current);
         setProducts([]);
     }, [shouldResetProductSearchOnQuickFilterChange]);
 
@@ -13397,7 +13525,7 @@ const navigateBack = useCallback(() => {
         setShowSearchHistory(false);
         setShowProductQuickSetupPanel(false);
         setShowProductQuickFilterPanel(false);
-        productSearchCacheRef.current.clear();
+        clearOrderFormProductSearchCache(productSearchCacheRef.current);
     }, [productQuickModeDefaultEnabled]);
 
     const saveCurrentProductQuickSetupItems = useCallback((items) => {
@@ -14231,11 +14359,16 @@ const navigateBack = useCallback(() => {
         const hasSearchText = debouncedSearchTerm.trim() !== '';
         if (isProductQuickModeActive && !hasEnabledCrossSellSources) return;
 
-        if (showSearchDropdown || hasSearchText) {
+        if (hasSearchText) {
             fetchProducts(debouncedSearchTerm, {
                 applyQuickFilter: false,
             });
+            return;
         }
+
+        setProductSearchLoading(false);
+        setProductSearchLoadingTerm('');
+        setProductSearchLoadedTerm('');
     }, [
         fetchProducts,
         debouncedSearchTerm,
@@ -14355,6 +14488,14 @@ const navigateBack = useCallback(() => {
     useEffect(() => () => {
         productSearchAbortRef.current?.abort();
         productSearchPrefetchAbortRef.current?.abort();
+        if (typeof window !== 'undefined') {
+            productPickerWarmupTimerIdsRef.current.forEach((timerId) => window.clearTimeout(timerId));
+            productPickerWarmupTimerIdsRef.current = [];
+            if (productSearchRetryTimeoutRef.current) {
+                window.clearTimeout(productSearchRetryTimeoutRef.current);
+                productSearchRetryTimeoutRef.current = null;
+            }
+        }
         productPickerWarmupControllersRef.current.forEach((controller) => controller?.abort?.());
         productPickerWarmupControllersRef.current.clear();
         replacementPickerWarmupAbortRef.current?.abort();
@@ -16558,7 +16699,7 @@ const navigateBack = useCallback(() => {
                                         onClick={(event) => {
                                             event.stopPropagation();
                                             setEnabledCrossSellAccountIds([]);
-                                            productSearchCacheRef.current.clear();
+                                            clearOrderFormProductSearchCache(productSearchCacheRef.current);
                                             productQuickFilterScopeCacheRef.current.clear();
                                             productQuickSetupCacheRef.current.clear();
                                             orderAiReplaceSearchCacheRef.current.clear();
@@ -16951,15 +17092,13 @@ const navigateBack = useCallback(() => {
                                 className="min-w-0 flex-1 bg-transparent text-[14px] font-semibold leading-[1.35] text-[#0F172A] placeholder:text-primary/30 focus:outline-none"
                                 value={searchTerm}
                                 onChange={(e) => {
-                                    setSearchTerm(e.target.value);
-                                    setShowProductQuickSetupPanel(false);
-                                    setShowSearchDropdown(true);
-                                    setShowSearchHistory(false);
-                                }}
+                                handleProductSearchTermChange(e.target.value);
+                            }}
                                 onFocus={() => {
-                                    setShowProductQuickSetupPanel(false);
-                                    setShowSearchDropdown(true);
-                                }}
+                                prioritizeProductSearchInput();
+                                setShowProductQuickSetupPanel(false);
+                                setShowSearchDropdown(true);
+                            }}
                                 onKeyDown={(e) => {
                                     if (e.key === 'Escape' && searchTerm !== '') {
                                         e.preventDefault();
@@ -16989,12 +17128,10 @@ const navigateBack = useCallback(() => {
                             className="flex-1 bg-transparent text-[14px] font-medium tracking-tight text-[#0F172A] placeholder:text-primary/30 focus:outline-none"
                             value={searchTerm}
                             onChange={(e) => {
-                                setSearchTerm(e.target.value);
-                                setShowProductQuickSetupPanel(false);
-                                setShowSearchDropdown(true);
-                                setShowSearchHistory(false);
+                                handleProductSearchTermChange(e.target.value);
                             }}
                             onFocus={() => {
+                                prioritizeProductSearchInput();
                                 setShowProductQuickSetupPanel(false);
                                 setShowSearchDropdown(true);
                             }}
@@ -18207,15 +18344,13 @@ const navigateBack = useCallback(() => {
                                                 className="bg-transparent text-[14px] placeholder:text-primary/30 focus:outline-none flex-1 font-medium text-[#0F172A] tracking-tight"
                                                 value={searchTerm}
                                                 onChange={(e) => {
-                                                    setSearchTerm(e.target.value);
-                                                    setShowProductQuickSetupPanel(false);
-                                                    setShowSearchDropdown(true);
-                                                    setShowSearchHistory(false);
-                                                }}
+                                handleProductSearchTermChange(e.target.value);
+                            }}
                                                 onFocus={() => {
-                                                    setShowProductQuickSetupPanel(false);
-                                                    setShowSearchDropdown(true);
-                                                }}
+                                prioritizeProductSearchInput();
+                                setShowProductQuickSetupPanel(false);
+                                setShowSearchDropdown(true);
+                            }}
                                                 onKeyDown={(e) => {
                                                     if (e.key === 'Escape' && searchTerm !== '') {
                                                         e.preventDefault();

@@ -7699,7 +7699,6 @@ class ProductController extends Controller
     protected function productQuickFilterRankRequested(Request $request): bool
     {
         return $request->boolean('quick_filter_rank')
-            && ! $request->boolean('fast_picker')
             && ! $this->productQuickFiltersEnabled($request);
     }
 
@@ -8633,7 +8632,8 @@ class ProductController extends Controller
         ?array $bundleOptionSearch = null,
         array $bundleOptionMatchedProductIds = [],
         array $sourceCatalogAccountIds = [],
-        bool $lightPicker = false
+        bool $lightPicker = false,
+        bool $suggestPicker = false
     ): void {
         if ($products->isEmpty()) {
             return;
@@ -8697,17 +8697,20 @@ class ProductController extends Controller
                     'products.inventory_import_starred',
                 ]);
             },
-            'bundleItems.images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
         ];
 
-        if (!$lightPicker) {
-            $bundleRelations[] = 'bundleItems.images.mediaAsset:id,public_id,disk,variants';
+        if (!$suggestPicker) {
+            $bundleRelations[] = 'bundleItems.images:id,product_id,media_asset_id,image_url,is_primary,sort_order';
+
+            if (!$lightPicker) {
+                $bundleRelations[] = 'bundleItems.images.mediaAsset:id,public_id,disk,variants';
+            }
         }
 
         $products->load($bundleRelations);
     }
 
-    protected function loadPickerBundleSelectedVariantMap(Collection $products, array $sourceCatalogAccountIds = []): Collection
+    protected function loadPickerBundleSelectedVariantMap(Collection $products, array $sourceCatalogAccountIds = [], bool $suggestPicker = false): Collection
     {
         $variantIds = $products
             ->flatMap(function (Product $product) {
@@ -8752,37 +8755,42 @@ class ProductController extends Controller
             $variantQuery->whereIn('products.account_id', $sourceCatalogAccountIds);
         }
 
+        $variantRelations = [
+            'unit:id,name',
+            'attributeValues:id,product_id,attribute_id,value',
+            'parentConfigurable' => function ($parentQuery) use ($sourceCatalogAccountIds) {
+                $parentQuery->withoutGlobalScope('account_id');
+                if (!empty($sourceCatalogAccountIds)) {
+                    $parentQuery->whereIn('products.account_id', $sourceCatalogAccountIds);
+                }
+                $parentQuery->select([
+                    'products.id',
+                    'products.account_id',
+                    'products.sku',
+                    'products.name',
+                    'products.type',
+                    'products.inventory_unit_id',
+                    'products.profit_center_id',
+                    'products.warehouse_sequence',
+                    'products.inventory_import_starred',
+                ]);
+            },
+        ];
+
+        if (!$suggestPicker) {
+            $variantRelations[] = 'images:id,product_id,media_asset_id,image_url,is_primary,sort_order';
+            $variantRelations[] = 'images.mediaAsset:id,public_id,disk,variants';
+        }
+
         return $variantQuery
-            ->with([
-                'unit:id,name',
-                'attributeValues:id,product_id,attribute_id,value',
-                'parentConfigurable' => function ($parentQuery) use ($sourceCatalogAccountIds) {
-                    $parentQuery->withoutGlobalScope('account_id');
-                    if (!empty($sourceCatalogAccountIds)) {
-                        $parentQuery->whereIn('products.account_id', $sourceCatalogAccountIds);
-                    }
-                    $parentQuery->select([
-                        'products.id',
-                        'products.account_id',
-                        'products.sku',
-                        'products.name',
-                        'products.type',
-                        'products.inventory_unit_id',
-                        'products.profit_center_id',
-                        'products.warehouse_sequence',
-                        'products.inventory_import_starred',
-                    ]);
-                },
-                'images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
-                'images.mediaAsset:id,public_id,disk,variants',
-            ])
+            ->with($variantRelations)
             ->get()
             ->keyBy(fn (Product $product) => (int) $product->id);
     }
 
     protected function pickerPrimaryImage(?Product $product, bool $preferRawImage = false): ?string
     {
-        if (!$product) {
+        if (!$product || !$product->relationLoaded('images')) {
             return null;
         }
 
@@ -9274,6 +9282,7 @@ class ProductController extends Controller
         $quickFiltersEnabled = $this->productQuickFiltersEnabled($request);
         $replacePicker = $request->boolean('replace_picker');
         $lightPicker = $request->boolean('light_picker');
+        $suggestPicker = $request->boolean('suggest_picker') && $lightPicker && !$replacePicker && $request->filled('search');
         $parentOnly = $request->boolean('parent_only') || $request->boolean('top_level_only');
         $sourceContexts = $this->resolvePickerSourceContexts($request);
         $sourceCatalogAccountIds = $sourceContexts
@@ -9469,11 +9478,32 @@ class ProductController extends Controller
         ];
 
         if (!$replacePicker) {
-            $pickerRelations[] = 'images:id,product_id,media_asset_id,image_url,is_primary,sort_order';
-            $pickerRelations['variations'] = function ($variationQuery) use ($pickerAttributeFilters, $sourceCatalogAccountIds) {
+            if (!$suggestPicker) {
+                $pickerRelations[] = 'images:id,product_id,media_asset_id,image_url,is_primary,sort_order';
+            }
+
+            $pickerRelations['variations'] = function ($variationQuery) use ($pickerAttributeFilters, $sourceCatalogAccountIds, $suggestPicker) {
                 $variationQuery->withoutGlobalScope('account_id');
                 if (!empty($sourceCatalogAccountIds)) {
                     $variationQuery->whereIn('products.account_id', $sourceCatalogAccountIds);
+                }
+                if ($suggestPicker) {
+                    $variationQuery->select([
+                        'products.id',
+                        'products.account_id',
+                        'products.sku',
+                        'products.name',
+                        'products.price',
+                        'products.cost_price',
+                        'products.expected_cost',
+                        'products.stock_quantity',
+                        'products.type',
+                        'products.category_id',
+                        'products.inventory_unit_id',
+                        'products.profit_center_id',
+                        'products.warehouse_sequence',
+                        'products.inventory_import_starred',
+                    ]);
                 }
                 $variationQuery->where('products.status', true);
                 $variationQuery->withExists('variations');
@@ -9481,9 +9511,11 @@ class ProductController extends Controller
             };
             $pickerRelations[] = 'variations.unit:id,name';
             $pickerRelations[] = 'variations.attributeValues:id,product_id,attribute_id,value';
-            $pickerRelations[] = 'variations.images:id,product_id,media_asset_id,image_url,is_primary,sort_order';
-            if (!$lightPicker) {
-                $pickerRelations[] = 'variations.images.mediaAsset:id,public_id,disk,variants';
+            if (!$suggestPicker) {
+                $pickerRelations[] = 'variations.images:id,product_id,media_asset_id,image_url,is_primary,sort_order';
+                if (!$lightPicker) {
+                    $pickerRelations[] = 'variations.images.mediaAsset:id,public_id,disk,variants';
+                }
             }
         }
 
@@ -9525,10 +9557,11 @@ class ProductController extends Controller
                 $bundleOptionSearch,
                 $bundleOptionMatchedProductIds,
                 $sourceCatalogAccountIds,
-                $lightPicker
+                $lightPicker,
+                $suggestPicker
             );
             $this->appendBundleOptionPostMetaToProducts($pageProducts);
-            $selectedBundleVariantMap = $this->loadPickerBundleSelectedVariantMap($pageProducts, $sourceCatalogAccountIds);
+            $selectedBundleVariantMap = $this->loadPickerBundleSelectedVariantMap($pageProducts, $sourceCatalogAccountIds, $suggestPicker);
         }
 
         $searchTerm = trim((string) $request->input('search', ''));

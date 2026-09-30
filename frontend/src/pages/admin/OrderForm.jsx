@@ -14018,14 +14018,17 @@ const navigateBack = useCallback(() => {
         && activeProductQuickFilterRankCriteria.length > 0;
 
     const rankedSearchProducts = useMemo(() => {
-        const quickFilterRankCriteria = shouldRankInactiveProductQuickFilters
+        const hasSearchText = searchTerm.trim() !== '';
+        const shouldUseManualQuickModeEntries = isManualProductQuickModeActive;
+        const shouldBoostSearchMatchesByQuickFilter = hasSearchText
+            && hasActiveProductQuickFilter
+            && !shouldUseManualQuickModeEntries;
+        const quickFilterRankCriteria = shouldRankInactiveProductQuickFilters || shouldBoostSearchMatchesByQuickFilter
             ? activeProductQuickFilterRankCriteria
             : [];
-        const shouldUseManualQuickModeEntries = isManualProductQuickModeActive;
         const shouldUseQuickModeEntries = !shouldUseManualQuickModeEntries
             && isProductQuickModeActive
             && !hasEnabledCrossSellSources;
-        const hasSearchText = searchTerm.trim() !== '';
         const shouldUseQuickModeFallbackEntries = !shouldUseManualQuickModeEntries
             && !shouldUseQuickModeEntries
             && !hasEnabledCrossSellSources
@@ -14079,10 +14082,12 @@ const navigateBack = useCallback(() => {
                 const serverMatchedSearch = !shouldUseManualQuickModeEntries
                     && Boolean(product?.server_search_match || product?.__server_search_match);
 
+                const effectiveSearchScore = serverMatchedSearch ? Math.max(searchScore, 1) : searchScore;
+
                 return {
                     ...product,
-                    __searchScore: serverMatchedSearch ? Math.max(searchScore, 1) : searchScore,
-                    __quickFilterScore: searchScore > 0
+                    __searchScore: effectiveSearchScore,
+                    __quickFilterScore: effectiveSearchScore > 0
                         ? scoreProductQuickFilterPriority(product, quickFilterRankCriteria)
                         : 0,
                 };

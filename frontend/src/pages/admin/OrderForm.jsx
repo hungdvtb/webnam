@@ -7918,6 +7918,9 @@ const OrderForm = () => {
 
     const [searchTerm, setSearchTerm] = useState(() => initialProductQuickFilterState.searchTerm);
     const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
+    const [productSearchLoading, setProductSearchLoading] = useState(false);
+    const [productSearchLoadingTerm, setProductSearchLoadingTerm] = useState('');
+    const [productSearchLoadedTerm, setProductSearchLoadedTerm] = useState('');
     const [showSearchDropdown, setShowSearchDropdown] = useState(false);
     const [showSearchHistory, setShowSearchHistory] = useState(false);
     const [searchHistory, setSearchHistory] = useState(() => getStoredProductSearchHistory());
@@ -12790,6 +12793,7 @@ const navigateBack = useCallback(() => {
             picker: 1,
             fast_picker: 1,
             light_picker: 1,
+            fast_text_search: 1,
             quick_filter_enabled: shouldApplyQuickFilter ? 1 : 0,
         };
         if (term) {
@@ -12823,12 +12827,26 @@ const navigateBack = useCallback(() => {
     ]);
 
     const fetchProducts = useCallback(async (term = '', filterOverrides = {}) => {
+        const requestTerm = normalizeCanvasText(term);
         const skipPendingPrefetch = Boolean(filterOverrides.skipPendingPrefetch);
         abortProductPickerBackgroundRequests({ includeProductSearchPrefetch: skipPendingPrefetch });
         const { params, cacheKey } = buildProductSearchRequest(term, filterOverrides);
         productSearchRequestKeyRef.current = cacheKey;
         productSearchAbortRef.current?.abort();
         productSearchAbortRef.current = null;
+        setProductSearchLoadingTerm(requestTerm);
+
+        const markCurrentRequestDone = (nextProducts = null) => {
+            if (productSearchRequestKeyRef.current !== cacheKey) return false;
+
+            if (Array.isArray(nextProducts)) {
+                setProducts(nextProducts);
+            }
+            setProductSearchLoadedTerm(requestTerm);
+            setProductSearchLoading(false);
+            setProductSearchLoadingTerm('');
+            return true;
+        };
 
         if (skipPendingPrefetch) {
             productSearchPrefetchAbortRef.current?.abort();
@@ -12839,21 +12857,22 @@ const navigateBack = useCallback(() => {
 
         if (productSearchCacheRef.current.has(cacheKey)) {
             const cachedProducts = productSearchCacheRef.current.get(cacheKey);
-            setProducts(cachedProducts);
+            markCurrentRequestDone(cachedProducts);
             return;
         }
 
+        setProductSearchLoading(true);
+
         if (
             !skipPendingPrefetch
-            &&
-            productSearchPrefetchKeyRef.current === cacheKey
+            && productSearchPrefetchKeyRef.current === cacheKey
             && productSearchPrefetchPromiseRef.current
         ) {
             try {
                 const prefetchedProducts = await productSearchPrefetchPromiseRef.current;
                 if (productSearchRequestKeyRef.current !== cacheKey) return;
                 if (Array.isArray(prefetchedProducts)) {
-                    setProducts(prefetchedProducts);
+                    markCurrentRequestDone(prefetchedProducts);
                     return;
                 }
             } catch (error) {
@@ -12875,13 +12894,18 @@ const navigateBack = useCallback(() => {
 
             const nextProducts = normalizeProductSearchResponseRows(prodRes.data.data, term);
             storeProductSearchCacheEntry(productSearchCacheRef.current, cacheKey, nextProducts);
-            setProducts(nextProducts);
+            markCurrentRequestDone(nextProducts);
         } catch (error) {
             if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') {
                 if (requestTimedOut && productSearchRequestKeyRef.current === cacheKey) {
-                    setProducts([]);
+                    markCurrentRequestDone([]);
                 }
                 return;
+            }
+            if (productSearchRequestKeyRef.current === cacheKey) {
+                setProductSearchLoadedTerm(requestTerm);
+                setProductSearchLoading(false);
+                setProductSearchLoadingTerm('');
             }
             console.error("Error fetching products", error);
         } finally {
@@ -14127,11 +14151,52 @@ const navigateBack = useCallback(() => {
         return 'Không có sản phẩm khả dụng để hiển thị.';
     }, [isManualProductQuickModeActive, isProductQuickModeActive, searchTerm]);
 
-    const shouldShowProductSearchEmptyState = rankedSearchProducts.length === 0
+    const normalizedCurrentProductSearchTerm = normalizeProductSearchText(searchTerm);
+    const normalizedDebouncedProductSearchTerm = normalizeProductSearchText(debouncedSearchTerm);
+    const normalizedLoadedProductSearchTerm = normalizeProductSearchText(productSearchLoadedTerm);
+    const normalizedLoadingProductSearchTerm = normalizeProductSearchText(productSearchLoadingTerm);
+    const isServerBackedProductSearch = !isManualProductQuickModeActive
+        && !(isProductQuickModeActive && !hasEnabledCrossSellSources);
+    const isProductSearchAwaitingDebounce = isServerBackedProductSearch
+        && normalizedCurrentProductSearchTerm !== ''
+        && normalizedDebouncedProductSearchTerm !== normalizedCurrentProductSearchTerm;
+    const isProductSearchAwaitingResponse = isServerBackedProductSearch
+        && normalizedCurrentProductSearchTerm !== ''
+        && productSearchLoading
+        && normalizedLoadingProductSearchTerm === normalizedDebouncedProductSearchTerm;
+    const isProductSearchShowingStaleEmpty = isServerBackedProductSearch
+        && normalizedCurrentProductSearchTerm !== ''
+        && rankedSearchProducts.length === 0
+        && normalizedLoadedProductSearchTerm !== normalizedCurrentProductSearchTerm;
+    const shouldShowProductSearchLoadingState = isProductSearchAwaitingDebounce
+        || isProductSearchAwaitingResponse
+        || isProductSearchShowingStaleEmpty;
+    const shouldShowProductSearchEmptyState = !shouldShowProductSearchLoadingState
+        && rankedSearchProducts.length === 0
         && (searchTerm.trim() !== '' || isProductQuickModeActive || isManualProductQuickModeActive);
 
     useEffect(() => {
-        if (!searchTerm.trim()) {
+        const hasSearchText = searchTerm.trim() !== '';
+        const canUseServerProductSearch = !isManualProductQuickModeActive
+            && !(isProductQuickModeActive && !hasEnabledCrossSellSources);
+
+        if (hasSearchText && canUseServerProductSearch) {
+            const { cacheKey } = buildProductSearchRequest(searchTerm, {
+                applyQuickFilter: false,
+            });
+
+            if (productSearchCacheRef.current.has(cacheKey)) {
+                const cachedProducts = productSearchCacheRef.current.get(cacheKey);
+                setProducts(cachedProducts);
+                setProductSearchLoadedTerm(normalizeCanvasText(searchTerm));
+                setProductSearchLoading(false);
+                setProductSearchLoadingTerm('');
+                setDebouncedSearchTerm(searchTerm);
+                return undefined;
+            }
+        }
+
+        if (!hasSearchText) {
             setDebouncedSearchTerm(searchTerm);
             return undefined;
         }
@@ -14143,7 +14208,13 @@ const navigateBack = useCallback(() => {
         return () => {
             window.clearTimeout(timerId);
         };
-    }, [searchTerm]);
+    }, [
+        buildProductSearchRequest,
+        hasEnabledCrossSellSources,
+        isManualProductQuickModeActive,
+        isProductQuickModeActive,
+        searchTerm,
+    ]);
 
     useEffect(() => {
         const timerId = setTimeout(() => {
@@ -17344,6 +17415,12 @@ const navigateBack = useCallback(() => {
                                 activeAccountId={activeAccountId}
                             />
                         ))}
+                        {shouldShowProductSearchLoadingState && (
+                            <div className={`flex items-center justify-center gap-2 p-4 text-center italic text-primary/30 ${mobile ? 'text-[13px] font-semibold' : 'text-[11px] font-black uppercase tracking-widest'}`}>
+                                <span className="material-symbols-outlined animate-spin text-[15px]">progress_activity</span>
+                                Đang tìm sản phẩm...
+                            </div>
+                        )}
                         {shouldShowProductSearchEmptyState && (
                             <div className={`p-4 text-center italic text-primary/20 ${mobile ? 'text-[13px] font-semibold' : 'text-[11px] font-black uppercase tracking-widest'}`}>
                                 {productSearchEmptyMessage}
@@ -18539,6 +18616,12 @@ const navigateBack = useCallback(() => {
                                                         activeAccountId={activeAccountId}
                                                     />
                                                 ))}
+                                                {shouldShowProductSearchLoadingState && (
+                                                    <div className="flex items-center justify-center gap-2 p-4 text-center italic text-primary/30 text-[11px] uppercase font-black tracking-widest">
+                                                        <span className="material-symbols-outlined animate-spin text-[15px]">progress_activity</span>
+                                                        Đang tìm sản phẩm...
+                                                    </div>
+                                                )}
                                                 {shouldShowProductSearchEmptyState && (
                                                     <div className="p-4 text-center italic text-primary/20 text-[11px] uppercase font-black tracking-widest">{productSearchEmptyMessage}</div>
                                                 )}

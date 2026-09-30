@@ -5994,7 +5994,8 @@ class ProductController extends Controller
         Builder $query,
         string $rawSearch,
         bool $includeVariationMatches = true,
-        bool $skipMatchProbes = false
+        bool $skipMatchProbes = false,
+        bool $fastTextSearch = false
     ): array
     {
         $trimmedSearch = trim($rawSearch);
@@ -6019,6 +6020,10 @@ class ProductController extends Controller
             if ($codeSearchRankingSql !== null && $codeProbeQuery->exists()) {
                 return $this->applyProductCodeSearch($query, $trimmedSearch, $includeVariationMatches, $skipMatchProbes);
             }
+        }
+
+        if ($fastTextSearch) {
+            return $this->applyFastProductNameSearch($query, $trimmedSearch, $includeVariationMatches);
         }
 
         return $this->applyProductNameSearch($query, $trimmedSearch, $includeVariationMatches, $skipMatchProbes);
@@ -6803,6 +6808,205 @@ class ProductController extends Controller
         }
 
         $this->applyBundleNameShortTokenConstraint($query, $tokenPrefixLike, $wordPrefixLike);
+    }
+
+    protected function applyFastProductNameSearch(
+        Builder $query,
+        string $rawSearch,
+        bool $includeVariationMatches = true
+    ): array
+    {
+        $normalizedName = $this->normalizeNameSearchText($rawSearch);
+        if ($normalizedName === '') {
+            return [null, []];
+        }
+
+        $nameExpr = $this->normalizedWordsExpression('products.name');
+        $compactNameExpr = $this->compactSearchExpression('products.name');
+        $bundleOptionExpr = $this->normalizedWordsExpression('product_links.option_title');
+        $bundleOptionCompactExpr = $this->compactSearchExpression('product_links.option_title');
+        $nameExact = $normalizedName;
+        $namePrefixLike = $this->escapeLike($normalizedName) . '%';
+        $nameContainsLike = '%' . $this->escapeLike($normalizedName) . '%';
+        $compactName = $this->compactSearchText($rawSearch);
+        $compactNameExact = $compactName !== '' ? $compactName : null;
+        $compactNamePrefixLike = $compactName !== '' ? $this->escapeLike($compactName) . '%' : null;
+        $compactNameContainsLike = $compactName !== '' ? '%' . $this->escapeLike($compactName) . '%' : null;
+        $includeCompactSkuMatches = $compactNameContainsLike !== null
+            && strlen($compactName) >= 3
+            && preg_match('/\s/u', trim($rawSearch)) !== 1;
+        $nameTokens = $this->extractNameSearchTokens($normalizedName, $compactName);
+        $tokenLikes = array_map(
+            fn ($token) => '%' . $this->escapeLike($token) . '%',
+            $nameTokens
+        );
+        $hasAlphaToken = collect($nameTokens)->contains(fn ($token) => preg_match('/[a-z]/i', $token) === 1);
+        $skuTokenLikes = $hasAlphaToken
+            ? collect($nameTokens)
+                ->filter(fn ($token) => preg_match('/\d/', $token) === 1)
+                ->map(fn ($token) => '%' . $this->escapeLike($token) . '%')
+                ->unique()
+                ->values()
+                ->all()
+            : [];
+
+        $rankingParts = [
+            "CASE WHEN {$nameExpr} = ? THEN 2600 ELSE 0 END",
+            "CASE WHEN {$nameExpr} LIKE ? ESCAPE '\\' THEN 2100 ELSE 0 END",
+            "CASE WHEN {$nameExpr} LIKE ? ESCAPE '\\' THEN 1700 ELSE 0 END",
+            'CASE WHEN ' . $this->bundleOptionTitleExistsSql("{$bundleOptionExpr} = ?") . ' THEN 2350 ELSE 0 END',
+            'CASE WHEN ' . $this->bundleOptionTitleExistsSql("{$bundleOptionExpr} LIKE ? ESCAPE '\\'") . ' THEN 1950 ELSE 0 END',
+            'CASE WHEN ' . $this->bundleOptionTitleExistsSql("{$bundleOptionExpr} LIKE ? ESCAPE '\\'") . ' THEN 1500 ELSE 0 END',
+        ];
+        $rankingBindings = [
+            $nameExact,
+            $namePrefixLike,
+            $nameContainsLike,
+            $nameExact,
+            $namePrefixLike,
+            $nameContainsLike,
+        ];
+
+        if ($compactNameExact !== null) {
+            $rankingParts[] = "CASE WHEN {$compactNameExpr} = ? THEN 2200 ELSE 0 END";
+            $rankingBindings[] = $compactNameExact;
+            $rankingParts[] = 'CASE WHEN ' . $this->bundleOptionTitleExistsSql("{$bundleOptionCompactExpr} = ?") . ' THEN 2150 ELSE 0 END';
+            $rankingBindings[] = $compactNameExact;
+        }
+
+        if ($compactNamePrefixLike !== null) {
+            $rankingParts[] = "CASE WHEN {$compactNameExpr} LIKE ? ESCAPE '\\' THEN 1850 ELSE 0 END";
+            $rankingBindings[] = $compactNamePrefixLike;
+            $rankingParts[] = 'CASE WHEN ' . $this->bundleOptionTitleExistsSql("{$bundleOptionCompactExpr} LIKE ? ESCAPE '\\'") . ' THEN 1750 ELSE 0 END';
+            $rankingBindings[] = $compactNamePrefixLike;
+        }
+
+        if ($compactNameContainsLike !== null) {
+            $rankingParts[] = "CASE WHEN {$compactNameExpr} LIKE ? ESCAPE '\\' THEN 1550 ELSE 0 END";
+            $rankingBindings[] = $compactNameContainsLike;
+            $rankingParts[] = 'CASE WHEN ' . $this->bundleOptionTitleExistsSql("{$bundleOptionCompactExpr} LIKE ? ESCAPE '\\'") . ' THEN 1450 ELSE 0 END';
+            $rankingBindings[] = $compactNameContainsLike;
+        }
+
+        if ($includeCompactSkuMatches) {
+            $compactSkuExpr = $this->compactSearchExpression('products.sku');
+            $rankingParts[] = "CASE WHEN {$compactSkuExpr} LIKE ? ESCAPE '\\' THEN 1450 ELSE 0 END";
+            $rankingBindings[] = $compactNameContainsLike;
+        }
+
+        foreach ($tokenLikes as $tokenLike) {
+            $rankingParts[] = "CASE WHEN {$nameExpr} LIKE ? ESCAPE '\\' THEN 120 ELSE 0 END";
+            $rankingBindings[] = $tokenLike;
+            $rankingParts[] = "CASE WHEN {$compactNameExpr} LIKE ? ESCAPE '\\' THEN 100 ELSE 0 END";
+            $rankingBindings[] = $tokenLike;
+            $rankingParts[] = 'CASE WHEN ' . $this->bundleOptionTitleExistsSql("{$bundleOptionExpr} LIKE ? ESCAPE '\\'") . ' THEN 95 ELSE 0 END';
+            $rankingBindings[] = $tokenLike;
+        }
+
+        $rankingSql = '(' . implode(' + ', $rankingParts) . ')';
+        $query->selectRaw("{$rankingSql} AS search_score", $rankingBindings);
+        $query->where(function (Builder $searchQuery) use (
+            $nameContainsLike,
+            $compactNameContainsLike,
+            $tokenLikes,
+            $includeCompactSkuMatches,
+            $includeVariationMatches,
+            $skuTokenLikes
+        ) {
+            $this->applyFastProductNameConstraint(
+                $searchQuery,
+                $nameContainsLike,
+                $compactNameContainsLike,
+                $tokenLikes,
+                $includeCompactSkuMatches,
+                $includeVariationMatches,
+                $skuTokenLikes
+            );
+        });
+
+        return [$rankingSql, $rankingBindings];
+    }
+
+    protected function applyFastProductNameConstraint(
+        Builder $query,
+        string $nameContainsLike,
+        ?string $compactNameContainsLike,
+        array $tokenLikes,
+        bool $includeCompactSkuMatches = false,
+        bool $includeVariationMatches = true,
+        array $skuTokenLikes = []
+    ): void
+    {
+        $nameExpr = $this->normalizedWordsExpression('products.name');
+        $compactNameExpr = $this->compactSearchExpression('products.name');
+        $compactSkuExpr = ($includeCompactSkuMatches || !empty($skuTokenLikes))
+            ? $this->compactSearchExpression('products.sku')
+            : null;
+        $skuTokenLikeSet = array_fill_keys($skuTokenLikes, true);
+
+        $applyTextConstraint = function (
+            Builder $textQuery,
+            string $wordsExpr,
+            ?string $compactExpr,
+            ?string $skuExpr = null
+        ) use ($nameContainsLike, $compactNameContainsLike, $tokenLikes, $includeCompactSkuMatches, $skuTokenLikeSet) {
+            $textQuery->where(function (Builder $phraseQuery) use ($wordsExpr, $compactExpr, $skuExpr, $nameContainsLike, $compactNameContainsLike, $includeCompactSkuMatches) {
+                $phraseQuery->whereRaw("{$wordsExpr} LIKE ? ESCAPE '\\'", [$nameContainsLike]);
+
+                if ($compactExpr !== null && $compactNameContainsLike !== null) {
+                    $phraseQuery->orWhereRaw("{$compactExpr} LIKE ? ESCAPE '\\'", [$compactNameContainsLike]);
+                }
+
+                if ($skuExpr !== null && $includeCompactSkuMatches && $compactNameContainsLike !== null) {
+                    $phraseQuery->orWhereRaw("{$skuExpr} LIKE ? ESCAPE '\\'", [$compactNameContainsLike]);
+                }
+            });
+
+            if (!empty($tokenLikes)) {
+                $textQuery->orWhere(function (Builder $tokenQuery) use ($wordsExpr, $compactExpr, $skuExpr, $tokenLikes, $skuTokenLikeSet) {
+                    foreach ($tokenLikes as $tokenLike) {
+                        $matchSkuForToken = isset($skuTokenLikeSet[$tokenLike]);
+                        $tokenQuery->where(function (Builder $segmentQuery) use ($wordsExpr, $compactExpr, $skuExpr, $tokenLike, $matchSkuForToken) {
+                            $segmentQuery->whereRaw("{$wordsExpr} LIKE ? ESCAPE '\\'", [$tokenLike]);
+
+                            if ($compactExpr !== null) {
+                                $segmentQuery->orWhereRaw("{$compactExpr} LIKE ? ESCAPE '\\'", [$tokenLike]);
+                            }
+
+                            if ($matchSkuForToken && $skuExpr !== null) {
+                                $segmentQuery->orWhereRaw("{$skuExpr} LIKE ? ESCAPE '\\'", [$tokenLike]);
+                            }
+                        });
+                    }
+                });
+            }
+        };
+
+        $query->where(function (Builder $directQuery) use ($applyTextConstraint, $nameExpr, $compactNameExpr, $compactSkuExpr) {
+            $applyTextConstraint($directQuery, $nameExpr, $compactNameExpr, $compactSkuExpr);
+        });
+
+        if ($includeVariationMatches) {
+            $query->orWhereHas('variations', function (Builder $variationQuery) use ($applyTextConstraint) {
+                $variationNameExpr = $this->normalizedWordsExpression('name');
+                $variationCompactNameExpr = $this->compactSearchExpression('name');
+                $variationCompactSkuExpr = $this->compactSearchExpression('sku');
+
+                $variationQuery->where('status', true)
+                    ->where(function (Builder $directVariationQuery) use ($applyTextConstraint, $variationNameExpr, $variationCompactNameExpr, $variationCompactSkuExpr) {
+                        $applyTextConstraint($directVariationQuery, $variationNameExpr, $variationCompactNameExpr, $variationCompactSkuExpr);
+                    });
+            });
+        }
+
+        $query->orWhereHas('bundleItems', function (Builder $bundleQuery) use ($applyTextConstraint) {
+            $bundleOptionExpr = $this->normalizedWordsExpression('product_links.option_title');
+            $bundleOptionCompactExpr = $this->compactSearchExpression('product_links.option_title');
+
+            $bundleQuery->where(function (Builder $directBundleQuery) use ($applyTextConstraint, $bundleOptionExpr, $bundleOptionCompactExpr) {
+                $applyTextConstraint($directBundleQuery, $bundleOptionExpr, $bundleOptionCompactExpr);
+            });
+        });
     }
 
     protected function applyProductNameSearch(
@@ -9228,7 +9432,12 @@ class ProductController extends Controller
                 $query,
                 (string) $request->input('search'),
                 !$replacePicker,
-                $lightPicker
+                $lightPicker,
+                $request->boolean('fast_text_search')
+                    && $request->boolean('fast_picker')
+                    && $lightPicker
+                    && !$replacePicker
+                    && !$quickFiltersEnabled
             );
         }
 

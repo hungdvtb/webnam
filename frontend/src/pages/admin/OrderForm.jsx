@@ -4742,9 +4742,6 @@ const createOrderLineItem = (payload = {}) => {
         quantity = 1,
         price = 0,
         cost_price = 0,
-        computed_stock = null,
-        pending_export_quantity = null,
-        available_to_sell = null,
         options = undefined,
         ai_meta = undefined,
         category_id = undefined,
@@ -4755,11 +4752,6 @@ const createOrderLineItem = (payload = {}) => {
         replaced_from_name = '',
     } = payload || {};
     const normalizedOptions = normalizeOrderLineOptions(options);
-    const inventorySnapshot = resolveInventorySnapshot({
-        computed_stock,
-        pending_export_quantity,
-        available_to_sell,
-    });
     const normalizedAiMeta = normalizeOrderAiItemMeta(ai_meta);
     const normalizedProductId = Number(product_id) || 0;
     const submittedName = resolveOrderLineItemDisplayName({
@@ -4838,9 +4830,9 @@ const createOrderLineItem = (payload = {}) => {
         actual_sku: normalizedActualProductId > 0 ? resolvedActualSku : '',
         actual_snapshot_name: normalizedActualProductId > 0 ? resolvedActualSnapshotName : '',
         actual_snapshot_sku: normalizedActualProductId > 0 ? resolvedActualSnapshotSku : '',
-        computed_stock: inventorySnapshot.computed_stock,
-        pending_export_quantity: inventorySnapshot.pending_export_quantity,
-        available_to_sell: inventorySnapshot.available_to_sell,
+        computed_stock: null,
+        pending_export_quantity: null,
+        available_to_sell: null,
         options: normalizedOptions && Object.keys(normalizedOptions).length > 0 ? normalizedOptions : undefined,
         ai_meta: normalizedAiMeta,
         category_id: Number(category_id) || undefined,
@@ -4886,81 +4878,6 @@ const OrderLineActualOverrideNotice = ({ item, onClear, className = '' }) => {
         </div>
     );
 };
-const getOrderItemEffectiveInventoryProductId = (item) => Number(item?.actual_product_id || item?.product_id || 0);
-const getOrderItemEffectiveInventorySku = (item) => (
-    hasActualOrderProductOverride(item)
-        ? getOrderItemActualSkuLabel(item) || item?.sku || ''
-        : item?.sku || ''
-);
-const getOrderItemEffectiveInventoryName = (item) => (
-    hasActualOrderProductOverride(item)
-        ? getOrderItemActualNameLabel(item) || item?.name || ''
-        : item?.name || ''
-);
-const buildProductRefreshPayload = (item, { useEffectiveInventoryProduct = false } = {}) => {
-    const options = item?.options || {};
-    const productId = useEffectiveInventoryProduct
-        ? getOrderItemEffectiveInventoryProductId(item)
-        : Number(item?.target_product_id ?? item?.product_id ?? item?.id ?? 0) || 0;
-
-    if (!productId) {
-        return null;
-    }
-
-    const entryKind = normalizeCanvasText(
-        item?.entry_kind
-        || options?.search_entry_kind
-        || SEARCH_ENTRY_PRODUCT
-    );
-    const bundleParentId = Number(item?.bundle_parent_id ?? options?.bundle_parent_id ?? 0) || 0;
-    const isBundleContext = entryKind === SEARCH_ENTRY_BUNDLE_OPTION
-        || bundleParentId > 0
-        || normalizeCanvasText(item?.bundle_option_key || options?.bundle_option_key)
-        || normalizeCanvasText(item?.bundle_option_uid || options?.bundle_option_uid)
-        || normalizeCanvasText(item?.bundle_option_title || options?.bundle_option_title);
-
-    const payload = {
-        product_id: productId,
-        sku: useEffectiveInventoryProduct ? getOrderItemEffectiveInventorySku(item) : (item?.display_sku || item?.sku || ''),
-        name: useEffectiveInventoryProduct ? getOrderItemEffectiveInventoryName(item) : (item?.display_name || item?.name || ''),
-        ...buildProductSourcePayload(item),
-    };
-
-    if (isBundleContext) {
-        payload.entry_kind = SEARCH_ENTRY_BUNDLE_OPTION;
-        payload.bundle_parent_id = bundleParentId || Number(item?.target_product_id ?? item?.product_id ?? item?.id ?? 0) || undefined;
-        payload.bundle_option_uid = normalizeCanvasText(item?.bundle_option_uid || options?.bundle_option_uid || item?.uid || item?.option_uid) || undefined;
-        payload.bundle_option_key = normalizeCanvasText(item?.bundle_option_key || options?.bundle_option_key || resolveBundleOptionKey(item)) || undefined;
-        payload.bundle_option_title = normalizeCanvasText(item?.bundle_option_title || options?.bundle_option_title || resolveBundleOptionTitle(item)) || undefined;
-        payload.bundle_option_post_id = Number(item?.option_post_id ?? item?.bundle_option_post_id ?? options?.bundle_option_post_id) || undefined;
-        payload.bundle_item_base_product_id = Number(item?.bundle_item_base_product_id ?? options?.bundle_item_base_product_id ?? item?.base_product_id) || undefined;
-    }
-
-    return payload;
-};
-const buildOrderItemsRefreshPayloads = (itemsToRefresh = [], options = {}) => Array.from(new Map(
-    (Array.isArray(itemsToRefresh) ? itemsToRefresh : [])
-        .map((item) => {
-            const payload = buildProductRefreshPayload(item, options);
-            if (!payload) return null;
-
-            const key = payload.entry_kind === SEARCH_ENTRY_BUNDLE_OPTION
-                ? [
-                    SEARCH_ENTRY_BUNDLE_OPTION,
-                    payload.bundle_parent_id || '',
-                    payload.bundle_option_uid || '',
-                    payload.bundle_option_key || '',
-                    payload.bundle_option_post_id || '',
-                    payload.bundle_option_title || '',
-                    payload.bundle_item_base_product_id || '',
-                    payload.product_id || '',
-                ].join('::')
-                : String(payload.product_id || '');
-
-            return [key, payload];
-        })
-        .filter(Boolean)
-).values());
 const resolveSubmittedOrderItemName = (item, productId = 0) => {
     const normalizedProductId = Number(productId) || Number(item?.product_id) || 0;
     const candidates = [
@@ -8092,7 +8009,6 @@ const OrderForm = () => {
     const [showColumnConfig, setShowColumnConfig] = useState(false);
     const [orderFormTableViewportWidth, setOrderFormTableViewportWidth] = useState(0);
     const [isCapturing, setIsCapturing] = useState(false);
-    const [isRefreshingItems, setIsRefreshingItems] = useState(false);
     const [isCompactOrderMobileLayout, setIsCompactOrderMobileLayout] = useState(() => {
         if (typeof window === 'undefined') return false;
 
@@ -8812,176 +8728,7 @@ const OrderForm = () => {
             return hasChanged ? nextStore : prev;
         });
     }, []);
-    const applyLatestProductsToOrderState = useCallback((refreshedItems = [], options = {}) => {
-        const preserveSellingPrice = Boolean(options?.preserveSellingPrice);
-        const refreshedMap = buildLatestProductSnapshotMap(refreshedItems);
-
-        if (refreshedMap.size === 0) {
-            return refreshedMap;
-        }
-
-        setFormData((prev) => {
-            const nextItems = prev.items.map((item) => {
-                const latest = refreshedMap.get(Number(item.product_id));
-                if (!latest) return item;
-                const mergedOptions = mergeOrderLineOptions(
-                    item.options,
-                    extractOrderItemOptionsFromProductPayload(latest)
-                );
-                const latestName = resolveLatestOrderItemName({ ...item, options: mergedOptions }, latest);
-                const latestSku = normalizeCanvasText(latest.display_sku || latest.sku) || item.sku;
-                const hasPlaceholderDisplayName = isPlaceholderProductName(item?.name, Number(item?.product_id) || 0);
-                const hasCustomDisplayName = Boolean(getOrderLineOriginalNameLabel(item)) && !hasPlaceholderDisplayName;
-                const nextName = hasCustomDisplayName ? item.name : latestName;
-                const nextSnapshotName = hasCustomDisplayName
-                    ? (item.snapshot_name || item.name)
-                    : latestName;
-
-                return {
-                    ...item,
-                    name: nextName,
-                    sku: latestSku,
-                    snapshot_name: nextSnapshotName,
-                    snapshot_sku: hasCustomDisplayName ? (item.snapshot_sku || item.sku) : latestSku,
-                    original_name: latestName,
-                    original_sku: latestSku,
-                    unit_name: resolveOrderUnitLabel(latest, item),
-                    price: preserveSellingPrice ? item.price : (Number(latest.price ?? item.price ?? 0) || 0),
-                    cost_price: resolveProductCostPrice(latest, item.cost_price),
-                    options: mergedOptions,
-                    ...resolveInventorySnapshot(latest, item),
-                    ...resolveProductSourceFields(latest, item),
-                };
-            });
-
-            return {
-                ...prev,
-                items: nextItems,
-                cost_total: calculateItemsCostTotal(nextItems),
-            };
-        });
-
-        setProducts((prev) => prev.map((product) => {
-            const latest = refreshedMap.get(Number(product.id));
-            if (!latest) return normalizeProductPickerEntry(product);
-
-            return normalizeProductPickerEntry({
-                ...product,
-                ...latest,
-                sku: latest.sku ?? product.sku,
-                name: latest.name ?? product.name,
-                price: Number(latest.price ?? product.price ?? 0),
-                expected_cost: parseMoneyNumber(latest.expected_cost, parseMoneyNumber(product.expected_cost)),
-                cost_price: resolveProductCostPrice(latest, product.cost_price),
-                status: latest.status ?? product.status,
-            });
-        }));
-
-        syncLatestProductsIntoLocalSources(refreshedMap);
-
-        return refreshedMap;
-    }, [syncLatestProductsIntoLocalSources]);
-    const applyInventorySnapshotToOrderState = useCallback((refreshedItems = []) => {
-        const refreshedMap = buildLatestProductSnapshotMap(refreshedItems);
-
-        if (refreshedMap.size === 0) {
-            return refreshedMap;
-        }
-
-        setFormData((prev) => {
-            const nextItems = prev.items.map((item) => {
-                const latest = refreshedMap.get(getOrderItemEffectiveInventoryProductId(item));
-                if (!latest) return item;
-                const currentCostPrice = resolveRoundedImportCostValue(item.cost_price, 0);
-                const shouldHydrateCostPrice = currentCostPrice <= 0 && hasProductCostSnapshot(latest);
-                const nextCostPrice = shouldHydrateCostPrice
-                    ? resolveProductCostPrice(latest, currentCostPrice)
-                    : item.cost_price;
-                const latestProductId = Number(latest?.product_id ?? latest?.id ?? 0) || 0;
-                const itemProductId = Number(item?.product_id ?? 0) || 0;
-                const mergedOptions = latestProductId === itemProductId
-                    ? mergeOrderLineOptions(item.options, extractOrderItemOptionsFromProductPayload(latest))
-                    : item.options;
-                const latestName = latestProductId === itemProductId
-                    ? resolveLatestOrderItemName({ ...item, options: mergedOptions }, latest)
-                    : '';
-                const hasPlaceholderName = isPlaceholderProductName(item?.name, itemProductId);
-                const hasPlaceholderSnapshotName = isPlaceholderProductName(item?.snapshot_name, itemProductId);
-                const hasPlaceholderOriginalName = isPlaceholderProductName(item?.original_name, itemProductId);
-                const shouldHydrateName = latestName
-                    && !isPlaceholderProductName(latestName, itemProductId)
-                    && (hasPlaceholderName || hasPlaceholderSnapshotName || hasPlaceholderOriginalName)
-                    && !hasActualOrderProductOverride(item);
-                const latestSku = latestProductId === itemProductId
-                    ? normalizeCanvasText(latest?.display_sku || latest?.sku)
-                    : '';
-                const currentSku = normalizeCanvasText(item?.sku);
-                const shouldHydrateSku = latestSku && (!currentSku || currentSku === 'N/A');
-                const latestParentProductId = Number(latest?.parent_product_id ?? mergedOptions?.variant_parent_id ?? 0) || 0;
-                const currentParentProductId = Number(item?.parent_product_id ?? item?.options?.variant_parent_id ?? 0) || 0;
-
-                return {
-                    ...item,
-                    ...(shouldHydrateName ? {
-                        name: hasPlaceholderName ? latestName : item?.name,
-                        snapshot_name: hasPlaceholderSnapshotName ? latestName : item?.snapshot_name,
-                        original_name: hasPlaceholderOriginalName ? latestName : item?.original_name,
-                    } : {}),
-                    ...(shouldHydrateSku ? {
-                        sku: latestSku,
-                        snapshot_sku: latestSku,
-                        original_sku: latestSku,
-                    } : {}),
-                    unit_name: resolveOrderUnitLabel(latest, item),
-                    cost_price: nextCostPrice,
-                    base_cost_price: shouldHydrateCostPrice
-                        ? resolveRoundedImportCostValue(latest.cost_price ?? latest.expected_cost, nextCostPrice)
-                        : item.base_cost_price,
-                    options: mergedOptions,
-                    parent_product_id: latestParentProductId || currentParentProductId || item.parent_product_id,
-                    ...resolveInventorySnapshot(latest, item),
-                    ...resolveProductSourceFields(latest, item),
-                };
-            });
-
-            return {
-                ...prev,
-                items: nextItems,
-                cost_total: calculateItemsCostTotal(nextItems),
-            };
-        });
-
-        setProducts((prev) => prev.map((product) => {
-            const latest = refreshedMap.get(Number(product.id));
-            if (!latest) return normalizeProductPickerEntry(product);
-
-            return normalizeProductPickerEntry({ ...product, ...latest });
-        }));
-
-        syncLatestProductsIntoLocalSources(refreshedMap);
-
-        return refreshedMap;
-    }, [syncLatestProductsIntoLocalSources]);
-    const refreshOrderItemInventorySnapshot = useCallback(async (itemsToRefresh = []) => {
-        const normalizedItems = buildOrderItemsRefreshPayloads(itemsToRefresh, { useEffectiveInventoryProduct: true });
-
-        if (normalizedItems.length === 0) {
-            return { items: [], issues: [] };
-        }
-
-        try {
-            const response = await productApi.refreshOrderItems({ items: normalizedItems });
-            const refreshedItems = Array.isArray(response.data?.items) ? response.data.items : [];
-            const issues = Array.isArray(response.data?.issues) ? response.data.issues : [];
-            applyInventorySnapshotToOrderState(refreshedItems);
-            return { items: refreshedItems, issues };
-        } catch (error) {
-            console.error('Error refreshing order item inventory snapshot', error);
-            return { items: [], issues: [], error };
-        }
-    }, [applyInventorySnapshotToOrderState]);
-
-    const navigateBack = useCallback(() => {
+const navigateBack = useCallback(() => {
         if (returnTo && returnTo.startsWith('/admin/')) {
             navigate(returnTo);
             return;
@@ -11095,7 +10842,6 @@ const OrderForm = () => {
         orderAiFile,
         orderAiInput,
         orderAiSelectedRuleKey,
-        refreshOrderItemInventorySnapshot,
         resetOrderAiPreviewState,
         showModal,
         showTransientNotification,
@@ -16429,74 +16175,6 @@ const OrderForm = () => {
     const clearActiveTruncatedNameCell = useCallback((cellKey) => {
         setActiveTruncatedNameCellKey((currentValue) => (currentValue === cellKey ? '' : currentValue));
     }, []);
-
-    const handleRefreshOrderItems = async (event) => {
-        event?.preventDefault?.();
-        event?.stopPropagation?.();
-
-        if (isRefreshingItems) return;
-
-        if (formData.items.length === 0) {
-            showModal({
-                title: 'Chưa có sản phẩm',
-                content: 'Đơn hiện tại chưa có sản phẩm để làm mới.',
-                type: 'info'
-            });
-            return;
-        }
-
-        setIsRefreshingItems(true);
-
-        try {
-            const response = await productApi.refreshOrderItems({
-                items: formData.items
-                    .map((item) => buildProductRefreshPayload(item, { useEffectiveInventoryProduct: true }))
-                    .filter(Boolean)
-            });
-
-            const refreshedItems = Array.isArray(response.data?.items) ? response.data.items : [];
-            const issues = Array.isArray(response.data?.issues) ? response.data.issues : [];
-            applyLatestProductsToOrderState(refreshedItems, { preserveSellingPrice: isEdit });
-
-            if (refreshedItems.length > 0) {
-                showTransientNotification(
-                    'success',
-                    issues.length > 0
-                        ? `Đã làm mới ${refreshedItems.length} sản phẩm. Có ${issues.length} sản phẩm cần kiểm tra.`
-                        : `Đã làm mới ${refreshedItems.length} sản phẩm trong đơn.`
-                );
-            } else {
-                showTransientNotification('error', 'Không tìm thấy dữ liệu sản phẩm để làm mới.');
-            }
-
-            if (issues.length > 0) {
-                const issueContent = issues
-                    .map((issue, index) => {
-                        const code = issue.sku ? `<strong>${escapeHtml(issue.sku)}</strong>` : `<strong>#${Number(issue.product_id) || '-'}</strong>`;
-                        const name = escapeHtml(issue.name || `Sản phẩm #${issue.product_id}`);
-                        const message = escapeHtml(issue.message || 'Sản phẩm đang có vấn đề.');
-
-                        return `${index + 1}. ${code} - ${name}: ${message}`;
-                    })
-                    .join('<br/>');
-
-                showModal({
-                    title: 'Sản phẩm cần kiểm tra',
-                    content: issueContent,
-                    type: 'warning'
-                });
-            }
-        } catch (error) {
-            console.error('Error refreshing order items', error);
-            showTransientNotification(
-                'error',
-                error.response?.data?.message || 'Không thể làm mới sản phẩm trong đơn.'
-            );
-        } finally {
-            setIsRefreshingItems(false);
-        }
-    };
-
     const handleSubmit = async (e, submitOrderKind = null) => {
         e?.preventDefault?.();
         const mutation = buildOrderMutationPayload(submitOrderKind);
@@ -16504,43 +16182,6 @@ const OrderForm = () => {
 
         setSaving(true);
         try {
-            const shouldRefreshInventoryBeforeSubmit = !isDraftOrderKind(mutation.normalizedOrderKind)
-                && Array.isArray(formData.items)
-                && formData.items.length > 0;
-
-            if (shouldRefreshInventoryBeforeSubmit) {
-                const inventoryRefresh = await refreshOrderItemInventorySnapshot(formData.items);
-
-                if (inventoryRefresh?.error) {
-                    showModal({
-                        title: 'Không kiểm tra được tồn kho',
-                        content: inventoryRefresh.error?.response?.data?.message || 'Không thể kiểm tra tồn kho mới nhất. Vui lòng thử lưu lại sau vài giây.',
-                        type: 'error',
-                    });
-                    return;
-                }
-
-                const inventoryIssues = Array.isArray(inventoryRefresh?.issues) ? inventoryRefresh.issues : [];
-                if (inventoryIssues.length > 0) {
-                    const issueContent = inventoryIssues
-                        .map((issue, index) => {
-                            const code = issue.sku ? `<strong>${escapeHtml(issue.sku)}</strong>` : `<strong>#${Number(issue.product_id) || '-'}</strong>`;
-                            const name = escapeHtml(issue.name || `Sản phẩm #${issue.product_id}`);
-                            const message = escapeHtml(issue.message || 'Sản phẩm đang có vấn đề.');
-
-                            return `${index + 1}. ${code} - ${name}: ${message}`;
-                        })
-                        .join('<br/>');
-
-                    showModal({
-                        title: 'Sản phẩm cần kiểm tra',
-                        content: issueContent,
-                        type: 'warning',
-                    });
-                    return;
-                }
-            }
-
             const { normalizedOrderKind, payload } = mutation;
 
             const response = isEdit
@@ -17396,14 +17037,7 @@ const OrderForm = () => {
                         >
                             <span className="material-symbols-outlined text-[15px]">history</span>
                         </button>
-                        <button
-                            type="button"
-                            onClick={handleRefreshOrderItems}
-                            className="ml-3 border-l border-primary/10 pl-3 text-primary/30 transition-all hover:text-primary"
-                            title="Làm mới sản phẩm trong đơn hiện tại"
-                        >
-                            <span className={`material-symbols-outlined text-xs ${isRefreshingItems ? 'animate-refresh-spin' : ''}`}>refresh</span>
-                        </button>
+
                         <button
                             type="button"
                             onClick={toggleOrderAiPanel}
@@ -18615,14 +18249,7 @@ const OrderForm = () => {
                                             >
                                                 <span className="material-symbols-outlined text-[15px]">history</span>
                                             </button>
-                                            <button
-                                                type="button"
-                                                onClick={handleRefreshOrderItems}
-                                                className="text-primary/30 hover:text-primary ml-3 border-l border-primary/10 pl-3 transition-all"
-                                                title={'L\u00e0m m\u1edbi s\u1ea3n ph\u1ea9m trong \u0111\u01a1n hi\u1ec7n t\u1ea1i'}
-                                            >
-                                                <span className={`material-symbols-outlined text-xs ${isRefreshingItems ? 'animate-refresh-spin' : ''}`}>refresh</span>
-                                            </button>
+
                                             <button
                                                 type="button"
                                                 onClick={toggleOrderAiPanel}

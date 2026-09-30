@@ -6933,6 +6933,15 @@ class ProductController extends Controller
 
         $phraseRankingSql = '(' . implode(' + ', $phraseRankingParts) . ')';
 
+        if ($skipMatchProbes && count($tokenLikes) > 1) {
+            $query->selectRaw("{$phraseRankingSql} AS search_score", $phraseRankingBindings);
+            $query->where(function (Builder $searchQuery) use ($tokenLikes, $isCompactCompositeSearch, $includeVariationMatches, $skuTokenLikes) {
+                $this->applyProductNameTokenConstraint($searchQuery, $tokenLikes, $isCompactCompositeSearch, $includeVariationMatches, $skuTokenLikes);
+            });
+
+            return [$phraseRankingSql, $phraseRankingBindings];
+        }
+
         if ($skipMatchProbes) {
             $query->selectRaw("{$phraseRankingSql} AS search_score", $phraseRankingBindings);
             $query->where(function (Builder $searchQuery) use (
@@ -9276,12 +9285,12 @@ class ProductController extends Controller
         }
 
         if ($searchRankingSql !== null) {
-            $query->orderByRaw("{$searchRankingSql} DESC", $searchRankingBindings)
-                ->orderByRaw("CASE WHEN type = 'configurable' THEN 0 ELSE 1 END")
-                ->orderBy('name', 'asc');
+            $query->orderByDesc('search_score')
+                ->orderByRaw("CASE WHEN products.type = 'configurable' THEN 0 ELSE 1 END")
+                ->orderBy('products.name', 'asc');
         } else {
-            $query->orderByRaw("CASE WHEN type = 'configurable' THEN 0 ELSE 1 END")
-                ->orderBy('name', 'asc');
+            $query->orderByRaw("CASE WHEN products.type = 'configurable' THEN 0 ELSE 1 END")
+                ->orderBy('products.name', 'asc');
         }
 
         $maxPerPage = $request->boolean('picker') ? 200 : 100;
@@ -9313,7 +9322,9 @@ class ProductController extends Controller
             $selectedBundleVariantMap = $this->loadPickerBundleSelectedVariantMap($pageProducts, $sourceCatalogAccountIds);
         }
 
-        $pickerPayload = $pageProducts->map(function (Product $product) use ($selectedBundleVariantMap, $sourceContexts, $replacePicker, $lightPicker) {
+        $searchTerm = trim((string) $request->input('search', ''));
+
+        $pickerPayload = $pageProducts->map(function (Product $product) use ($selectedBundleVariantMap, $sourceContexts, $replacePicker, $lightPicker, $searchTerm) {
             $parentProduct = $product->relationLoaded('parentConfigurable')
                 ? $product->parentConfigurable->first()
                 : null;
@@ -9333,6 +9344,7 @@ class ProductController extends Controller
                 'inventory_import_starred' => (bool) ($product->inventory_import_starred ?? false),
                 'parent_inventory_import_starred' => (bool) ($parentProduct?->inventory_import_starred ?? false),
                 'search_score' => (float) ($product->getAttribute('search_score') ?? 0),
+                'server_search_match' => $searchTerm !== '',
                 'name' => $product->name,
                 'display_name' => $displayName,
                 'entry_kind' => $parentProduct ? 'variation' : 'product',
@@ -9360,7 +9372,7 @@ class ProductController extends Controller
                 'has_variations' => $hasVariantChildren,
                 'variation_count' => ($replacePicker || !$product->relationLoaded('variations')) ? 0 : $product->variations->count(),
                 'variations' => ($replacePicker || !$product->relationLoaded('variations')) ? [] : $product->variations
-                    ->map(function (Product $variation) use ($product, $sourceContexts, $lightPicker) {
+                    ->map(function (Product $variation) use ($product, $sourceContexts, $lightPicker, $searchTerm) {
                         $variationAttributeSummary = $this->pickerAttributeSummary($variation);
                         $variationDisplayName = $this->buildOrderItemDisplayName($variation, $product);
                         $variationDisplayName = trim((string) $variationDisplayName) !== ''
@@ -9378,6 +9390,7 @@ class ProductController extends Controller
                             'inventory_import_starred' => (bool) ($variation->inventory_import_starred ?? false),
                             'parent_inventory_import_starred' => (bool) ($product->inventory_import_starred ?? false),
                             'search_score' => (float) ($variation->getAttribute('search_score') ?? 0),
+                            'server_search_match' => $searchTerm !== '',
                             'name' => $variation->name,
                             'display_name' => $variationDisplayName,
                             'entry_kind' => 'variation',

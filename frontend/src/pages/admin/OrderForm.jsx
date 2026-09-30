@@ -5372,11 +5372,12 @@ const normalizeProductSearchResponseRows = (rows = [], term = '') => {
 
     return (Array.isArray(rows) ? rows : []).map((product) => {
         const serverSearchScore = Number(product?.search_score ?? product?.server_search_score ?? 0) || 0;
+        const serverSearchMatch = Boolean(product?.server_search_match || product?.__server_search_match);
 
         return {
             ...normalizeProductPickerEntry(product),
             server_search_score: serverSearchScore,
-            server_search_match: hasServerSearchTerm && serverSearchScore > 0,
+            server_search_match: hasServerSearchTerm && (serverSearchMatch || serverSearchScore > 0),
         };
     });
 };
@@ -14024,27 +14025,18 @@ const navigateBack = useCallback(() => {
         const shouldUseQuickModeEntries = !shouldUseManualQuickModeEntries
             && isProductQuickModeActive
             && !hasEnabledCrossSellSources;
+        const hasSearchText = searchTerm.trim() !== '';
         const shouldUseQuickModeFallbackEntries = !shouldUseManualQuickModeEntries
             && !shouldUseQuickModeEntries
             && !hasEnabledCrossSellSources
             && hasActiveProductQuickFilter
-            && searchTerm.trim()
+            && hasSearchText
             && quickModeSearchEntries.length > 0;
         const serverSearchEntries = buildProductSearchEntries(products, {
-            includeNested: Boolean(searchTerm.trim()),
+            includeNested: hasSearchText,
         });
-        const quickModeServerSearchEntries = shouldUseQuickModeEntries && searchTerm.trim()
-            ? serverSearchEntries.filter((entry) => {
-                const entryKey = getProductQuickSetupEntryKey(entry);
-                if (entryKey && selectedQuickSetupEntryKeys.has(entryKey)) return true;
-
-                if (String(entry?.entry_kind || SEARCH_ENTRY_PRODUCT) !== SEARCH_ENTRY_BUNDLE_OPTION) {
-                    return false;
-                }
-
-                const parentProductId = Number(entry?.bundle_parent_id ?? entry?.target_product_id ?? entry?.product_id ?? 0) || 0;
-                return parentProductId > 0 && selectedQuickSetupProductIds.has(parentProductId);
-            })
+        const quickModeServerSearchEntries = shouldUseQuickModeEntries && hasSearchText
+            ? serverSearchEntries
             : [];
         const searchableEntries = shouldUseManualQuickModeEntries
             ? manualQuickModeSearchEntries
@@ -14064,7 +14056,7 @@ const navigateBack = useCallback(() => {
                     : canAddSearchEntry(formData.items, product)
             ));
 
-        if (!searchTerm.trim()) {
+        if (!hasSearchText) {
             if (quickFilterRankCriteria.length === 0) {
                 return preparedProducts.slice(0, 50);
             }
@@ -14085,7 +14077,6 @@ const navigateBack = useCallback(() => {
             .map((product) => {
                 const searchScore = scoreProductSearchResult(product, searchTerm);
                 const serverMatchedSearch = !shouldUseManualQuickModeEntries
-                    && !shouldUseQuickModeEntries
                     && Boolean(product?.server_search_match || product?.__server_search_match);
 
                 return {
@@ -14130,16 +14121,12 @@ const navigateBack = useCallback(() => {
             return 'DS nhanh th\u1ee7 c\u00f4ng \u0111ang b\u1eadt nh\u01b0ng ch\u01b0a c\u00f3 s\u1ea3n ph\u1ea9m kh\u1ea3 d\u1ee5ng.';
         }
 
-        if (isProductQuickModeActive && hasSearchText) {
-            return 'Không có sản phẩm trong lọc nhanh khớp từ khóa hiện tại.';
+        if (hasSearchText) {
+            return 'Không có sản phẩm khớp từ khóa hiện tại.';
         }
 
         if (isProductQuickModeActive) {
             return 'Bộ lọc nhanh đang bật nhưng danh sách đã lưu không còn sản phẩm khả dụng.';
-        }
-
-        if (hasSearchText) {
-            return 'Không có sản phẩm khớp từ khóa hiện tại.';
         }
 
         return 'Không có sản phẩm khả dụng để hiển thị.';
@@ -14178,9 +14165,9 @@ const navigateBack = useCallback(() => {
         const hasSearchText = debouncedSearchTerm.trim() !== '';
         if (isProductQuickModeActive && !hasEnabledCrossSellSources && !hasSearchText) return;
 
-        if (showSearchDropdown || debouncedSearchTerm.trim() !== '') {
+        if (showSearchDropdown || hasSearchText) {
             fetchProducts(debouncedSearchTerm, {
-                applyQuickFilter: isProductQuickModeActive && hasActiveProductQuickFilter,
+                applyQuickFilter: isProductQuickModeActive && hasActiveProductQuickFilter && !hasSearchText,
             });
         }
     }, [
@@ -14194,67 +14181,6 @@ const navigateBack = useCallback(() => {
         showSearchDropdown
     ]);
 
-    useEffect(() => {
-        const term = debouncedSearchTerm.trim();
-        if (
-            !showSearchDropdown
-            || isManualProductQuickModeActive
-            || !isProductQuickModeActive
-            || !hasActiveProductQuickFilter
-            || term.length < 2
-        ) {
-            return undefined;
-        }
-
-        const { params, cacheKey } = buildProductSearchRequest(term, { applyQuickFilter: false });
-        if (productSearchCacheRef.current.has(cacheKey)) {
-            return undefined;
-        }
-
-        productSearchPrefetchAbortRef.current?.abort();
-        const controller = new AbortController();
-        const prefetchPromise = productApi.getAll(params, controller.signal)
-            .then((response) => {
-                if (controller.signal.aborted || productSearchPrefetchKeyRef.current !== cacheKey) {
-                    return null;
-                }
-
-                const nextProducts = normalizeProductSearchResponseRows(response.data?.data, term);
-                storeProductSearchCacheEntry(productSearchCacheRef.current, cacheKey, nextProducts);
-                if (productSearchRequestKeyRef.current === cacheKey) {
-                    setProducts(nextProducts);
-                }
-
-                return nextProducts;
-            })
-            .catch((error) => {
-                if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') {
-                    return null;
-                }
-                console.error('Error prefetching unfiltered product search', error);
-                return null;
-            })
-            .finally(() => {
-                if (productSearchPrefetchAbortRef.current === controller) {
-                    productSearchPrefetchAbortRef.current = null;
-                    productSearchPrefetchKeyRef.current = '';
-                    productSearchPrefetchPromiseRef.current = null;
-                }
-            });
-
-        productSearchPrefetchAbortRef.current = controller;
-        productSearchPrefetchKeyRef.current = cacheKey;
-        productSearchPrefetchPromiseRef.current = prefetchPromise;
-
-        return undefined;
-    }, [
-        buildProductSearchRequest,
-        debouncedSearchTerm,
-        hasActiveProductQuickFilter,
-        isManualProductQuickModeActive,
-        isProductQuickModeActive,
-        showSearchDropdown,
-    ]);
 
     useEffect(() => {
         if (!hasActiveProductQuickFilter) {

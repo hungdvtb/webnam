@@ -144,9 +144,9 @@ const ACTUAL_PRODUCT_PICKER_RESULT_TAB_HISTORY = 'history';
 const WAREHOUSE_PICKING_HISTORY_STORAGE_KEY_PREFIX = 'warehouse_picking_replacement_history_v1';
 const WAREHOUSE_PICKING_HISTORY_LIMIT = 6;
 const WAREHOUSE_PICKING_HISTORY_MAX_SOURCES = 400;
-const ORDER_FORM_PRODUCT_SEARCH_DEBOUNCE_MS = 260;
-const ORDER_FORM_PRODUCT_SEARCH_SHORT_DEBOUNCE_MS = 320;
-const ORDER_FORM_PRODUCT_SEARCH_INCOMPLETE_DEBOUNCE_MS = 420;
+const ORDER_FORM_PRODUCT_SEARCH_DEBOUNCE_MS = 80;
+const ORDER_FORM_PRODUCT_SEARCH_SHORT_DEBOUNCE_MS = 120;
+const ORDER_FORM_PRODUCT_SEARCH_INCOMPLETE_DEBOUNCE_MS = 160;
 const ORDER_FORM_REPLACE_PICKER_SEARCH_DELAY_MS = 140;
 const ORDER_FORM_REPLACE_PICKER_TOP = 104;
 const ORDER_FORM_REPLACE_PICKER_MIN_HEIGHT = 320;
@@ -14029,24 +14029,13 @@ const navigateBack = useCallback(() => {
         const shouldUseQuickModeEntries = !shouldUseManualQuickModeEntries
             && isProductQuickModeActive
             && !hasEnabledCrossSellSources;
-        const shouldUseQuickModeFallbackEntries = !shouldUseManualQuickModeEntries
-            && !shouldUseQuickModeEntries
-            && !hasEnabledCrossSellSources
-            && hasActiveProductQuickFilter
-            && hasSearchText
-            && quickModeSearchEntries.length > 0;
         const serverSearchEntries = buildProductSearchEntries(products, {
             includeNested: hasSearchText,
         });
-        const quickModeServerSearchEntries = shouldUseQuickModeEntries && hasSearchText
-            ? serverSearchEntries
-            : [];
         const searchableEntries = shouldUseManualQuickModeEntries
             ? manualQuickModeSearchEntries
             : shouldUseQuickModeEntries
-            ? mergeProductSearchEntryLists(quickModeServerSearchEntries, quickModeSearchEntries)
-            : shouldUseQuickModeFallbackEntries
-            ? mergeProductSearchEntryLists(serverSearchEntries, quickModeSearchEntries)
+            ? quickModeSearchEntries
             : serverSearchEntries;
         const preparedProducts = searchableEntries
             .map((product) => ({
@@ -14168,11 +14157,11 @@ const navigateBack = useCallback(() => {
     useEffect(() => {
         if (isManualProductQuickModeActive) return;
         const hasSearchText = debouncedSearchTerm.trim() !== '';
-        if (isProductQuickModeActive && !hasEnabledCrossSellSources && !hasSearchText) return;
+        if (isProductQuickModeActive && !hasEnabledCrossSellSources) return;
 
         if (showSearchDropdown || hasSearchText) {
             fetchProducts(debouncedSearchTerm, {
-                applyQuickFilter: isProductQuickModeActive && hasActiveProductQuickFilter && !hasSearchText,
+                applyQuickFilter: false,
             });
         }
     }, [

@@ -13,7 +13,7 @@ jobs:
       SFTP_HOST: sftp.commerce.openai.com
       SFTP_PORT: "443"
       SFTP_USER: oaiproductfeedprod.sftpb694da7ab2914aae8dc1354cb4959140
-      SFTP_REMOTE_PATH: /meta-feed.csv
+      SFTP_REMOTE_PATH: /gomdaithanh-products.csv.gz
 
     steps:
       - name: Install SFTP client
@@ -21,12 +21,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y lftp
 
-      - name: Download product feed
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build OpenAI product feed
         run: |
           curl -fsSL "$FEED_URL" -o meta-feed.csv
           test -s meta-feed.csv
-          head -1 meta-feed.csv | grep -q '^id,title,description,availability,condition,price,link,image_link'
-          wc -c meta-feed.csv
+          node .github/scripts/build-openai-product-feed.mjs meta-feed.csv openai-product-feed.csv
+          head -1 openai-product-feed.csv | grep -q '^id,title,description,link,image_link,availability,price,brand'
+          gzip -f openai-product-feed.csv
+          wc -c openai-product-feed.csv.gz
 
       - name: Upload product feed to OpenAI SFTP
         env:
@@ -41,7 +46,8 @@ jobs:
           set net:max-retries 2
           set net:timeout 30
           set sftp:auto-confirm yes
-          put meta-feed.csv -o "$SFTP_REMOTE_PATH"
+          rm -f /meta-feed.csv
+          put openai-product-feed.csv.gz -o "$SFTP_REMOTE_PATH"
           cls -l "$SFTP_REMOTE_PATH"
           bye
           EOF

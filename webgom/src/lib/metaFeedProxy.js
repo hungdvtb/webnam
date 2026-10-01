@@ -39,17 +39,25 @@ export async function proxyMetaFeed(format) {
   });
   const headers = new Headers({
     'Content-Type': response.headers.get('content-type') || contentTypes[normalizedFormat],
-    'Cache-Control': 'no-store, max-age=0',
+    'Cache-Control': 'public, max-age=300',
+    'Content-Disposition': `inline; filename="meta-feed.${normalizedFormat}"`,
+    'Access-Control-Allow-Origin': '*',
   });
 
   if (!response.ok) {
-    return new Response(await response.text(), {
+    const errorBody = await response.text();
+    headers.set('Content-Length', String(new TextEncoder().encode(errorBody).byteLength));
+
+    return new Response(errorBody, {
       status: response.status,
       headers,
     });
   }
 
-  return new Response(response.body, {
+  const body = await response.arrayBuffer();
+  headers.set('Content-Length', String(body.byteLength));
+
+  return new Response(body, {
     status: 200,
     headers,
   });

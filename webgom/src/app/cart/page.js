@@ -135,6 +135,18 @@ const THANK_YOU_SELFTEST_DATA = {
   ],
 };
 
+const trackOpenAiOrderCreated = () => {
+  if (typeof window === 'undefined' || typeof window.oaiq !== 'function') {
+    return;
+  }
+
+  try {
+    window.oaiq('measure', 'order_created', { type: 'contents' });
+  } catch (error) {
+    console.error('OpenAI Ads order_created tracking failed:', error);
+  }
+};
+
 const getCartItemUnitPrice = (item) => {
   if (item?.groupedItems?.length) {
     return item.groupedItems.reduce(
@@ -1393,6 +1405,7 @@ export default function CartPage() {
         ? Math.max(completedOrderTotal, 0)
         : Math.max(Number(cartTotal || 0) || 0, 0);
       trackPurchase(completedOrderNumber, cartItems, orderTotalForTracking, { eventId: purchaseEventId });
+      trackOpenAiOrderCreated();
       setOrderNumber(completedOrderNumber);
       // Cache details for thank you page
       setSuccessOrderData({

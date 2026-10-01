@@ -22,6 +22,7 @@ const DEFAULT_TOP_NOTICE = "MIỄN PHÍ VẬN CHUYỂN TOÀN QUỐC CHO ĐƠN H�
 const DEFAULT_BRAND_TEXT = "GỐM ĐẠI THÀNH";
 const DEFAULT_SEARCH_PLACEHOLDER = "Bạn cần tìm sản phẩm gì?";
 const DEFAULT_FOOTER_DESCRIPTION = "Gìn giữ tinh hoa đất Việt qua từng nét vẽ, mảng men và những tác phẩm gốm sứ thủ công độc bản.";
+const OPENAI_ADS_PIXEL_SCRIPT = `!function(w,d,s,u){if(w.oaiq)return;var q=function(){q.q.push(arguments)};q.q=[];w.oaiq=q;var j=d.createElement(s);j.async=1;j.src=u;var f=d.getElementsByTagName(s)[0];f.parentNode.insertBefore(j,f)}(window,document,"script","https://bzrcdn.openai.com/sdk/oaiq.min.js");oaiq("init",{pixelId:"FpFbuuBWrTxH4QYR3x9f2i",debug:true});`;
 
 const DEFAULT_FOOTER_GROUPS = [
   {
@@ -193,6 +194,7 @@ export default async function RootLayout({ children }) {
           rel="stylesheet"
           href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap"
         />
+        <script dangerouslySetInnerHTML={{ __html: OPENAI_ADS_PIXEL_SCRIPT }} />
       </head>
       <body>
         <TrackingScripts settings={settings} />

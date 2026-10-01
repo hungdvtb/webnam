@@ -1,0 +1,47 @@
+name: Upload OpenAI Product Feed
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 */6 * * *"
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    env:
+      FEED_URL: https://gomdaithanh.com/meta-feed.csv
+      SFTP_HOST: sftp.commerce.openai.com
+      SFTP_PORT: "443"
+      SFTP_USER: oaiproductfeedprod.sftpb694da7ab2914aae8dc1354cb4959140
+      SFTP_REMOTE_PATH: /meta-feed.csv
+
+    steps:
+      - name: Install SFTP client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lftp
+
+      - name: Download product feed
+        run: |
+          curl -fsSL "$FEED_URL" -o meta-feed.csv
+          test -s meta-feed.csv
+          head -1 meta-feed.csv | grep -q '^id,title,description,availability,condition,price,link,image_link'
+          wc -c meta-feed.csv
+
+      - name: Upload product feed to OpenAI SFTP
+        env:
+          SFTP_PASSWORD: ${{ secrets.OPENAI_FEED_SFTP_PASSWORD }}
+        run: |
+          if [ -z "$SFTP_PASSWORD" ]; then
+            echo "::error::Missing repository secret OPENAI_FEED_SFTP_PASSWORD"
+            exit 1
+          fi
+
+          lftp -u "$SFTP_USER","$SFTP_PASSWORD" "sftp://$SFTP_HOST:$SFTP_PORT" <<EOF
+          set net:max-retries 2
+          set net:timeout 30
+          set sftp:auto-confirm yes
+          put meta-feed.csv -o "$SFTP_REMOTE_PATH"
+          cls -l "$SFTP_REMOTE_PATH"
+          bye
+          EOF

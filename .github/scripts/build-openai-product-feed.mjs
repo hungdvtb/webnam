@@ -2,34 +2,26 @@ import { readFile, writeFile } from 'node:fs/promises';
 
 const inputPath = process.argv[2] || 'meta-feed.csv';
 const outputPath = process.argv[3] || 'openai-product-feed.csv';
+const sellerName = 'Gốm Đại Thành';
 
 const optionalColumns = new Set([
   'condition',
-  'product_type',
-  'custom_label_0',
-  'custom_label_1',
-  'custom_label_2',
-  'custom_label_3',
-  'custom_label_4',
+  'product_category',
 ]);
 
 const outputColumns = [
-  'id',
+  'item_id',
   'title',
   'description',
-  'link',
-  'image_link',
+  'url',
+  'brand',
+  'seller_name',
+  'image_url',
   'availability',
   'price',
-  'brand',
   'condition',
-  'product_type',
-  'identifier_exists',
-  'custom_label_0',
-  'custom_label_1',
-  'custom_label_2',
-  'custom_label_3',
-  'custom_label_4',
+  'product_category',
+  'is_ads_eligible',
 ];
 
 function parseCsv(text) {
@@ -90,10 +82,10 @@ function normalizeAvailability(value) {
 
   if (normalizedValue === 'in_stock') return 'in_stock';
   if (normalizedValue === 'out_of_stock') return 'out_of_stock';
-  if (normalizedValue === 'preorder' || normalizedValue === 'pre_order') return 'preorder';
+  if (normalizedValue === 'preorder' || normalizedValue === 'pre_order') return 'pre_order';
   if (normalizedValue === 'backorder') return 'backorder';
 
-  return 'out_of_stock';
+  return 'unknown';
 }
 
 function normalizePrice(value) {
@@ -122,22 +114,18 @@ const getValue = (row, column) => row[headerIndex.get(column)]?.trim() || '';
 
 const outputRows = rows
   .map((row) => ({
-    id: getValue(row, 'id'),
+    item_id: getValue(row, 'id'),
     title: getValue(row, 'title').slice(0, 150),
     description: getValue(row, 'description').slice(0, 5000),
-    link: getValue(row, 'link'),
-    image_link: getValue(row, 'image_link'),
+    url: getValue(row, 'link'),
+    brand: getValue(row, 'brand') || sellerName,
+    seller_name: sellerName,
+    image_url: getValue(row, 'image_link'),
     availability: normalizeAvailability(getValue(row, 'availability')),
     price: normalizePrice(getValue(row, 'price')),
-    brand: getValue(row, 'brand') || 'Gom Dai Thanh',
     condition: getValue(row, 'condition') || 'new',
-    product_type: getValue(row, 'product_type'),
-    identifier_exists: 'no',
-    custom_label_0: getValue(row, 'custom_label_0'),
-    custom_label_1: getValue(row, 'custom_label_1'),
-    custom_label_2: getValue(row, 'custom_label_2'),
-    custom_label_3: getValue(row, 'custom_label_3'),
-    custom_label_4: getValue(row, 'custom_label_4'),
+    product_category: getValue(row, 'product_type'),
+    is_ads_eligible: 'true',
   }))
   .filter((row) => outputColumns.every((column) => optionalColumns.has(column) || row[column] !== ''));
 

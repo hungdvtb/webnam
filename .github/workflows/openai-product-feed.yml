@@ -29,7 +29,7 @@ jobs:
           curl -fsSL "$FEED_URL" -o meta-feed.csv
           test -s meta-feed.csv
           node .github/scripts/build-openai-product-feed.mjs meta-feed.csv openai-product-feed.csv
-          head -1 openai-product-feed.csv | grep -q '^id,title,description,link,image_link,availability,price,brand'
+          head -1 openai-product-feed.csv | grep -q '^item_id,title,description,url,brand,seller_name,image_url,availability,price'
           gzip -f openai-product-feed.csv
           wc -c openai-product-feed.csv.gz
 

@@ -117,7 +117,7 @@ const ViettelPostTrackingImportModal = ({ isOpen, onClose, onRefresh }) => {
                         <div className="space-y-6">
                             <div className="rounded-xl bg-emerald-50 p-4 border border-emerald-100 italic">
                                 <p className="text-[13px] text-emerald-800 leading-relaxed">
-                                    Dùng file kết quả tải về từ Web Viettel Post. Hệ thống sẽ tự khớp mã đơn và **tạo vận đơn** để đơn hàng nhảy sang trang Quản lý vận đơn.
+                                    Dùng file kết quả tải về từ Web Viettel Post. Hệ thống tự khớp mã đơn và tạo vận đơn. Bỏ qua đơn đã gửi ngoài và đơn có trạng thái “Shop hủy lấy” hoặc “Tồn - Lấy không thành công”.
                                 </p>
                             </div>
                             {/* Upload Area */}
@@ -209,6 +209,10 @@ const ViettelPostTrackingImportModal = ({ isOpen, onClose, onRefresh }) => {
                                 <div className="rounded-2xl bg-amber-50 border border-amber-100 p-5 text-center">
                                     <p className="text-[10px] uppercase tracking-widest font-black text-amber-500 mb-1">Không thấy đơn</p>
                                     <p className="text-3xl font-black text-amber-700">{result.not_found}</p>
+                                </div>
+                                <div className="rounded-2xl bg-slate-100 border border-slate-200 p-5 text-center">
+                                    <p className="text-[10px] uppercase tracking-widest font-black text-slate-500 mb-1">Bỏ qua</p>
+                                    <p className="text-3xl font-black text-slate-700">{result.skipped ?? 0}</p>
                                 </div>
                                 <div className="rounded-2xl bg-rose-50 border border-rose-100 p-5 text-center">
                                     <p className="text-[10px] uppercase tracking-widest font-black text-rose-500 mb-1">Lỗi</p>

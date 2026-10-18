@@ -12,6 +12,10 @@ use Illuminate\Support\Facades\Log;
 class ViettelPostTrackingImportService
 {
     private const CARRIER_CODE = 'viettel_post';
+    private const SKIPPED_VTP_STATUSES = [
+        'shop hủy lấy',
+        'tồn - lấy không thành công',
+    ];
 
     private SimpleXlsxService $xlsxService;
     private ShipmentStatusSyncService $syncService;
@@ -81,10 +85,20 @@ class ViettelPostTrackingImportService
                 'success' => 0,
                 'failed' => 0,
                 'not_found' => 0,
+                'skipped' => 0,
                 'errors' => [],
             ];
 
             foreach ($dataRows as $index => $row) {
+                // Do not import tracking data for VTP rows that were not picked up.
+                $vtpStatus = $this->findInRow($row, $headerMap, [
+                    'trạngthái', 'trangthai', 'status',
+                ]);
+                if ($this->shouldSkipViettelPostStatus($vtpStatus)) {
+                    $summary['skipped']++;
+                    continue;
+                }
+
                 // Identify values using indices
                 // Keys below are post-normalizeKey() form (all non-letter/digit stripped, lowercased)
                 // Real file keys confirmed: 'mãvậnđơn'(Col B), 'mãđơnhàng'(Col C),
@@ -129,6 +143,12 @@ class ViettelPostTrackingImportService
                     continue;
                 }
 
+                // A VTP export row must not replace tracking for an order already dispatched outside.
+                if ($order->shipping_carrier_code === 'outside_delivery') {
+                    $summary['skipped']++;
+                    continue;
+                }
+
                 try {
                     $this->syncOrderToShipment($order, $trackingNumber, $shippingFee, $userId);
                     $summary['success']++;
@@ -162,6 +182,20 @@ class ViettelPostTrackingImportService
             }
         }
         return $default;
+    }
+
+    private function shouldSkipViettelPostStatus(?string $status): bool
+    {
+        if ($status === null || trim($status) === '') {
+            return false;
+        }
+
+        $normalizedStatus = mb_strtolower(trim($status), 'UTF-8');
+        $normalizedStatus = preg_replace('/[\x{2010}-\x{2015}\x{2212}]/u', '-', $normalizedStatus) ?? $normalizedStatus;
+        $normalizedStatus = preg_replace('/\s*-\s*/u', ' - ', $normalizedStatus) ?? $normalizedStatus;
+        $normalizedStatus = preg_replace('/\s+/u', ' ', $normalizedStatus) ?? $normalizedStatus;
+
+        return in_array($normalizedStatus, self::SKIPPED_VTP_STATUSES, true);
     }
 
     private function parseMoneyValue(mixed $value): float

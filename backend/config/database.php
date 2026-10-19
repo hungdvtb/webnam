@@ -98,6 +98,24 @@ return [
             'sslmode' => env('DB_SSLMODE', 'prefer'),
         ],
 
+        'backup_orders' => [
+            'driver' => 'pgsql',
+            'url' => env('ORDERS_BACKUP_DB_URL'),
+            'host' => env('ORDERS_BACKUP_DB_HOST'),
+            'port' => env('ORDERS_BACKUP_DB_PORT', '5432'),
+            'database' => env('ORDERS_BACKUP_DB_DATABASE', 'webnam'),
+            'username' => env('ORDERS_BACKUP_DB_USERNAME'),
+            'password' => env('ORDERS_BACKUP_DB_PASSWORD'),
+            'charset' => 'utf8',
+            'prefix' => '',
+            'prefix_indexes' => true,
+            'search_path' => env('ORDERS_BACKUP_DB_SEARCH_PATH', 'public'),
+            'sslmode' => env('ORDERS_BACKUP_DB_SSLMODE', 'prefer'),
+            'options' => [
+                \PDO::ATTR_TIMEOUT => (int) env('ORDERS_BACKUP_DB_TIMEOUT', 5),
+            ],
+        ],
+
         'sqlsrv' => [
             'driver' => 'sqlsrv',
             'url' => env('DB_URL'),

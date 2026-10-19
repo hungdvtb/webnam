@@ -35,6 +35,7 @@ import AccountList from './pages/admin/AccountList';
 import WarehouseList from './pages/admin/WarehouseList';
 import ShipmentList from './pages/admin/ShipmentList';
 import OrderList from './pages/admin/OrderList';
+import BackupOrderList from './pages/admin/BackupOrderList';
 import OrderDetail from './pages/admin/OrderDetail';
 import OrderForm from './pages/admin/OrderForm';
 import InventoryMovement from './pages/admin/InventoryMovement';
@@ -187,6 +188,7 @@ function App() {
                 <Route path="shipments" element={<ShipmentList />} />
                 <Route path="pending-orders" element={<Navigate to="/admin/leads" replace />} />
                 <Route path="orders" element={<OrderList />} />
+                <Route path="orders/backup" element={<BackupOrderList />} />
                 <Route path="orders/new" element={<OrderForm />} />
                 <Route path="orders/edit/:id" element={<OrderForm />} />
                 <Route path="inventory" element={<InventoryMovement />} />

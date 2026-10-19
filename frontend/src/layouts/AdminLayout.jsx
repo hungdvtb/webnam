@@ -651,6 +651,18 @@ const AdminLayout = () => {
                                             </SidebarText>
                                         </Link>
                                     )}
+                                    {canAccess('orders') && (
+                                        <Link
+                                            to="/admin/orders/backup"
+                                            title="Đơn từ backup"
+                                            className={`group flex items-center gap-4 rounded-sm p-3 transition-colors ${location.pathname === '/admin/orders/backup' ? 'bg-gold/10 text-gold' : 'text-stone hover:bg-white/5 hover:text-white'}`}
+                                        >
+                                            <span className={`material-symbols-outlined w-6 shrink-0 text-center text-[20px] ${location.pathname === '/admin/orders/backup' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>storage</span>
+                                            <SidebarText isExpanded={isSidebarExpanded} className={submenuLabelClass}>
+                                                Đơn từ backup
+                                            </SidebarText>
+                                        </Link>
+                                    )}
                                     {canAccessTelesalesCrm && (
                                         <Link
                                             to="/admin/telesales"

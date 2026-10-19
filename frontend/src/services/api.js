@@ -817,6 +817,7 @@ export const orderApi = {
         invalidateCachedResponse(requestCache.orderBootstrap, orderBootstrapCacheKey(params));
     },
     getAll: (params, signal) => api.get('/orders', { params, signal }),
+    getBackupOrders: (params, signal) => api.get('/orders/backup', { params, signal }),
     getOne: (id) => api.get(`/orders/${id}`),
     getOneCached: (id) => primeCachedRequest(
         requestCache.orderDetail,

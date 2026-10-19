@@ -1798,8 +1798,10 @@ class OrderController extends Controller
             }
 
             if ($hasExternalMeta) {
-                $method = $hasCarrierCode ? 'orWhereNotNull' : 'whereNotNull';
-                $outsideDeliveryQuery->{$method}("{$table}.external_delivery_meta");
+                $method = $hasCarrierCode ? 'orWhereJsonContains' : 'whereJsonContains';
+                $outsideDeliveryQuery->{$method}("{$table}.external_delivery_meta", [
+                    'mode' => self::QUICK_DISPATCH_MODE_OUTSIDE_DELIVERY,
+                ]);
             }
         });
 

@@ -20,6 +20,7 @@ use App\Http\Controllers\Api\ProductReplacementController;
 use App\Http\Controllers\Api\SiteAnalyticsController;
 use App\Http\Controllers\Api\WarehouseShelfController;
 use App\Http\Controllers\Api\AIController;
+use App\Http\Controllers\Api\BackupOrderController;
 use App\Http\Controllers\Api\MediaController;
 use App\Http\Controllers\Api\MediaAssetController;
 use Illuminate\Http\Request;
@@ -215,6 +216,7 @@ Route::middleware(['auth:sanctum', 'admin-permission'])->group(function () {
 
     // Order management
     Route::get('/orders/bootstrap', [\App\Http\Controllers\Api\OrderController::class , 'bootstrap']);
+    Route::get('/orders/backup', [BackupOrderController::class, 'index']);
     Route::get('/orders', [\App\Http\Controllers\Api\OrderController::class , 'index']);
     Route::post('/orders', [\App\Http\Controllers\Api\OrderController::class , 'store']);
     Route::post('/orders/quick-select', [\App\Http\Controllers\Api\OrderController::class , 'quickSelect']);

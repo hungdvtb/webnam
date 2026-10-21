@@ -15,6 +15,7 @@ class ViettelPostTrackingImportService
     private const SKIPPED_VTP_STATUSES = [
         'shop hủy lấy',
         'tồn - lấy không thành công',
+        'đang lấy hàng',
     ];
 
     private SimpleXlsxService $xlsxService;

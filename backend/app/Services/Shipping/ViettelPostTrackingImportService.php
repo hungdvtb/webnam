@@ -16,6 +16,7 @@ class ViettelPostTrackingImportService
         'shop hủy lấy',
         'tồn - lấy không thành công',
         'đang lấy hàng',
+        'đã tiếp nhận',
     ];
 
     private SimpleXlsxService $xlsxService;

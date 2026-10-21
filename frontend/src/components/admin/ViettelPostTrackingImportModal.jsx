@@ -117,7 +117,7 @@ const ViettelPostTrackingImportModal = ({ isOpen, onClose, onRefresh }) => {
                         <div className="space-y-6">
                             <div className="rounded-xl bg-emerald-50 p-4 border border-emerald-100 italic">
                                 <p className="text-[13px] text-emerald-800 leading-relaxed">
-                                    Dùng file kết quả tải về từ Web Viettel Post. Hệ thống tự khớp mã đơn và tạo vận đơn. Bỏ qua đơn đã gửi ngoài và đơn có trạng thái “Shop hủy lấy”, “Tồn - Lấy không thành công” hoặc “Đang lấy hàng”.
+                                    Dùng file kết quả tải về từ Web Viettel Post. Hệ thống tự khớp mã đơn và tạo vận đơn. Bỏ qua đơn đã gửi ngoài và đơn có trạng thái “Shop hủy lấy”, “Tồn - Lấy không thành công”, “Đang lấy hàng” hoặc “Đã tiếp nhận”.
                                 </p>
                             </div>
                             {/* Upload Area */}

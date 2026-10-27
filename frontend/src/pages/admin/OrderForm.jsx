@@ -114,7 +114,7 @@ const defaultQuoteSettings = {
     quote_store_phone: ''
 };
 const productSearchHistoryStorageKey = 'order_form_product_search_history';
-const productSearchSessionCacheStorageKey = 'order_form_product_search_cache_v3';
+const productSearchSessionCacheStorageKey = 'order_form_product_search_cache_v4';
 const productQuickFilterAttributeStorageKey = 'order_form_product_quick_filter_attribute_id';
 const productQuickFilterAttribute2MapStorageKey = 'order_form_product_quick_filter_attribute_id_2_map';
 const productQuickFilterStateStorageKey = 'order_form_product_quick_filter_state_v1';
@@ -159,6 +159,7 @@ const ORDER_FORM_PRODUCT_SEARCH_RETRY_DELAY_MS = 220;
 const ORDER_FORM_PRODUCT_SEARCH_SHARED_CACHE_LIMIT = 80;
 const ORDER_FORM_PRODUCT_SEARCH_SESSION_CACHE_LIMIT = 24;
 const ORDER_FORM_PRODUCT_SEARCH_SESSION_CACHE_ROW_LIMIT = 80;
+const ORDER_FORM_PRODUCT_SEARCH_SESSION_CACHE_TTL_MS = 60 * 1000;
 const ORDER_FORM_REPLACE_PICKER_MANUAL_LOOKUP_GRACE_MS = 900;
 const ORDER_FORM_PRODUCT_PICKER_WARMUP_DELAY_MS = 4000;
 const ORDER_FORM_PRODUCT_PICKER_WARMUP_SEARCH_TERM = '__warmup__';
@@ -217,6 +218,7 @@ const orderFormVisibleColumnsDefaultStorageKey = 'order_form_visible_columns_def
 const orderFormColumnWidthsDefaultStorageKey = 'order_column_widths_default';
 const orderFormColumnWidthModeDefaultStorageKey = 'order_form_column_width_mode_default';
 const orderFormProductSearchSharedCache = new Map();
+const orderFormProductSearchCacheFetchedAt = new Map();
 let orderFormProductSearchSessionCacheHydrated = false;
 const orderFormCostPriceMigrationStorageKey = 'added_cost_price_migrated_form';
 const orderFormUnitVisibleMigrationStorageKey = 'added_unit_visible_migrated_form';
@@ -5394,10 +5396,10 @@ const persistOrderFormProductSearchCache = (cache) => {
     try {
         const entries = Array.from(cache.entries())
             .slice(-ORDER_FORM_PRODUCT_SEARCH_SESSION_CACHE_LIMIT)
-            .map(([key, products]) => [
-                key,
-                (Array.isArray(products) ? products : []).slice(0, ORDER_FORM_PRODUCT_SEARCH_SESSION_CACHE_ROW_LIMIT),
-            ]);
+            .map(([key, products]) => [key, {
+                cached_at: orderFormProductSearchCacheFetchedAt.get(key) || Date.now(),
+                products: (Array.isArray(products) ? products : []).slice(0, ORDER_FORM_PRODUCT_SEARCH_SESSION_CACHE_ROW_LIMIT),
+            }]);
         window.sessionStorage.setItem(productSearchSessionCacheStorageKey, JSON.stringify(entries));
     } catch (error) {
         console.error('Unable to persist product search cache', error);
@@ -5416,10 +5418,18 @@ const hydrateOrderFormProductSearchCache = (cache) => {
         const entries = Array.isArray(parsed) ? parsed : [];
 
         entries.forEach((entry) => {
-            const [key, products] = Array.isArray(entry) ? entry : [];
-            if (typeof key === 'string' && Array.isArray(products)) {
-                cache.set(key, products.slice(0, ORDER_FORM_PRODUCT_SEARCH_SESSION_CACHE_ROW_LIMIT));
-            }
+            const [key, cachedEntry] = Array.isArray(entry) ? entry : [];
+            const cachedAt = Number(cachedEntry?.cached_at) || 0;
+            const products = cachedEntry?.products;
+            if (
+                typeof key !== 'string'
+                || !Array.isArray(products)
+                || cachedAt <= 0
+                || Date.now() - cachedAt > ORDER_FORM_PRODUCT_SEARCH_SESSION_CACHE_TTL_MS
+            ) return;
+
+            cache.set(key, products.slice(0, ORDER_FORM_PRODUCT_SEARCH_SESSION_CACHE_ROW_LIMIT));
+            orderFormProductSearchCacheFetchedAt.set(key, cachedAt);
         });
 
         while (cache.size > ORDER_FORM_PRODUCT_SEARCH_SHARED_CACHE_LIMIT) {
@@ -5436,6 +5446,9 @@ const hydrateOrderFormProductSearchCache = (cache) => {
 const getOrderFormProductSearchCache = () => hydrateOrderFormProductSearchCache(orderFormProductSearchSharedCache);
 const clearOrderFormProductSearchCache = (cache = orderFormProductSearchSharedCache) => {
     cache?.clear?.();
+    if (cache === orderFormProductSearchSharedCache) {
+        orderFormProductSearchCacheFetchedAt.clear();
+    }
     if (typeof window === 'undefined') return;
 
     try {
@@ -5444,14 +5457,31 @@ const clearOrderFormProductSearchCache = (cache = orderFormProductSearchSharedCa
         console.error('Unable to clear product search cache', error);
     }
 };
+const getFreshOrderFormProductSearchCacheEntry = (cache, cacheKey) => {
+    if (!cache?.has?.(cacheKey)) return null;
+
+    const cachedAt = orderFormProductSearchCacheFetchedAt.get(cacheKey) || 0;
+    if (!cachedAt || Date.now() - cachedAt > ORDER_FORM_PRODUCT_SEARCH_SESSION_CACHE_TTL_MS) {
+        cache.delete(cacheKey);
+        orderFormProductSearchCacheFetchedAt.delete(cacheKey);
+        if (cache === orderFormProductSearchSharedCache) {
+            persistOrderFormProductSearchCache(cache);
+        }
+        return null;
+    }
+
+    return cache.get(cacheKey);
+};
 const storeProductSearchCacheEntry = (cache, cacheKey, products, limit = ORDER_FORM_PRODUCT_SEARCH_SHARED_CACHE_LIMIT) => {
     if (!cache || !cacheKey) return;
 
     cache.set(cacheKey, Array.isArray(products) ? products : []);
+    orderFormProductSearchCacheFetchedAt.set(cacheKey, Date.now());
     while (cache.size > limit) {
         const oldestCacheKey = cache.keys().next().value;
         if (!oldestCacheKey) break;
         cache.delete(oldestCacheKey);
+        orderFormProductSearchCacheFetchedAt.delete(oldestCacheKey);
     }
 
     if (cache === orderFormProductSearchSharedCache) {
@@ -12959,8 +12989,8 @@ const navigateBack = useCallback(() => {
             productSearchPrefetchPromiseRef.current = null;
         }
 
-        if (productSearchCacheRef.current.has(cacheKey)) {
-            const cachedProducts = productSearchCacheRef.current.get(cacheKey);
+        const cachedProducts = getFreshOrderFormProductSearchCacheEntry(productSearchCacheRef.current, cacheKey);
+        if (cachedProducts !== null) {
             markCurrentRequestDone(cachedProducts);
             return;
         }
@@ -13044,7 +13074,7 @@ const navigateBack = useCallback(() => {
         if (productSearchHasUserInteractedRef.current) return;
 
         const { params, cacheKey } = buildProductSearchRequest(term, filterOverrides);
-        if (productSearchCacheRef.current.has(cacheKey) || productPickerWarmupControllersRef.current.has(cacheKey)) {
+        if (getFreshOrderFormProductSearchCacheEntry(productSearchCacheRef.current, cacheKey) !== null || productPickerWarmupControllersRef.current.has(cacheKey)) {
             return;
         }
 
@@ -14313,8 +14343,8 @@ const navigateBack = useCallback(() => {
                 applyQuickFilter: false,
             });
 
-            if (productSearchCacheRef.current.has(cacheKey)) {
-                const cachedProducts = productSearchCacheRef.current.get(cacheKey);
+            const cachedProducts = getFreshOrderFormProductSearchCacheEntry(productSearchCacheRef.current, cacheKey);
+            if (cachedProducts !== null) {
                 setProducts(cachedProducts);
                 setProductSearchLoadedTerm(normalizeCanvasText(searchTerm));
                 setProductSearchLoading(false);

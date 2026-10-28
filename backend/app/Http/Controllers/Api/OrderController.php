@@ -2738,8 +2738,136 @@ class OrderController extends Controller
         }
     }
 
+    private function normalizeOrderProductReferenceText(mixed $value): string
+    {
+        return (string) Str::of(Str::ascii(trim((string) $value)))
+            ->lower()
+            ->replaceMatches('/[^a-z0-9]+/', ' ')
+            ->squish();
+    }
+
+    private function findCurrentProductForStaleOrderItem(array $item, Order $order, bool $actualProduct = false): ?Product
+    {
+        $sku = trim((string) ($actualProduct
+            ? ($item['actual_sku'] ?? $item['actual_product_sku_snapshot'] ?? '')
+            : ($item['sku'] ?? $item['product_sku_snapshot'] ?? '')));
+        $name = trim((string) ($actualProduct
+            ? ($item['actual_name'] ?? $item['actual_product_name_snapshot'] ?? '')
+            : ($item['name'] ?? $item['product_name_snapshot'] ?? '')));
+        $options = is_array($item['options'] ?? null) ? $item['options'] : [];
+        $parentProductId = (int) ($actualProduct
+            ? ($item['actual_parent_product_id'] ?? $options['actual_variant_parent_id'] ?? 0)
+            : ($item['parent_product_id'] ?? $options['variant_parent_id'] ?? 0));
+
+        if ($sku === '' && ($parentProductId <= 0 || $name === '')) {
+            return null;
+        }
+
+        $buildQuery = function () use ($order, $parentProductId) {
+            $query = Product::withoutGlobalScope('account_id')
+                ->where('products.status', true);
+
+            if ($parentProductId > 0) {
+                $query->whereHas('parentConfigurable', function ($parentQuery) use ($parentProductId) {
+                    $parentQuery
+                        ->withoutGlobalScope('account_id')
+                        ->where('products.id', $parentProductId);
+                });
+            }
+
+            $allowedCatalogAccountIds = $this->accessibleCatalogAccountIdsForOrder($order);
+            if (!empty($allowedCatalogAccountIds)) {
+                $query->whereIn('products.account_id', $allowedCatalogAccountIds);
+            }
+
+            return $query;
+        };
+
+        if ($sku !== '') {
+            $skuMatches = $buildQuery()
+                ->where('products.sku', $sku)
+                ->get(['products.id', 'products.account_id', 'products.name', 'products.sku']);
+
+            if ($skuMatches->count() === 1) {
+                return $skuMatches->first();
+            }
+
+            if ($skuMatches->isNotEmpty()) {
+                return null;
+            }
+        }
+
+        if ($parentProductId <= 0 || $name === '') {
+            return null;
+        }
+
+        $normalizedName = $this->normalizeOrderProductReferenceText($name);
+        $nameMatches = $buildQuery()
+            ->get(['products.id', 'products.account_id', 'products.name', 'products.sku'])
+            ->filter(fn (Product $product) => (
+                $this->normalizeOrderProductReferenceText($product->name) === $normalizedName
+            ))
+            ->values();
+
+        return $nameMatches->count() === 1 ? $nameMatches->first() : null;
+    }
+
+    private function repairStaleOrderItemProductReferences(Order $order, array $rawItems): array
+    {
+        $requestedIds = collect($rawItems)
+            ->filter(fn ($item) => is_array($item))
+            ->flatMap(fn (array $item) => [
+                (int) ($item['product_id'] ?? 0),
+                (int) ($item['actual_product_id'] ?? 0),
+            ])
+            ->filter(fn (int $id) => $id > 0)
+            ->unique()
+            ->values();
+
+        if ($requestedIds->isEmpty()) {
+            return $rawItems;
+        }
+
+        $existingIds = Product::withoutGlobalScope('account_id')
+            ->whereIn('products.id', $requestedIds->all())
+            ->pluck('products.id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+        $existingIdSet = array_fill_keys($existingIds, true);
+
+        return array_map(function ($item) use ($order, $existingIdSet) {
+            if (!is_array($item)) {
+                return $item;
+            }
+
+            foreach ([
+                ['id' => 'product_id', 'sku' => 'sku', 'name' => 'name', 'actual' => false],
+                ['id' => 'actual_product_id', 'sku' => 'actual_sku', 'name' => 'actual_name', 'actual' => true],
+            ] as $reference) {
+                $submittedId = (int) ($item[$reference['id']] ?? 0);
+                if ($submittedId <= 0 || isset($existingIdSet[$submittedId])) {
+                    continue;
+                }
+
+                $currentProduct = $this->findCurrentProductForStaleOrderItem($item, $order, $reference['actual']);
+                if (!$currentProduct) {
+                    continue;
+                }
+
+                $item[$reference['id']] = (int) $currentProduct->id;
+                $item[$reference['sku']] = (string) $currentProduct->sku;
+                $item[$reference['name']] = (string) $currentProduct->name;
+                $existingIdSet[(int) $currentProduct->id] = true;
+            }
+
+            return $item;
+        }, $rawItems);
+    }
+
     private function syncOrderItems(Order $order, array $rawItems, string $orderKind, bool $preferSubmittedCostPrice = false): array
     {
+        $rawItems = $this->repairStaleOrderItemProductReferences($order, $rawItems);
+
         if ($this->shouldManageInventory($orderKind)) {
             return app(InventoryService::class)->attachInventoryToOrder($order, $rawItems, $preferSubmittedCostPrice);
         }

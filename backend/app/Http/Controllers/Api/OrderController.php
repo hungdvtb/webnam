@@ -826,6 +826,11 @@ class OrderController extends Controller
         $query->{$method}(function ($phoneQuery) use ($like, $phoneLike, $phoneAttributeIds) {
             if ($phoneLike !== null) {
                 $this->applyPhoneFieldConstraint($phoneQuery, 'customer_phone', $phoneLike);
+
+                // Some orders have the customer's phone number embedded in the
+                // name or address field instead of the dedicated phone field.
+                $this->applyPhoneFieldConstraint($phoneQuery, 'customer_name', $phoneLike, true);
+                $this->applyPhoneFieldConstraint($phoneQuery, 'shipping_address', $phoneLike, true);
             } else {
                 $this->applyInsensitiveLike($phoneQuery, 'customer_phone', $like);
             }
@@ -833,6 +838,8 @@ class OrderController extends Controller
             $phoneQuery->orWhereHas('shipments', function ($shipmentQuery) use ($like, $phoneLike) {
                 if ($phoneLike !== null) {
                     $this->applyPhoneFieldConstraint($shipmentQuery, 'customer_phone', $phoneLike);
+                    $this->applyPhoneFieldConstraint($shipmentQuery, 'customer_name', $phoneLike, true);
+                    $this->applyPhoneFieldConstraint($shipmentQuery, 'customer_address', $phoneLike, true);
                     return;
                 }
 

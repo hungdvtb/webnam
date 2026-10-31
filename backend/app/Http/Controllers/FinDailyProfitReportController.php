@@ -1254,6 +1254,7 @@ class FinDailyProfitReportController extends Controller
 
         $fixedCosts = $includeSharedCosts
             ? \App\Models\FixedCostDailySnapshot::query()
+                ->where('account_id', $config?->account_id)
                 ->whereBetween('date', [$startDate, $endDate])
                 ->pluck('amount', 'date')
                 ->toArray()

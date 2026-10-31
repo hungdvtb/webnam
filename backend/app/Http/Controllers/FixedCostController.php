@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\FixedCost;
 use App\Models\FixedCostCategory;
 use App\Models\FixedCostDailySnapshot;
+use App\Services\AccessControlService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -14,12 +15,14 @@ class FixedCostController extends Controller
 {
     public function index(Request $request)
     {
+        $accountId = $this->accountId($request);
         $costs = FixedCost::query()
+            ->where('account_id', $accountId)
             ->orderBy('category')
             ->orderBy('name')
             ->get();
 
-        $this->syncCategoryCatalog($costs->pluck('category')->all());
+        $this->syncCategoryCatalog($accountId, $costs->pluck('category')->concat($this->defaultCategoryNames()));
         $totalMonthly = $costs->sum('amount');
 
         $month = $request->query('month', Carbon::now()->format('Y-m'));
@@ -27,6 +30,7 @@ class FixedCostController extends Controller
         $endOfMonth = $startOfMonth->copy()->endOfMonth();
 
         $snapshots = FixedCostDailySnapshot::query()
+            ->where('account_id', $accountId)
             ->whereBetween('date', [
                 $startOfMonth->toDateString(),
                 $endOfMonth->toDateString(),
@@ -36,6 +40,7 @@ class FixedCostController extends Controller
 
         $currentDailyRate = 0;
         $todaySnapshot = FixedCostDailySnapshot::query()
+            ->where('account_id', $accountId)
             ->where('date', Carbon::now()->toDateString())
             ->first();
 
@@ -49,7 +54,7 @@ class FixedCostController extends Controller
             'status' => 'success',
             'data' => [
                 'fixed_costs' => $costs,
-                'categories' => $this->categoryCollection(),
+                'categories' => $this->categoryCollection($accountId),
                 'total_monthly' => $totalMonthly,
                 'current_daily_rate' => $currentDailyRate,
                 'snapshots' => $snapshots,
@@ -62,7 +67,7 @@ class FixedCostController extends Controller
     {
         $request->validate([
             'apply_date' => 'required|date',
-            'fixed_costs' => 'required|array',
+            'fixed_costs' => 'present|array',
             'fixed_costs.*.category' => 'nullable|string|max:180',
             'fixed_costs.*.name' => 'required|string|max:180',
             'fixed_costs.*.amount' => 'required|numeric|min:0',
@@ -72,6 +77,7 @@ class FixedCostController extends Controller
 
         $applyDate = Carbon::parse($request->input('apply_date'));
         $costsInput = $request->input('fixed_costs');
+        $accountId = $this->accountId($request);
 
         DB::beginTransaction();
 
@@ -98,7 +104,9 @@ class FixedCostController extends Controller
                 ];
 
                 if (!empty($item['id'])) {
-                    $cost = FixedCost::query()->find($item['id']);
+                    $cost = FixedCost::query()
+                        ->where('account_id', $accountId)
+                        ->find($item['id']);
                     if ($cost) {
                         $cost->update($payload);
                         $keptIds[] = $cost->id;
@@ -106,14 +114,22 @@ class FixedCostController extends Controller
                     continue;
                 }
 
-                $cost = FixedCost::query()->create($payload);
+                $cost = FixedCost::query()->create([
+                    ...$payload,
+                    'account_id' => $accountId,
+                ]);
                 $keptIds[] = $cost->id;
             }
 
-            FixedCost::query()->whereNotIn('id', $keptIds)->delete();
-            $this->syncCategoryCatalog($categoryNames);
+            $obsoleteCosts = FixedCost::query()->where('account_id', $accountId);
+            if ($keptIds !== []) {
+                $obsoleteCosts->whereNotIn('id', $keptIds);
+            }
+            $obsoleteCosts->delete();
+            $this->syncCategoryCatalog($accountId, $categoryNames);
 
             $savedCosts = FixedCost::query()
+                ->where('account_id', $accountId)
                 ->get(['amount', 'applied_from']);
             $totalMonthly = (float) $savedCosts->sum('amount');
             $earliestAppliedFrom = $savedCosts
@@ -140,7 +156,10 @@ class FixedCostController extends Controller
                 $dailyRate = $daysInMonth > 0 ? $activeMonthly / $daysInMonth : 0;
 
                 FixedCostDailySnapshot::query()->updateOrCreate(
-                    ['date' => $current->toDateString()],
+                    [
+                        'account_id' => $accountId,
+                        'date' => $current->toDateString(),
+                    ],
                     ['amount' => round($dailyRate, 2)]
                 );
 
@@ -153,7 +172,7 @@ class FixedCostController extends Controller
                 'status' => 'success',
                 'message' => 'Đã áp dụng thay đổi thành công.',
                 'total_monthly' => $totalMonthly,
-                'categories' => $this->categoryCollection(),
+                'categories' => $this->categoryCollection($accountId),
             ]);
         } catch (\Throwable $e) {
             DB::rollBack();
@@ -167,13 +186,20 @@ class FixedCostController extends Controller
 
     public function storeCategory(Request $request)
     {
+        $accountId = $this->accountId($request);
         $validated = $request->validate([
-            'name' => ['required', 'string', 'max:180', Rule::unique('fixed_cost_categories', 'name')],
+            'name' => [
+                'required',
+                'string',
+                'max:180',
+                Rule::unique('fixed_cost_categories', 'name')->where(fn ($query) => $query->where('account_id', $accountId)),
+            ],
         ]);
 
         $category = FixedCostCategory::query()->create([
+            'account_id' => $accountId,
             'name' => $this->normalizeCategoryName($validated['name']),
-            'sort_order' => $this->nextCategorySortOrder(),
+            'sort_order' => $this->nextCategorySortOrder($accountId),
         ]);
 
         return response()->json([
@@ -187,27 +213,33 @@ class FixedCostController extends Controller
 
     public function updateCategory(Request $request, int $id)
     {
-        $category = FixedCostCategory::query()->findOrFail($id);
+        $accountId = $this->accountId($request);
+        $category = FixedCostCategory::query()
+            ->where('account_id', $accountId)
+            ->findOrFail($id);
 
         $validated = $request->validate([
             'name' => [
                 'required',
                 'string',
                 'max:180',
-                Rule::unique('fixed_cost_categories', 'name')->ignore($category->id),
+                Rule::unique('fixed_cost_categories', 'name')
+                    ->where(fn ($query) => $query->where('account_id', $accountId))
+                    ->ignore($category->id),
             ],
         ]);
 
         $newName = $this->normalizeCategoryName($validated['name']);
         $oldName = $category->name;
 
-        DB::transaction(function () use ($category, $newName, $oldName) {
+        DB::transaction(function () use ($category, $newName, $oldName, $accountId) {
             $category->update([
                 'name' => $newName,
             ]);
 
             if ($oldName !== $newName) {
                 FixedCost::query()
+                    ->where('account_id', $accountId)
                     ->where('category', $oldName)
                     ->update([
                         'category' => $newName,
@@ -217,7 +249,10 @@ class FixedCostController extends Controller
         });
 
         $category->refresh();
-        $usageCount = (int) FixedCost::query()->where('category', $category->name)->count();
+        $usageCount = (int) FixedCost::query()
+            ->where('account_id', $accountId)
+            ->where('category', $category->name)
+            ->count();
 
         return response()->json([
             'status' => 'success',
@@ -231,8 +266,14 @@ class FixedCostController extends Controller
 
     public function destroyCategory(Request $request, int $id)
     {
-        $category = FixedCostCategory::query()->findOrFail($id);
-        $usageCount = (int) FixedCost::query()->where('category', $category->name)->count();
+        $accountId = $this->accountId($request);
+        $category = FixedCostCategory::query()
+            ->where('account_id', $accountId)
+            ->findOrFail($id);
+        $usageCount = (int) FixedCost::query()
+            ->where('account_id', $accountId)
+            ->where('category', $category->name)
+            ->count();
 
         if ($usageCount > 0) {
             return response()->json([
@@ -253,16 +294,18 @@ class FixedCostController extends Controller
         ]);
     }
 
-    private function categoryCollection(): array
+    private function categoryCollection(?int $accountId): array
     {
         $usageCounts = FixedCost::query()
             ->selectRaw('category, COUNT(*) as usage_count')
+            ->where('account_id', $accountId)
             ->whereNotNull('category')
             ->where('category', '<>', '')
             ->groupBy('category')
             ->pluck('usage_count', 'category');
 
         return FixedCostCategory::query()
+            ->where('account_id', $accountId)
             ->orderBy('sort_order')
             ->orderBy('name')
             ->get()
@@ -284,9 +327,9 @@ class FixedCostController extends Controller
         ];
     }
 
-    private function nextCategorySortOrder(): int
+    private function nextCategorySortOrder(?int $accountId): int
     {
-        return ((int) FixedCostCategory::query()->max('sort_order')) + 1;
+        return ((int) FixedCostCategory::query()->where('account_id', $accountId)->max('sort_order')) + 1;
     }
 
     private function normalizeCategoryName(?string $value): string
@@ -294,7 +337,19 @@ class FixedCostController extends Controller
         return trim((string) preg_replace('/\s+/u', ' ', (string) $value));
     }
 
-    private function syncCategoryCatalog(iterable $names): void
+    private function defaultCategoryNames(): array
+    {
+        return [
+            'Mặt bằng',
+            'Nhân sự',
+            'Tiện ích (Điện/Nước/Net)',
+            'Phần mềm/Dịch vụ',
+            'Khấu hao tài sản',
+            'Khác',
+        ];
+    }
+
+    private function syncCategoryCatalog(?int $accountId, iterable $names): void
     {
         $normalizedNames = collect($names)
             ->map(fn ($name) => $this->normalizeCategoryName($name))
@@ -307,10 +362,11 @@ class FixedCostController extends Controller
         }
 
         $existingNames = FixedCostCategory::query()
+            ->where('account_id', $accountId)
             ->pluck('name')
             ->mapWithKeys(fn ($name) => [mb_strtolower($this->normalizeCategoryName($name)) => true]);
 
-        $sortOrder = (int) FixedCostCategory::query()->max('sort_order');
+        $sortOrder = (int) FixedCostCategory::query()->where('account_id', $accountId)->max('sort_order');
 
         foreach ($normalizedNames as $name) {
             $key = mb_strtolower($name);
@@ -321,11 +377,17 @@ class FixedCostController extends Controller
             $sortOrder++;
 
             FixedCostCategory::query()->create([
+                'account_id' => $accountId,
                 'name' => $name,
                 'sort_order' => $sortOrder,
             ]);
 
             $existingNames->put($key, true);
         }
+    }
+
+    private function accountId(Request $request): ?int
+    {
+        return app(AccessControlService::class)->resolveAccountIdFromRequest($request);
     }
 }

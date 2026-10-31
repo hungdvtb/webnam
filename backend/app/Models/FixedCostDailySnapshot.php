@@ -6,5 +6,5 @@ use Illuminate\Database\Eloquent\Model;
 
 class FixedCostDailySnapshot extends Model
 {
-    protected $fillable = ['date', 'amount'];
+    protected $fillable = ['account_id', 'date', 'amount'];
 }

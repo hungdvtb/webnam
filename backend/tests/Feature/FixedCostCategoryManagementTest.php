@@ -15,6 +15,7 @@ class FixedCostCategoryManagementTest extends TestCase
     use RefreshDatabase;
 
     private array $headers;
+    private int $accountId;
 
     protected function setUp(): void
     {
@@ -23,6 +24,7 @@ class FixedCostCategoryManagementTest extends TestCase
         $account = Account::query()->create([
             'name' => 'Fixed Cost Category Test Account',
         ]);
+        $this->accountId = (int) $account->id;
 
         $user = User::factory()->create();
         $user->accounts()->attach($account->id, ['role' => 'owner']);
@@ -74,6 +76,7 @@ class FixedCostCategoryManagementTest extends TestCase
         $categoryId = (int) $categoryResponse->json('data.category.id');
 
         FixedCost::query()->create([
+            'account_id' => $this->accountId,
             'category' => 'Marketing offline',
             'name' => 'In ấn',
             'amount' => 1200000,
@@ -101,11 +104,13 @@ class FixedCostCategoryManagementTest extends TestCase
     public function test_delete_blocks_used_category_and_allows_unused_category(): void
     {
         $usedCategory = FixedCostCategory::query()->create([
+            'account_id' => $this->accountId,
             'name' => 'Mặt bằng phụ',
             'sort_order' => 99,
         ]);
 
         FixedCost::query()->create([
+            'account_id' => $this->accountId,
             'category' => 'Mặt bằng phụ',
             'name' => 'Thuê kho',
             'amount' => 2500000,
@@ -117,6 +122,7 @@ class FixedCostCategoryManagementTest extends TestCase
             ->assertJsonPath('usage_count', 1);
 
         $unusedCategory = FixedCostCategory::query()->create([
+            'account_id' => $this->accountId,
             'name' => 'Chi phí không dùng',
             'sort_order' => 100,
         ]);

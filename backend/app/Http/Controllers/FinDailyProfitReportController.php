@@ -442,7 +442,7 @@ class FinDailyProfitReportController extends Controller
             ->all();
     }
 
-    private function dailyAdsSpendTotalsByDate(string $startDate, string $endDate, string $platform, array $configuredAccountIds, ?array $profitScope = null, array $configuredAccountPeriods = []): array
+    private function dailyAdsSpendTotalsByDate(string $startDate, string $endDate, string $platform, array $configuredAccountIds, ?array $profitScope = null, array $configuredAccountPeriods = [], bool $allowLegacyNullAccountFallback = true): array
     {
         if ($configuredAccountPeriods !== []) {
             return $this->dateScopedDailyAdsSpendTotalsByDate(
@@ -489,6 +489,10 @@ class FinDailyProfitReportController extends Controller
             }
         }
 
+        if ($configuredAccountIds === [] && !$allowLegacyNullAccountFallback) {
+            return [];
+        }
+
         $query = DailyAdsSpend::query()
             ->where('platform', $platform)
             ->whereDate('date', '>=', $startDate)
@@ -508,10 +512,16 @@ class FinDailyProfitReportController extends Controller
 
             if ($hasConfiguredAccountRows) {
                 $query->whereIn('account_id', $configuredAccountIds);
-            } else {
+            } elseif ($allowLegacyNullAccountFallback) {
                 $query->whereNull('account_id');
+            } else {
+                return [];
             }
         } else {
+            if (!$allowLegacyNullAccountFallback) {
+                return [];
+            }
+
             $query->whereNull('account_id');
         }
 
@@ -1211,6 +1221,8 @@ class FinDailyProfitReportController extends Controller
         $includeFacebookAds = in_array($adChannel, [self::REPORT_AD_CHANNEL_ALL, self::REPORT_AD_CHANNEL_FACEBOOK], true);
         $includeGoogleAds = in_array($adChannel, [self::REPORT_AD_CHANNEL_ALL, self::REPORT_AD_CHANNEL_GOOGLE], true);
         $includeSharedCosts = $adChannel === self::REPORT_AD_CHANNEL_ALL && !$hasProfitScopeFilter;
+        // Null-account legacy totals are shared, so a store-scoped config must not consume them.
+        $allowLegacyAdSpendFallback = !$config || $config->account_id === null;
         $facebookAdsSyncService = app(FacebookAdsSyncService::class);
         $googleAdsSyncService = app(GoogleAdsSyncService::class);
 
@@ -1257,7 +1269,8 @@ class FinDailyProfitReportController extends Controller
                 DailyAdsSpend::PLATFORM_FACEBOOK,
                 $facebookAdsSyncService->configuredStorageAccountIds($config),
                 $profitScope,
-                $facebookAdsSyncService->configuredStorageAccountPeriods($config)
+                $facebookAdsSyncService->configuredStorageAccountPeriods($config),
+                $allowLegacyAdSpendFallback
             )
             : [];
         $googleAdsSpends = $includeGoogleAds
@@ -1266,7 +1279,9 @@ class FinDailyProfitReportController extends Controller
                 $endDate,
                 DailyAdsSpend::PLATFORM_GOOGLE,
                 $googleAdsSyncService->configuredStorageAccountIds($config),
-                $profitScope
+                $profitScope,
+                [],
+                $allowLegacyAdSpendFallback
             )
             : [];
         $fbTaxRate = $config ? (float) $config->fb_tax_rate : 0;

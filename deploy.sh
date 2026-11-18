@@ -145,7 +145,7 @@ function sync_code() {
         git stash push -m "$stash_name" || exit 1
     fi
 
-    git pull --ff-only origin master || exit 1
+    git pull --no-rebase --no-edit origin master || exit 1
 }
 
 function reload_nginx() {

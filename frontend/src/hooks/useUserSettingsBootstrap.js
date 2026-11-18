@@ -6,24 +6,24 @@ import {
 } from '../services/userSettingsSync';
 
 const useUserSettingsBootstrap = (user) => {
-    const [ready, setReady] = useState(() => !user?.id);
+    const userId = user?.id ?? null;
+    // Ready is tied to the user whose settings were loaded. A plain boolean started as `true`
+    // before the user was known, so pages rendered once, unmounted while settings loaded, then mounted again.
+    const [readyUserId, setReadyUserId] = useState(null);
     const [source, setSource] = useState('server');
 
     useEffect(() => {
         let cancelled = false;
 
-        if (!user?.id) {
+        if (!userId) {
             stopUserSettingsSync();
-            setReady(true);
             setSource('server');
             return undefined;
         }
 
-        setReady(false);
-
         const bootstrap = async () => {
             const result = await bootstrapUserSettingsSync({
-                userId: user.id,
+                userId,
                 fetchSettings: () => userSettingsApi.get(),
                 patchSettings: (payload) => userSettingsApi.update(payload),
             });
@@ -34,7 +34,7 @@ const useUserSettingsBootstrap = (user) => {
             }
 
             setSource(result.source);
-            setReady(true);
+            setReadyUserId(userId);
         };
 
         bootstrap();
@@ -43,9 +43,9 @@ const useUserSettingsBootstrap = (user) => {
             cancelled = true;
             stopUserSettingsSync();
         };
-    }, [user?.id]);
+    }, [userId]);
 
-    return { ready, source };
+    return { ready: !userId || readyUserId === userId, source };
 };
 
 export default useUserSettingsBootstrap;

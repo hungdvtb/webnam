@@ -6293,7 +6293,6 @@ const OrderList = () => {
 
             const combinedColumns = [...ORDER_TABLE_COLUMNS, ...attrColumns];
             setTableColumns(combinedColumns);
-            orderApi.preloadBootstrap({ mode: 'form' });
         } catch (error) { console.error("Error initial data", error); }
     }, [isActiveAccountReady]);
 
@@ -8401,29 +8400,19 @@ const OrderList = () => {
     }, [currentListUrl, isDraftView]);
 
     const handleCreateOrder = useCallback(() => {
-        orderApi.preloadBootstrap({ mode: 'form' });
         persistCurrentOrderListState();
         navigate(buildNewOrderUrl());
     }, [buildNewOrderUrl, navigate, persistCurrentOrderListState]);
 
     const handleCreateDraftOrder = useCallback(() => {
-        orderApi.preloadBootstrap({ mode: 'form' });
         persistCurrentOrderListState();
         navigate(buildNewOrderUrl(DRAFT_ORDER_KIND));
     }, [buildNewOrderUrl, navigate, persistCurrentOrderListState]);
 
     const handleCreateMainOrder = useCallback(() => {
-        orderApi.preloadBootstrap({ mode: 'form' });
         persistCurrentOrderListState();
         navigate(buildNewOrderUrl(MAIN_ORDER_KIND));
     }, [buildNewOrderUrl, navigate, persistCurrentOrderListState]);
-
-    const warmOrderEditor = useCallback((orderId) => {
-        orderApi.preloadBootstrap({ mode: 'form' });
-        if (orderId) {
-            orderApi.preloadOne(orderId);
-        }
-    }, []);
 
     const openOrderEditor = useCallback((orderId, options = {}) => {
         const returnTo = options.returnTo || currentListUrl;
@@ -8433,10 +8422,9 @@ const OrderList = () => {
             params.set('bulk_replace', options.bulkReplaceMode);
         }
 
-        warmOrderEditor(orderId);
         persistCurrentOrderListState();
         navigate(`/admin/orders/edit/${orderId}?${params.toString()}`);
-    }, [currentListUrl, navigate, persistCurrentOrderListState, warmOrderEditor]);
+    }, [currentListUrl, navigate, persistCurrentOrderListState]);
 
     const handleBulkDelete = async () => {
         if (!selectedIds.length) return;

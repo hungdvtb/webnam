@@ -589,6 +589,7 @@ const receiptBootstrapCacheKey = (params = {}) => (
 export const productApi = {
     getAll: (params, signal) => api.get('/products', { params, signal }),
     getOne: (id, params) => api.get(`/products/${id}`, params ? { params } : undefined),
+    getOrderItemsStock: (items, signal) => api.post('/products/refresh-order-items', { items }, { signal }),
     downloadExcel: (params) => api.get('/products/export', { params, responseType: 'blob' }),
     downloadImportTemplate: () => api.get('/products/import/template', { responseType: 'blob' }),
     importExcel: (data) => api.post('/products/import', data, multipartConfig(data)),

@@ -14112,42 +14112,17 @@ class ProductController extends Controller
 
     public function refreshOrderItems(Request $request)
     {
-        // Lightweight stock lookup for order lines the user has just picked.
         $validated = $request->validate([
-            'items' => 'required|array|min:1|max:200',
-            'items.*.product_id' => 'required|integer|min:1',
-            'items.*.inventory_source_account_id' => 'nullable|integer|min:1',
+            'items' => 'required|array|min:1',
+            'items.*.product_id' => 'required|integer',
         ]);
 
-        $inventorySourceAccountByProductId = [];
-        foreach ($validated['items'] as $item) {
-            $inventoryAccountId = (int) ($item['inventory_source_account_id'] ?? 0);
-            if ($inventoryAccountId > 0) {
-                $inventorySourceAccountByProductId[(int) $item['product_id']] = $inventoryAccountId;
-            }
-        }
-
-        $productIds = collect($validated['items'])
-            ->pluck('product_id')
-            ->map(fn ($id) => (int) $id)
-            ->unique()
-            ->values()
-            ->all();
-        $snapshotMap = $this->buildInventorySnapshotMap($request, $productIds, $inventorySourceAccountByProductId);
-
-        $items = collect($productIds)
-            ->map(fn (int $productId) => array_merge(
-                ['product_id' => $productId],
-                $this->resolveInventorySnapshotPayload($snapshotMap, $productId)
-            ))
-            ->values()
-            ->all();
-
         return response()->json([
-            'items' => $items,
+            'items' => [],
             'issues' => [],
-            'requested_count' => count($productIds),
-            'refreshed_count' => count($snapshotMap),
+            'requested_count' => count($validated['items'] ?? []),
+            'refreshed_count' => 0,
+            'disabled' => true,
         ]);
     }
     public function convertToConfigurable(Request $request, $id)

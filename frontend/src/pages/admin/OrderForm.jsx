@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
-import Fuse from 'fuse.js';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import api, { accountApi, orderAiTrainingApi, orderApi, productApi, productReplacementApi, leadApi, cmsApi, categoryApi } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
@@ -115,8 +114,7 @@ const defaultQuoteSettings = {
     quote_store_phone: ''
 };
 const productSearchHistoryStorageKey = 'order_form_product_search_history';
-// Legacy search caches (also mirrored to user settings) - removed on load so stale product rows never come back.
-const LEGACY_PRODUCT_SEARCH_CACHE_STORAGE_KEYS = ['order_form_product_search_cache_v3', 'order_form_product_search_cache_v4'];
+const productSearchSessionCacheStorageKey = 'order_form_product_search_cache_v4';
 const productQuickFilterAttributeStorageKey = 'order_form_product_quick_filter_attribute_id';
 const productQuickFilterAttribute2MapStorageKey = 'order_form_product_quick_filter_attribute_id_2_map';
 const productQuickFilterStateStorageKey = 'order_form_product_quick_filter_state_v1';
@@ -147,15 +145,31 @@ const ACTUAL_PRODUCT_PICKER_RESULT_TAB_HISTORY = 'history';
 const WAREHOUSE_PICKING_HISTORY_STORAGE_KEY_PREFIX = 'warehouse_picking_replacement_history_v1';
 const WAREHOUSE_PICKING_HISTORY_LIMIT = 6;
 const WAREHOUSE_PICKING_HISTORY_MAX_SOURCES = 400;
-const ORDER_FORM_PRODUCT_SEARCH_DEBOUNCE_MS = 250;
-const ORDER_FORM_PRODUCT_SEARCH_SHORT_DEBOUNCE_MS = 300;
-const ORDER_FORM_PRODUCT_SEARCH_INCOMPLETE_DEBOUNCE_MS = 350;
+const ORDER_FORM_PRODUCT_SEARCH_DEBOUNCE_MS = 25;
+const ORDER_FORM_PRODUCT_SEARCH_SHORT_DEBOUNCE_MS = 50;
+const ORDER_FORM_PRODUCT_SEARCH_INCOMPLETE_DEBOUNCE_MS = 70;
 const ORDER_FORM_REPLACE_PICKER_SEARCH_DELAY_MS = 140;
 const ORDER_FORM_REPLACE_PICKER_TOP = 104;
 const ORDER_FORM_REPLACE_PICKER_MIN_HEIGHT = 320;
+const ORDER_FORM_REPLACE_PICKER_PREFETCH_DELAY_MS = 0;
+const ORDER_FORM_REPLACE_PICKER_PREFETCH_FAMILY_LIMIT = 24;
 const ORDER_FORM_REPLACE_PICKER_REQUEST_TIMEOUT_MS = 7000;
-const ORDER_FORM_ITEM_STOCK_LOAD_DELAY_MS = 120;
+const ORDER_FORM_PRODUCT_SEARCH_REQUEST_TIMEOUT_MS = 12000;
+const ORDER_FORM_PRODUCT_SEARCH_RETRY_DELAY_MS = 220;
+const ORDER_FORM_PRODUCT_SEARCH_SHARED_CACHE_LIMIT = 80;
+const ORDER_FORM_PRODUCT_SEARCH_SESSION_CACHE_LIMIT = 24;
+const ORDER_FORM_PRODUCT_SEARCH_SESSION_CACHE_ROW_LIMIT = 80;
+const ORDER_FORM_PRODUCT_SEARCH_SESSION_CACHE_TTL_MS = 60 * 1000;
+const ORDER_FORM_PRODUCT_SEARCH_CACHE_ENABLED = false;
 const ORDER_FORM_REPLACE_PICKER_MANUAL_LOOKUP_GRACE_MS = 900;
+const ORDER_FORM_PRODUCT_PICKER_WARMUP_DELAY_MS = 4000;
+const ORDER_FORM_PRODUCT_PICKER_WARMUP_SEARCH_TERM = '__warmup__';
+const ORDER_FORM_PRODUCT_PICKER_HISTORY_WARMUP_LIMIT = 4;
+const ORDER_FORM_PRODUCT_PICKER_HISTORY_WARMUP_GAP_MS = 140;
+const ORDER_FORM_REPLACE_LOOKUP_WARMUP_DELAY_MS = 180;
+const ORDER_FORM_REPLACE_LOOKUP_WARMUP_LIMIT = 8;
+const ORDER_FORM_REPLACE_LOOKUP_WARMUP_BATCH_SIZE = 3;
+const ORDER_FORM_REPLACE_FAMILY_CACHE_VERSION = 2;
 const ACTUAL_PRODUCT_CATEGORY_GROUP_MAX_PRODUCT_PAGES = 8;
 const ACTUAL_PRODUCT_CATEGORY_GROUP_STYLE_WORDS = new Set([
     'men', 'mau', 'loai', 'dong', 'bo', 'set', 'combo',
@@ -204,6 +218,9 @@ const orderFormColumnOrderDefaultStorageKey = 'order_form_column_order_default';
 const orderFormVisibleColumnsDefaultStorageKey = 'order_form_visible_columns_default';
 const orderFormColumnWidthsDefaultStorageKey = 'order_column_widths_default';
 const orderFormColumnWidthModeDefaultStorageKey = 'order_form_column_width_mode_default';
+const orderFormProductSearchSharedCache = new Map();
+const orderFormProductSearchCacheFetchedAt = new Map();
+let orderFormProductSearchSessionCacheHydrated = false;
 const orderFormCostPriceMigrationStorageKey = 'added_cost_price_migrated_form';
 const orderFormUnitVisibleMigrationStorageKey = 'added_unit_visible_migrated_form';
 const orderFormAvailableToSellVisibleMigrationStorageKey = 'added_available_to_sell_migrated_form';
@@ -2234,6 +2251,27 @@ const getOrderLineReplacementFamilyParentId = (entry) => {
         entry?.base_product_id,
     ].map((value) => Number(value) || 0).find((value) => value > 0) || 0;
 };
+const collectOrderLineReplacementFamilyParentIds = (items = []) => (
+    Array.from(new Set(
+        (Array.isArray(items) ? items : [])
+            .map(getOrderLineReplacementFamilyParentId)
+            .filter((value) => value > 0)
+    ))
+);
+const groupOrderLineReplacementFamilyEntries = (entries = []) => {
+    const groupedEntries = new Map();
+
+    (Array.isArray(entries) ? entries : []).forEach((entry) => {
+        const familyParentId = getOrderLineReplacementFamilyParentId(entry);
+        if (!familyParentId) return;
+
+        const familyEntries = groupedEntries.get(familyParentId) || [];
+        familyEntries.push(entry);
+        groupedEntries.set(familyParentId, familyEntries);
+    });
+
+    return groupedEntries;
+};
 const getActualReplacementTargetProductId = (entry) => Number(
     entry?.target_product_id
     ?? entry?.product_id
@@ -4158,6 +4196,15 @@ const buildWarehousePickingLookupMeta = (line, { scopeKey = '', includeSource = 
         }),
     };
 };
+const withWarehousePickingLineContext = (entries = [], line = null, lineNumber = '') => (
+    mergeActualProductReplacementEntries(entries)
+        .map((entry) => withActualReplacementLineContext(entry, line, {
+            declared: Boolean(entry?.is_declared_replacement),
+            groupId: entry?.replacement_group_id || null,
+            original: Boolean(entry?.is_original_order_product),
+            lineNumber,
+        }))
+);
 const isBundleOptionPickerEntry = (entry) => (
     String(entry?.entry_kind || '').trim() === SEARCH_ENTRY_BUNDLE_OPTION
 );
@@ -4814,25 +4861,6 @@ const createOrderLineItem = (payload = {}) => {
     };
 };
 const hasActualOrderProductOverride = (item) => hasOrderItemActualProductOverride(item);
-// Stock shown on a line belongs to the product that is actually shipped.
-const resolveOrderItemStockProductId = (item) => (
-    hasActualOrderProductOverride(item)
-        ? (Number(item?.actual_product_id) || Number(item?.product_id) || 0)
-        : (Number(item?.product_id) || 0)
-);
-const removeLegacyProductSearchCaches = () => {
-    if (typeof window === 'undefined') return;
-
-    LEGACY_PRODUCT_SEARCH_CACHE_STORAGE_KEYS.forEach((key) => {
-        try {
-            if (window.sessionStorage.getItem(key) !== null) {
-                window.sessionStorage.removeItem(key);
-            }
-        } catch {
-            // Storage can be unavailable (private mode); nothing to clean then.
-        }
-    });
-};
 const getOrderItemActualNameLabel = (item) => getOrderItemActualDisplayName(item, item?.actual_name || '');
 const getOrderItemActualSkuLabel = (item) => getOrderItemActualDisplaySku(item, item?.actual_sku || '');
 const OrderLineActualOverrideNotice = ({ item, onClear, className = '' }) => {
@@ -5363,92 +5391,85 @@ const normalizeProductSearchResponseRows = (rows = [], term = '') => {
         };
     });
 };
-const PRODUCT_CATALOG_PAGE_SIZE = 200;
-const PRODUCT_CATALOG_MAX_PAGES = 25;
-const PRODUCT_FUSE_MATCH_LIMIT = 1000;
-const PRODUCT_FUSE_SEARCH_DEBOUNCE_MS = 120;
-const parseProductAttributeValueTexts = (rawValue) => {
-    if (Array.isArray(rawValue)) return rawValue.flatMap(parseProductAttributeValueTexts);
+const persistOrderFormProductSearchCache = (cache) => {
+    if (typeof window === 'undefined' || !cache) return;
 
-    const text = normalizeCanvasText(rawValue);
-    if (!text) return [];
-    if (text.startsWith('[')) {
-        try {
-            const parsed = JSON.parse(text);
-            if (Array.isArray(parsed)) return parsed.map(normalizeCanvasText).filter(Boolean);
-        } catch {
-            // Plain text value that happens to start with "[".
+    try {
+        const entries = Array.from(cache.entries())
+            .slice(-ORDER_FORM_PRODUCT_SEARCH_SESSION_CACHE_LIMIT)
+            .map(([key, products]) => [key, {
+                cached_at: orderFormProductSearchCacheFetchedAt.get(key) || Date.now(),
+                products: (Array.isArray(products) ? products : []).slice(0, ORDER_FORM_PRODUCT_SEARCH_SESSION_CACHE_ROW_LIMIT),
+            }]);
+        window.sessionStorage.setItem(productSearchSessionCacheStorageKey, JSON.stringify(entries));
+    } catch (error) {
+        console.error('Unable to persist product search cache', error);
+    }
+};
+const hydrateOrderFormProductSearchCache = (cache) => {
+    if (orderFormProductSearchSessionCacheHydrated || typeof window === 'undefined' || !cache) {
+        return cache;
+    }
+
+    orderFormProductSearchSessionCacheHydrated = true;
+
+    // Search results are no longer cached: stale results (synced to user settings) hid products.
+    // Drop whatever an older version stored and start empty.
+    try {
+        window.sessionStorage.removeItem(productSearchSessionCacheStorageKey);
+    } catch (error) {
+        console.error('Unable to clear product search cache', error);
+    }
+
+    return cache;
+};
+const getOrderFormProductSearchCache = () => hydrateOrderFormProductSearchCache(orderFormProductSearchSharedCache);
+const clearOrderFormProductSearchCache = (cache = orderFormProductSearchSharedCache) => {
+    cache?.clear?.();
+    if (cache === orderFormProductSearchSharedCache) {
+        orderFormProductSearchCacheFetchedAt.clear();
+    }
+    if (typeof window === 'undefined') return;
+
+    try {
+        window.sessionStorage.removeItem(productSearchSessionCacheStorageKey);
+    } catch (error) {
+        console.error('Unable to clear product search cache', error);
+    }
+};
+// Product search always asks the server: cached results could miss products that were just added or changed.
+const getFreshOrderFormProductSearchCacheEntry = (cache, cacheKey) => {
+    if (!ORDER_FORM_PRODUCT_SEARCH_CACHE_ENABLED) return null;
+    if (!cache?.has?.(cacheKey)) return null;
+
+    const cachedAt = orderFormProductSearchCacheFetchedAt.get(cacheKey) || 0;
+    if (!cachedAt || Date.now() - cachedAt > ORDER_FORM_PRODUCT_SEARCH_SESSION_CACHE_TTL_MS) {
+        cache.delete(cacheKey);
+        orderFormProductSearchCacheFetchedAt.delete(cacheKey);
+        if (cache === orderFormProductSearchSharedCache) {
+            persistOrderFormProductSearchCache(cache);
         }
+        return null;
     }
 
-    return [text];
+    return cache.get(cacheKey);
 };
-// "Loại men Men hoàng tộc", "Kích thước 25 cm"... so a product can be found by attribute name or value.
-const collectProductAttributeSearchTexts = (entry, attributeNameById = new Map()) => {
-    const texts = [];
-    const pushAttributes = (source) => {
-        (Array.isArray(source?.attribute_values) ? source.attribute_values : []).forEach((attributeValue) => {
-            const attributeName = attributeNameById.get(Number(attributeValue?.attribute_id) || 0) || '';
-            parseProductAttributeValueTexts(attributeValue?.value).forEach((valueText) => {
-                texts.push(attributeName ? `${attributeName} ${valueText}` : valueText);
-            });
-        });
-        if (source?.attribute_summary) texts.push(source.attribute_summary);
-    };
+const storeProductSearchCacheEntry = (cache, cacheKey, products, limit = ORDER_FORM_PRODUCT_SEARCH_SHARED_CACHE_LIMIT) => {
+    if (!ORDER_FORM_PRODUCT_SEARCH_CACHE_ENABLED) return;
+    if (!cache || !cacheKey) return;
 
-    pushAttributes(entry);
-    (Array.isArray(entry?.bundle_items) ? entry.bundle_items : []).forEach(pushAttributes);
-    return texts;
-};
-const createProductSearchFuse = (entries = [], attributeNameById = new Map()) => new Fuse(
-    (Array.isArray(entries) ? entries : []).map((entry) => ({
-        entry,
-        name: normalizeProductSearchText([entry?.display_name, entry?.name].filter(Boolean).join(' ')),
-        sku: normalizeProductSearchText([entry?.display_sku, entry?.sku].filter(Boolean).join(' ')),
-        attributes: normalizeProductSearchText(collectProductAttributeSearchTexts(entry, attributeNameById).join(' ')),
-        text: normalizeProductSearchText(collectProductSearchTextValues(entry).join(' ')),
-    })),
-    {
-        keys: [
-            { name: 'name', weight: 3 },
-            { name: 'sku', weight: 2 },
-            { name: 'attributes', weight: 1.5 },
-            { name: 'text', weight: 1 },
-        ],
-        includeScore: true,
-        ignoreLocation: true,
-        threshold: 0.3,
-        useExtendedSearch: true,
+    cache.set(cacheKey, Array.isArray(products) ? products : []);
+    orderFormProductSearchCacheFetchedAt.set(cacheKey, Date.now());
+    while (cache.size > limit) {
+        const oldestCacheKey = cache.keys().next().value;
+        if (!oldestCacheKey) break;
+        cache.delete(oldestCacheKey);
+        orderFormProductSearchCacheFetchedAt.delete(oldestCacheKey);
     }
-);
-// Every word of the query must match somewhere (name, SKU, attributes, related text).
-// Words of 1-2 characters ("lo", "18") must appear as typed; longer words tolerate small typos.
-// Fuse decides what matches; the existing Vietnamese product scorer decides the order.
-const searchProductsWithFuse = (fuse, rawTerm, limit = PRODUCT_FUSE_MATCH_LIMIT) => {
-    const tokens = normalizeProductSearchText(rawTerm).split(' ').filter(Boolean);
-    if (!fuse || tokens.length === 0) return [];
 
-    const leadPhrase = tokens.slice(0, 2).join(' ');
-
-    return fuse.search({
-        $and: tokens.map((token) => {
-            const pattern = token.length <= 2 ? `'${token}` : token;
-            return { $or: [{ name: pattern }, { sku: pattern }, { attributes: pattern }, { text: pattern }] };
-        }),
-    }, { limit }).map((result) => {
-        const nameWords = ` ${result.item.name} `;
-        const hasAllWordsInName = tokens.every((token) => nameWords.includes(` ${token}`));
-        const startsLikeQuery = result.item.name.startsWith(leadPhrase);
-
-        return {
-            ...result.item.entry,
-            __fuseScore: Number(result.score) || 0,
-            // Name tier first: every typed word in the name, then names that start like the query
-            // ("bát hương…" before "đế bát hương…"); the existing scorer orders within a tier.
-            __nameMatchTier: (hasAllWordsInName ? 2 : 0) + (startsLikeQuery ? 1 : 0),
-            __localSearchScore: scoreProductSearchResult(result.item.entry, rawTerm),
-        };
-    });
+    if (cache === orderFormProductSearchSharedCache) {
+        persistOrderFormProductSearchCache(cache);
+    }
 };
 const getOrderProductSearchPageSize = (term = '') => {
     const trimmedTerm = normalizeCanvasText(term);
@@ -6425,61 +6446,7 @@ const MobileOrderItemReorderCard = ({ item, className = '', onSelect, children }
     );
 };
 
-const normalizeHighlightChar = (char) => {
-    const normalized = char.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[đĐ]/g, 'd').toLowerCase();
-    return normalized.length === 1 ? normalized : char.toLowerCase();
-};
-// Ranges [start, end) of `text` matching the typed words, ignoring accents/case ("lo" lights up "Lọ").
-const findProductNameHighlightRanges = (text, query) => {
-    const chars = Array.from(String(text || ''));
-    const words = normalizeProductSearchText(query).split(' ').filter(Boolean);
-    const usefulWords = words.length > 1 ? words.filter((word) => word.length > 1) : words;
-    if (chars.length === 0 || usefulWords.length === 0) return [];
-
-    const normalizedText = chars.map(normalizeHighlightChar).join('');
-    const ranges = [];
-    usefulWords.forEach((word) => {
-        let fromIndex = 0;
-        while (fromIndex <= normalizedText.length - word.length) {
-            const index = normalizedText.indexOf(word, fromIndex);
-            if (index < 0) break;
-            ranges.push([index, index + word.length]);
-            fromIndex = index + word.length;
-        }
-    });
-    ranges.sort((left, right) => left[0] - right[0]);
-
-    return ranges.reduce((merged, range) => {
-        const last = merged[merged.length - 1];
-        if (last && range[0] <= last[1]) {
-            last[1] = Math.max(last[1], range[1]);
-        } else {
-            merged.push([...range]);
-        }
-        return merged;
-    }, []);
-};
-const HighlightedProductName = ({ text, query }) => {
-    const chars = Array.from(String(text || ''));
-    const ranges = findProductNameHighlightRanges(text, query);
-    if (ranges.length === 0) return text;
-
-    const parts = [];
-    let cursor = 0;
-    ranges.forEach(([start, end]) => {
-        if (start > cursor) parts.push(chars.slice(cursor, start).join(''));
-        parts.push(
-            <mark key={start} className="rounded-[2px] bg-amber-200/80 text-inherit">
-                {chars.slice(start, end).join('')}
-            </mark>
-        );
-        cursor = end;
-    });
-    if (cursor < chars.length) parts.push(chars.slice(cursor).join(''));
-
-    return parts;
-};
-const ProductSearchOption = ({ product, onSelect, quickFilterAttribute = null, isAlreadyInOrder = false, activeAccountId = null, highlightQuery = '' }) => {
+const ProductSearchOption = ({ product, onSelect, quickFilterAttribute = null, isAlreadyInOrder = false, activeAccountId = null }) => {
     const nameRef = useRef(null);
     const [hasTruncation, setHasTruncation] = useState(false);
     const [isHovered, setIsHovered] = useState(false);
@@ -6558,7 +6525,7 @@ const ProductSearchOption = ({ product, onSelect, quickFilterAttribute = null, i
             </div>
             <div className="flex min-w-0 flex-1 items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
-                    <p ref={nameRef} className="truncate text-[13px] font-bold tracking-tight text-primary"><HighlightedProductName text={displayName} query={highlightQuery} /></p>
+                    <p ref={nameRef} className="truncate text-[13px] font-bold tracking-tight text-primary">{displayName}</p>
                     {secondaryMeta.length > 0 && (
                         <div className="mt-1 flex flex-wrap items-center gap-1.5">
                             {secondaryMeta.map((meta) => (
@@ -6608,7 +6575,7 @@ const ProductSearchOption = ({ product, onSelect, quickFilterAttribute = null, i
             {isHovered && hasTruncation && (
                 <div className="pointer-events-none absolute left-11 right-3 top-1/2 z-[120] -translate-y-1/2 rounded-sm border border-primary/10 bg-white/95 px-3 py-2 shadow-[0_18px_40px_rgba(15,23,42,0.16)] ring-1 ring-black/5 backdrop-blur-sm">
                     <div className="text-[12px] font-semibold leading-5 text-[#0F172A] break-words">
-                        <HighlightedProductName text={displayName} query={highlightQuery} />
+                        {displayName}
                     </div>
                 </div>
             )}
@@ -8095,7 +8062,6 @@ const OrderForm = () => {
     const [selectedOrderLineId, setSelectedOrderLineId] = useState('');
     const [showActualProductSection, setShowActualProductSection] = useState(false);
     const [productQuickFilterAttributes, setProductQuickFilterAttributes] = useState([]);
-    const [productAttributeDefinitions, setProductAttributeDefinitions] = useState([]);
     const [productQuickFilterAttributeId, setProductQuickFilterAttributeId] = useState(() => initialProductQuickFilterState.attributeId);
     const [productQuickFilterValues, setProductQuickFilterValues] = useState(() => initialProductQuickFilterState.values);
     const [productQuickFilterAttributeId2, setProductQuickFilterAttributeId2] = useState(() => initialProductQuickFilterState.attributeId2);
@@ -8162,21 +8128,60 @@ const OrderForm = () => {
     const previousShowSearchDropdownRef = useRef(false);
     const productSearchAbortRef = useRef(null);
     const productSearchRequestKeyRef = useRef('');
+    const productSearchCacheRef = useRef(getOrderFormProductSearchCache());
+    const productSearchPrefetchAbortRef = useRef(null);
+    const productSearchPrefetchKeyRef = useRef('');
+    const productSearchPrefetchPromiseRef = useRef(null);
+    const productPickerWarmupControllersRef = useRef(new Map());
+    const productPickerWarmupTimerIdsRef = useRef([]);
+    const productSearchRetryTimeoutRef = useRef(null);
+    const productSearchHasUserInteractedRef = useRef(false);
+    const replacementPickerWarmupAbortRef = useRef(null);
+    const replacementPickerWarmupSignatureRef = useRef('');
+    const warehouseLookupWarmupAbortRef = useRef(null);
     const productQuickFilterStorageKeyRef = useRef(productQuickFilterStorageKey);
     const skipNextProductQuickFilterPersistRef = useRef(false);
     const lastProductQuickFilterDurableSignatureRef = useRef(
         buildProductQuickFilterDurableSignature(productQuickFilterStorageKey, initialProductQuickFilterState)
     );
     const productQuickFilterScopeAbortRef = useRef(null);
-    const productQuickFilterScopeRequestKeyRef = useRef('');
+    const productQuickFilterScopeCacheRef = useRef(new Map());
     const productQuickSetupAbortRef = useRef(null);
+    const productQuickSetupCacheRef = useRef(new Map());
     const productQuickSetupRefreshAbortRef = useRef(null);
-    const prioritizeProductSearchInput = useCallback(() => {
+    const abortProductPickerBackgroundRequests = useCallback(({ includeProductSearchPrefetch = false } = {}) => {
+        if (typeof window !== 'undefined') {
+            productPickerWarmupTimerIdsRef.current.forEach((timerId) => window.clearTimeout(timerId));
+            productPickerWarmupTimerIdsRef.current = [];
+
+            if (productSearchRetryTimeoutRef.current) {
+                window.clearTimeout(productSearchRetryTimeoutRef.current);
+                productSearchRetryTimeoutRef.current = null;
+            }
+        }
+
+        if (includeProductSearchPrefetch) {
+            productSearchPrefetchAbortRef.current?.abort();
+            productSearchPrefetchAbortRef.current = null;
+            productSearchPrefetchKeyRef.current = '';
+            productSearchPrefetchPromiseRef.current = null;
+        }
+
+        productPickerWarmupControllersRef.current.forEach((controller) => controller?.abort?.());
+        productPickerWarmupControllersRef.current.clear();
+        replacementPickerWarmupAbortRef.current?.abort();
+        replacementPickerWarmupAbortRef.current = null;
+        warehouseLookupWarmupAbortRef.current?.abort();
+        warehouseLookupWarmupAbortRef.current = null;
         productQuickFilterScopeAbortRef.current?.abort();
         productQuickFilterScopeAbortRef.current = null;
         productQuickSetupRefreshAbortRef.current?.abort();
         productQuickSetupRefreshAbortRef.current = null;
     }, []);
+    const prioritizeProductSearchInput = useCallback(() => {
+        productSearchHasUserInteractedRef.current = true;
+        abortProductPickerBackgroundRequests({ includeProductSearchPrefetch: true });
+    }, [abortProductPickerBackgroundRequests]);
     const productQuickSetupListRef = useRef(null);
     const productQuickSetupSearchInputRef = useRef(null);
     const pendingProductQuickSetupViewportRef = useRef(null);
@@ -8186,8 +8191,12 @@ const OrderForm = () => {
     const orderAiManualSearchAbortRef = useRef(null);
     const orderAiReplaceSearchAbortRef = useRef(null);
     const orderAiReplaceWarehouseAbortRef = useRef(null);
+    const orderAiReplaceFamilyPrefetchAbortRef = useRef(null);
+    const orderAiReplaceSearchCacheRef = useRef(new Map());
+    const warehousePickingLookupCacheRef = useRef(new Map());
     const actualProductPickerAnchorRef = useRef(null);
     const actualProductPickerAbortRef = useRef(null);
+    const actualProductPickerSearchCacheRef = useRef(new Map());
     const replacementDeclarationSourceAbortRef = useRef(null);
     const replacementDeclarationSearchAbortRef = useRef(null);
     const replacementDeclarationLookupAbortRef = useRef(null);
@@ -8309,6 +8318,24 @@ const OrderForm = () => {
 
         return appendCrossSellSourceParams(params);
     }, [appendCrossSellSourceParams]);
+    const getOrderAiReplaceFamilyCacheKey = useCallback((familyParentId) => (
+        JSON.stringify({
+            version: ORDER_FORM_REPLACE_FAMILY_CACHE_VERSION,
+            params: buildOrderAiReplaceFamilySearchParams([familyParentId]),
+        })
+    ), [buildOrderAiReplaceFamilySearchParams]);
+    const cacheOrderAiReplaceFamilyEntries = useCallback((entries = [], { minFamilySize = 1 } = {}) => {
+        const normalizedMinFamilySize = Math.max(1, Number(minFamilySize) || 1);
+
+        groupOrderLineReplacementFamilyEntries(entries).forEach((familyEntries, familyParentId) => {
+            if (familyEntries.length < normalizedMinFamilySize) return;
+
+            orderAiReplaceSearchCacheRef.current.set(
+                getOrderAiReplaceFamilyCacheKey(familyParentId),
+                familyEntries
+            );
+        });
+    }, [getOrderAiReplaceFamilyCacheKey]);
     const toggleCrossSellAccount = useCallback((accountId) => {
         const normalizedAccountId = normalizeAccountId(accountId);
         if (!normalizedAccountId) return;
@@ -8319,8 +8346,12 @@ const OrderForm = () => {
                 ? currentIds.filter((id) => id !== normalizedAccountId)
                 : [...currentIds, normalizedAccountId];
         });
-        productQuickFilterScopeRequestKeyRef.current = '';
-        productSearchRequestKeyRef.current = '';
+        clearOrderFormProductSearchCache(productSearchCacheRef.current);
+        productQuickFilterScopeCacheRef.current.clear();
+        productQuickSetupCacheRef.current.clear();
+        orderAiReplaceSearchCacheRef.current.clear();
+        warehousePickingLookupCacheRef.current.clear();
+        actualProductPickerSearchCacheRef.current.clear();
         setProducts([]);
         setProductQuickFilterScopeKey('');
         setShowProductQuickSetupPanel(false);
@@ -8692,6 +8723,26 @@ const OrderForm = () => {
     const syncLatestProductsIntoLocalSources = useCallback((latestMap) => {
         if (!(latestMap instanceof Map) || latestMap.size === 0) return;
 
+        const syncCacheRef = (cacheRef) => {
+            cacheRef.current.forEach((entries, key) => {
+                const nextEntries = (Array.isArray(entries) ? entries : []).map((product) => {
+                    const latest = getLatestProductSnapshotForEntry(product, latestMap);
+                    return mergeLatestBundleItemsIntoPickerEntry(
+                        mergeLatestProductSnapshotIntoPickerEntry(product, latest),
+                        latestMap
+                    );
+                });
+
+                cacheRef.current.set(key, nextEntries);
+            });
+        };
+
+        syncCacheRef(productSearchCacheRef);
+        syncCacheRef(productQuickFilterScopeCacheRef);
+        syncCacheRef(productQuickSetupCacheRef);
+        syncCacheRef(orderAiReplaceSearchCacheRef);
+        syncCacheRef(actualProductPickerSearchCacheRef);
+
         setProductQuickFilterScopeProducts((prev) => (
             (Array.isArray(prev) ? prev : []).map((product) => {
                 const latest = getLatestProductSnapshotForEntry(product, latestMap);
@@ -9011,6 +9062,15 @@ const navigateBack = useCallback(() => {
         () => formData.items.find((item) => normalizeCanvasText(item?.line_id) === normalizeCanvasText(orderAiReplaceLineId)) || null,
         [formData.items, orderAiReplaceLineId]
     );
+    const orderAiReplaceFamilyParentIds = useMemo(
+        () => collectOrderLineReplacementFamilyParentIds(formData.items)
+            .slice(0, ORDER_FORM_REPLACE_PICKER_PREFETCH_FAMILY_LIMIT),
+        [formData.items]
+    );
+    const orderAiReplaceFamilyParentKey = useMemo(
+        () => orderAiReplaceFamilyParentIds.join(','),
+        [orderAiReplaceFamilyParentIds]
+    );
     const activeOrderAiReplaceLineNumber = useMemo(() => {
         const normalizedLineId = normalizeCanvasText(orderAiReplaceLineId);
         if (!normalizedLineId) return '';
@@ -9037,18 +9097,38 @@ const navigateBack = useCallback(() => {
         () => buildActualProductReplaceGroupLines(formData.items, actualProductPickerGroupLineIds),
         [actualProductPickerGroupLineIds, formData.items]
     );
+    const getCachedReplacementFamilyEntriesForLines = useCallback((groupLines = []) => (
+        mergeActualProductReplacementEntries(
+            (Array.isArray(groupLines) ? groupLines : []).flatMap((groupLine) => {
+                const familyParentId = getOrderLineReplacementFamilyParentId(groupLine?.item);
+                if (familyParentId <= 0) return [];
+
+                return orderAiReplaceSearchCacheRef.current.get(getOrderAiReplaceFamilyCacheKey(familyParentId)) || [];
+            })
+        )
+    ), [getOrderAiReplaceFamilyCacheKey]);
     const orderAiReplaceGroupAvailableEntries = useMemo(() => (
         mergeActualProductReplacementEntries(
             orderAiReplaceResults,
-            orderAiReplaceWarehouseResults
+            orderAiReplaceWarehouseResults,
+            getCachedReplacementFamilyEntriesForLines(orderAiReplaceGroupLines)
         )
     ), [
+        getCachedReplacementFamilyEntriesForLines,
+        orderAiReplaceGroupLines,
         orderAiReplaceResults,
         orderAiReplaceWarehouseResults,
     ]);
     const actualProductPickerGroupAvailableEntries = useMemo(() => (
-        mergeActualProductReplacementEntries(actualProductPickerResults)
-    ), [actualProductPickerResults]);
+        mergeActualProductReplacementEntries(
+            actualProductPickerResults,
+            getCachedReplacementFamilyEntriesForLines(actualProductPickerGroupLines)
+        )
+    ), [
+        actualProductPickerGroupLines,
+        actualProductPickerResults,
+        getCachedReplacementFamilyEntriesForLines,
+    ]);
     const orderAiReplaceGroupPreview = useMemo(() => buildActualProductGroupReplacementPreview({
         groupLines: orderAiReplaceGroupLines,
         activeLine: activeOrderAiReplaceLine,
@@ -9928,6 +10008,8 @@ const navigateBack = useCallback(() => {
             URL.revokeObjectURL(orderAiLastInputPreviewUrlRef.current);
             orderAiLastInputPreviewUrlRef.current = '';
         }
+        orderAiReplaceFamilyPrefetchAbortRef.current?.abort();
+        orderAiReplaceFamilyPrefetchAbortRef.current = null;
     }, []);
 
     const showTransientNotification = useCallback((type, message, duration = 2000) => {
@@ -11737,6 +11819,62 @@ const navigateBack = useCallback(() => {
         productQuickSetupLatestEntries,
     ]);
 
+    useEffect(() => {
+        orderAiReplaceFamilyPrefetchAbortRef.current?.abort();
+        orderAiReplaceFamilyPrefetchAbortRef.current = null;
+
+        if (!orderAiReplaceFamilyParentKey) {
+            return undefined;
+        }
+
+        const familyParentIds = orderAiReplaceFamilyParentKey
+            .split(',')
+            .map((value) => Number(value) || 0)
+            .filter((value) => value > 0);
+        let missingFamilyParentIds = familyParentIds.filter((familyParentId) => (
+            !orderAiReplaceSearchCacheRef.current.has(getOrderAiReplaceFamilyCacheKey(familyParentId))
+        ));
+
+        if (missingFamilyParentIds.length === 0) {
+            return undefined;
+        }
+
+        const controller = new AbortController();
+        orderAiReplaceFamilyPrefetchAbortRef.current = controller;
+
+        const timerId = window.setTimeout(() => {
+            productApi.getAll(
+                buildOrderAiReplaceFamilySearchParams(missingFamilyParentIds),
+                controller.signal
+            )
+                .then((response) => {
+                    if (controller.signal.aborted) return;
+                    cacheOrderAiReplaceFamilyEntries(
+                        buildSourceAwareOrderAiPickerEntries(response.data?.data || [])
+                    );
+                })
+                .catch((error) => {
+                    if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
+                    console.error('Error prefetching replacement product families', error);
+                })
+                .finally(() => {
+                    if (orderAiReplaceFamilyPrefetchAbortRef.current === controller) {
+                        orderAiReplaceFamilyPrefetchAbortRef.current = null;
+                    }
+                });
+        }, ORDER_FORM_REPLACE_PICKER_PREFETCH_DELAY_MS);
+
+        return () => {
+            controller.abort();
+            window.clearTimeout(timerId);
+        };
+    }, [
+        buildOrderAiReplaceFamilySearchParams,
+        buildSourceAwareOrderAiPickerEntries,
+        cacheOrderAiReplaceFamilyEntries,
+        getOrderAiReplaceFamilyCacheKey,
+        orderAiReplaceFamilyParentKey,
+    ]);
 
     useEffect(() => {
         if (!orderAiFile) {
@@ -11849,6 +11987,14 @@ const navigateBack = useCallback(() => {
 
         if (hasFamilyScope) {
             const params = buildOrderAiReplaceFamilySearchParams([familyParentId]);
+            const cacheKey = getOrderAiReplaceFamilyCacheKey(familyParentId);
+            const cachedResults = orderAiReplaceSearchCacheRef.current.get(cacheKey);
+            if (cachedResults && cachedResults.length > 0) {
+                applyFamilyResults(cachedResults);
+                setOrderAiReplaceLoading(false);
+                return undefined;
+            }
+
             const controller = new AbortController();
             orderAiReplaceSearchAbortRef.current = controller;
             setOrderAiReplaceResults([]);
@@ -11866,6 +12012,7 @@ const navigateBack = useCallback(() => {
                         if (controller.signal.aborted) return;
                         const entries = buildSourceAwareOrderAiPickerEntries(response.data?.data || [])
                             .filter((entry) => getOrderLineReplacementFamilyParentId(entry) === familyParentId);
+                        cacheOrderAiReplaceFamilyEntries(entries);
                         if (entries.length > 0 || term.length < 2) {
                             applyFamilyResults(entries);
                             return;
@@ -11899,7 +12046,7 @@ const navigateBack = useCallback(() => {
                             setOrderAiReplaceLoading(false);
                         }
                     });
-            }, term ? ORDER_FORM_REPLACE_PICKER_SEARCH_DELAY_MS : 0);
+            }, 0);
 
             return () => {
                 controller.abort();
@@ -11919,6 +12066,13 @@ const navigateBack = useCallback(() => {
         }
 
         const params = buildReplacementSearchParams(term);
+        const cacheKey = JSON.stringify(params);
+        const cachedResults = orderAiReplaceSearchCacheRef.current.get(cacheKey);
+        if (cachedResults) {
+            setOrderAiReplaceResults(cachedResults);
+            setOrderAiReplaceLoading(false);
+            return undefined;
+        }
 
         const controller = new AbortController();
         orderAiReplaceSearchAbortRef.current = controller;
@@ -11934,6 +12088,7 @@ const navigateBack = useCallback(() => {
                 .then((response) => {
                     if (controller.signal.aborted) return;
                     const entries = buildSourceAwareOrderAiPickerEntries(response.data?.data || []);
+                    orderAiReplaceSearchCacheRef.current.set(cacheKey, entries);
                     setOrderAiReplaceResults(entries);
                 })
                 .catch((error) => {
@@ -11964,6 +12119,8 @@ const navigateBack = useCallback(() => {
         appendCrossSellSourceParams,
         buildOrderAiReplaceFamilySearchParams,
         buildSourceAwareOrderAiPickerEntries,
+        cacheOrderAiReplaceFamilyEntries,
+        getOrderAiReplaceFamilyCacheKey,
         getReplacementDeclarationQuickModeRows,
         hasEnabledCrossSellSources,
         isProductQuickModeActive,
@@ -11991,7 +12148,17 @@ const navigateBack = useCallback(() => {
         const immediateLineEntry = !isGroupReplaceMode
             ? buildImmediateWarehousePickingEntryFromLine(currentLine, activeOrderAiReplaceLineNumber)
             : null;
-        const initialWarehouseEntries = immediateLineEntry ? [immediateLineEntry] : [];
+        const cachedDeclaredEntries = lookupMeta.canLookup && warehousePickingLookupCacheRef.current.has(lookupMeta.cacheKey)
+            ? withWarehousePickingLineContext(
+                warehousePickingLookupCacheRef.current.get(lookupMeta.cacheKey),
+                currentLine,
+                activeOrderAiReplaceLineNumber
+            )
+            : null;
+        const initialWarehouseEntries = mergeActualProductReplacementEntries(
+            immediateLineEntry ? [immediateLineEntry] : [],
+            Array.isArray(cachedDeclaredEntries) ? cachedDeclaredEntries : []
+        );
         const buildDeclaredReplacementFallbackEntries = (groups = []) => {
             if (!currentLineSkuKey) return [];
 
@@ -12027,10 +12194,10 @@ const navigateBack = useCallback(() => {
 
         const timerId = window.setTimeout(async () => {
             try {
-                let declaredEntries = [];
+                let declaredEntries = Array.isArray(cachedDeclaredEntries) ? cachedDeclaredEntries : [];
                 let manualSearchEntries = [];
 
-                if (lookupMeta.canLookup) {
+                if (lookupMeta.canLookup && !Array.isArray(cachedDeclaredEntries)) {
                     try {
                         const response = await productReplacementApi.lookup(lookupMeta.params, controller.signal);
                         if (controller.signal.aborted) return;
@@ -12054,6 +12221,7 @@ const navigateBack = useCallback(() => {
                         }));
 
                         declaredEntries = mergeActualProductReplacementEntries(sourceEntry ? [sourceEntry] : [], replacementEntries);
+                        warehousePickingLookupCacheRef.current.set(lookupMeta.cacheKey, declaredEntries);
                     } catch (error) {
                         if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
                         console.error('Error fetching warehouse replacement products', error);
@@ -12067,6 +12235,7 @@ const navigateBack = useCallback(() => {
                             }, controller.signal);
                             if (controller.signal.aborted) return;
                             declaredEntries = buildDeclaredReplacementFallbackEntries(response.data?.data || []);
+                            warehousePickingLookupCacheRef.current.set(lookupMeta.cacheKey, declaredEntries);
                         } catch (error) {
                             if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
                             console.error('Error fetching warehouse replacement groups fallback', error);
@@ -12133,7 +12302,7 @@ const navigateBack = useCallback(() => {
             return undefined;
         }
 
-        prioritizeProductSearchInput();
+        abortProductPickerBackgroundRequests();
 
         const currentLine = activeActualProductPickerLine;
         const searchTerm = actualProductPickerSearchTerm.trim();
@@ -12150,7 +12319,19 @@ const navigateBack = useCallback(() => {
         const immediateLineEntry = isWarehousePickingMode && !isGroupReplaceMode
             ? buildImmediateWarehousePickingEntryFromLine(currentLine, activeActualProductPickerLineNumber)
             : null;
-        const initialPickerEntries = immediateLineEntry ? [immediateLineEntry] : [];
+        const cachedDeclaredEntries = lookupMeta.canLookup && warehousePickingLookupCacheRef.current.has(lookupMeta.cacheKey)
+            ? withWarehousePickingLineContext(
+                warehousePickingLookupCacheRef.current.get(lookupMeta.cacheKey),
+                currentLine,
+                activeActualProductPickerLineNumber
+            )
+            : null;
+        const initialPickerEntries = isWarehousePickingMode
+            ? mergeActualProductReplacementEntries(
+                immediateLineEntry ? [immediateLineEntry] : [],
+                Array.isArray(cachedDeclaredEntries) ? cachedDeclaredEntries : []
+            )
+            : [];
         const buildDeclaredReplacementFallbackEntries = (groups = []) => {
             if (!currentLineSkuKey) return [];
 
@@ -12191,6 +12372,10 @@ const navigateBack = useCallback(() => {
         const timerId = window.setTimeout(async () => {
             const loadDeclaredReplacementEntries = () => (lookupMeta.canLookup
                 ? (async () => {
+                    if (Array.isArray(cachedDeclaredEntries)) {
+                        return cachedDeclaredEntries;
+                    }
+
                     try {
                         const response = await productReplacementApi.lookup(lookupMeta.params, controller.signal);
                         if (controller.signal.aborted) return [];
@@ -12215,6 +12400,7 @@ const navigateBack = useCallback(() => {
 
                         if (sourceEntry || replacementEntries.length > 0) {
                             const entries = mergeActualProductReplacementEntries(sourceEntry ? [sourceEntry] : [], replacementEntries);
+                            warehousePickingLookupCacheRef.current.set(lookupMeta.cacheKey, entries);
                             return entries;
                         }
                     } catch (error) {
@@ -12233,6 +12419,7 @@ const navigateBack = useCallback(() => {
                         }, controller.signal);
                         if (controller.signal.aborted) return [];
                         const entries = buildDeclaredReplacementFallbackEntries(response.data?.data || []);
+                        warehousePickingLookupCacheRef.current.set(lookupMeta.cacheKey, entries);
                         return entries;
                     } catch (error) {
                         if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return [];
@@ -12253,10 +12440,18 @@ const navigateBack = useCallback(() => {
                         search: manualSearchTerm,
                         filter_bundle_options_by_search: 1,
                     });
+                    const cacheKey = JSON.stringify(params);
+                    const cachedResults = actualProductPickerSearchCacheRef.current.get(cacheKey);
+                    if (cachedResults) {
+                        return Promise.resolve(cachedResults);
+                    }
+
                     return productApi.getAll(params, controller.signal)
                         .then((response) => {
                             if (controller.signal.aborted) return [];
-                            return buildSourceAwareOrderAiPickerEntries(response.data?.data || []);
+                            const entries = buildSourceAwareOrderAiPickerEntries(response.data?.data || []);
+                            actualProductPickerSearchCacheRef.current.set(cacheKey, entries);
+                            return entries;
                         })
                         .catch((error) => {
                             if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return [];
@@ -12321,7 +12516,7 @@ const navigateBack = useCallback(() => {
         actualProductPickerSearchTerm,
         activeActualProductPickerLine,
         activeActualProductPickerLineNumber,
-        prioritizeProductSearchInput,
+        abortProductPickerBackgroundRequests,
         appendCrossSellSourceParams,
         buildSourceAwareOrderAiPickerEntries,
     ]);
@@ -12732,12 +12927,12 @@ const navigateBack = useCallback(() => {
         }
         appendCrossSellSourceParams(params);
 
-        const requestAccountId = typeof window === 'undefined'
+        const cacheAccountId = typeof window === 'undefined'
             ? 'default'
             : (window.localStorage.getItem('activeAccountId') || 'default');
-        const requestKey = JSON.stringify({ account_id: requestAccountId, ...params });
+        const cacheKey = JSON.stringify({ account_id: cacheAccountId, ...params });
 
-        return { params, requestKey };
+        return { params, cacheKey };
     }, [
         activeProductQuickFilterAttribute,
         activeProductQuickFilterAttribute2,
@@ -12748,160 +12943,320 @@ const navigateBack = useCallback(() => {
     ]);
 
     const fetchProducts = useCallback(async (term = '', filterOverrides = {}) => {
-        // Plain server search by name: one request per debounced term, the previous one is aborted, nothing is cached.
         const requestTerm = normalizeCanvasText(term);
-        const { params, requestKey } = buildProductSearchRequest(requestTerm, filterOverrides);
-        // Same parameters as the request already running / just shown: nothing new to ask the server.
-        if (requestKey === productSearchRequestKeyRef.current) return;
+        const skipPendingPrefetch = Boolean(filterOverrides.skipPendingPrefetch);
+        const retryAttempt = Boolean(filterOverrides.retryAttempt);
+        abortProductPickerBackgroundRequests({ includeProductSearchPrefetch: skipPendingPrefetch });
+        const { params, cacheKey } = buildProductSearchRequest(requestTerm, filterOverrides);
+        productSearchRequestKeyRef.current = cacheKey;
         productSearchAbortRef.current?.abort();
-        const controller = new AbortController();
-        productSearchAbortRef.current = controller;
-        productSearchRequestKeyRef.current = requestKey;
+        productSearchAbortRef.current = null;
         setProductSearchLoadingTerm(requestTerm);
+
+        const markCurrentRequestDone = (nextProducts = null) => {
+            if (productSearchRequestKeyRef.current !== cacheKey) return false;
+
+            if (Array.isArray(nextProducts)) {
+                setProducts(nextProducts);
+            }
+            setProductSearchLoadedTerm(requestTerm);
+            setProductSearchLoading(false);
+            setProductSearchLoadingTerm('');
+            return true;
+        };
+
+        if (skipPendingPrefetch) {
+            productSearchPrefetchAbortRef.current?.abort();
+            productSearchPrefetchAbortRef.current = null;
+            productSearchPrefetchKeyRef.current = '';
+            productSearchPrefetchPromiseRef.current = null;
+        }
+
+        const cachedProducts = getFreshOrderFormProductSearchCacheEntry(productSearchCacheRef.current, cacheKey);
+        if (cachedProducts !== null) {
+            markCurrentRequestDone(cachedProducts);
+            return;
+        }
+
         setProductSearchLoading(true);
 
-        try {
-            const response = await productApi.getAll(params, controller.signal);
-            if (controller.signal.aborted || productSearchRequestKeyRef.current !== requestKey) return;
-            setProducts(normalizeProductSearchResponseRows(response.data?.data || [], requestTerm));
-        } catch (error) {
-            if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
-            console.error('Error fetching products', error);
-            if (productSearchRequestKeyRef.current === requestKey) {
-                productSearchRequestKeyRef.current = '';
+        if (
+            !skipPendingPrefetch
+            && productSearchPrefetchKeyRef.current === cacheKey
+            && productSearchPrefetchPromiseRef.current
+        ) {
+            try {
+                const prefetchedProducts = await productSearchPrefetchPromiseRef.current;
+                if (productSearchRequestKeyRef.current !== cacheKey) return;
+                if (Array.isArray(prefetchedProducts)) {
+                    markCurrentRequestDone(prefetchedProducts);
+                    return;
+                }
+            } catch (error) {
+                if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
             }
-        } finally {
-            if (productSearchAbortRef.current === controller) {
-                productSearchAbortRef.current = null;
+        }
+
+        const controller = new AbortController();
+        productSearchAbortRef.current = controller;
+        let requestTimedOut = false;
+        const requestTimeoutId = window.setTimeout(() => {
+            requestTimedOut = true;
+            controller.abort();
+        }, ORDER_FORM_PRODUCT_SEARCH_REQUEST_TIMEOUT_MS);
+
+        try {
+            const prodRes = await productApi.getAll(params, controller.signal);
+            if (controller.signal.aborted || productSearchRequestKeyRef.current !== cacheKey) return;
+
+            const nextProducts = normalizeProductSearchResponseRows(prodRes.data.data, requestTerm);
+            storeProductSearchCacheEntry(productSearchCacheRef.current, cacheKey, nextProducts);
+            markCurrentRequestDone(nextProducts);
+        } catch (error) {
+            if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') {
+                if (requestTimedOut && productSearchRequestKeyRef.current === cacheKey) {
+                    if (!retryAttempt && typeof window !== 'undefined') {
+                        productSearchRetryTimeoutRef.current = window.setTimeout(() => {
+                            productSearchRetryTimeoutRef.current = null;
+                            fetchProducts(requestTerm, {
+                                ...filterOverrides,
+                                retryAttempt: true,
+                                skipPendingPrefetch: true,
+                            });
+                        }, ORDER_FORM_PRODUCT_SEARCH_RETRY_DELAY_MS);
+                    } else {
+                        setProductSearchLoadedTerm(requestTerm);
+                        setProductSearchLoading(false);
+                        setProductSearchLoadingTerm('');
+                    }
+                }
+                return;
+            }
+            if (productSearchRequestKeyRef.current === cacheKey) {
                 setProductSearchLoadedTerm(requestTerm);
                 setProductSearchLoading(false);
                 setProductSearchLoadingTerm('');
             }
-        }
-    }, [buildProductSearchRequest]);
-    const productCatalogRequest = useMemo(() => {
-        const params = appendCrossSellSourceParams({
-            picker: 1,
-            fast_picker: 1,
-            light_picker: 1,
-            per_page: PRODUCT_CATALOG_PAGE_SIZE,
-        });
-        const requestAccountId = typeof window === 'undefined'
-            ? 'default'
-            : (window.localStorage.getItem('activeAccountId') || 'default');
-
-        return { params, key: JSON.stringify({ account_id: requestAccountId, ...params }) };
-    }, [appendCrossSellSourceParams]);
-    // Kept in component state only (never persisted): reloaded each time the form opens or the product sources change.
-    const [productCatalog, setProductCatalog] = useState({ key: '', status: 'idle', products: [] });
-    useEffect(() => {
-        const { params, key } = productCatalogRequest;
-        const controller = new AbortController();
-
-        (async () => {
-            try {
-                const rows = [];
-                for (let page = 1; page <= PRODUCT_CATALOG_MAX_PAGES; page += 1) {
-                    const response = await productApi.getAll({ ...params, page }, controller.signal);
-                    if (controller.signal.aborted) return;
-
-                    const pageRows = Array.isArray(response.data?.data) ? response.data.data : [];
-                    rows.push(...pageRows);
-                    if (!response.data?.next_page_url || pageRows.length < PRODUCT_CATALOG_PAGE_SIZE) break;
-                }
-
-                setProductCatalog({ key, status: 'ready', products: rows });
-            } catch (error) {
-                if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
-                console.error('Error loading product catalog', error);
-                setProductCatalog({ key, status: 'error', products: [] });
+            console.error("Error fetching products", error);
+        } finally {
+            window.clearTimeout(requestTimeoutId);
+            if (productSearchAbortRef.current === controller) {
+                productSearchAbortRef.current = null;
             }
-        })();
-
-        return () => controller.abort();
-    }, [productCatalogRequest]);
-    const isProductCatalogReady = productCatalog.status === 'ready' && productCatalog.key === productCatalogRequest.key;
-    const productAttributeNameById = useMemo(() => new Map(
-        (Array.isArray(productAttributeDefinitions) ? productAttributeDefinitions : [])
-            .map((attribute) => [Number(attribute?.id) || 0, normalizeCanvasText(attribute?.name)])
-            .filter(([attributeId, attributeName]) => attributeId > 0 && attributeName)
-    ), [productAttributeDefinitions]);
-    const productCatalogFuse = useMemo(() => (
-        isProductCatalogReady
-            ? createProductSearchFuse(
-                buildProductSearchEntries(productCatalog.products, { includeNested: true }),
-                productAttributeNameById
-            )
-            : null
-    ), [isProductCatalogReady, productAttributeNameById, productCatalog.products]);
+        }
+    }, [abortProductPickerBackgroundRequests, buildProductSearchRequest]);
     const switchToUnfilteredProductSearch = useCallback(() => {
         setDebouncedSearchTerm(searchTerm);
         fetchProducts(searchTerm, {
             applyQuickFilter: false,
+            skipPendingPrefetch: true,
         });
     }, [fetchProducts, searchTerm]);
 
-    // "Có thể bán" is loaded only for lines the user has picked that do not have a stock value yet.
-    const pendingOrderItemStockRequestKey = useMemo(() => Array.from(new Set(
-        (Array.isArray(formData.items) ? formData.items : [])
-            .filter((item) => parseQuantityNumber(item?.available_to_sell) === null)
-            .map((item) => {
-                const productId = resolveOrderItemStockProductId(item);
-                if (!productId) return '';
-                const inventoryAccountId = Number(item?.inventory_source_account_id) || 0;
-                return `${productId}:${inventoryAccountId}`;
+    const warmProductSearchCache = useCallback((term = '', filterOverrides = {}) => {
+        if (productSearchHasUserInteractedRef.current) return;
+
+        const { params, cacheKey } = buildProductSearchRequest(term, filterOverrides);
+        if (getFreshOrderFormProductSearchCacheEntry(productSearchCacheRef.current, cacheKey) !== null || productPickerWarmupControllersRef.current.has(cacheKey)) {
+            return;
+        }
+
+        const controller = new AbortController();
+        productPickerWarmupControllersRef.current.set(cacheKey, controller);
+
+        productApi.getAll(params, controller.signal)
+            .then((response) => {
+                if (controller.signal.aborted) return;
+                const nextProducts = normalizeProductSearchResponseRows(response.data?.data || [], term);
+                storeProductSearchCacheEntry(productSearchCacheRef.current, cacheKey, nextProducts);
             })
-            .filter(Boolean)
-    )).sort().join('|'), [formData.items]);
+            .catch((error) => {
+                if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
+                console.error('Error warming product search cache', error);
+            })
+            .finally(() => {
+                if (productPickerWarmupControllersRef.current.get(cacheKey) === controller) {
+                    productPickerWarmupControllersRef.current.delete(cacheKey);
+                }
+            });
+    }, [buildProductSearchRequest]);
+
+    const warmReplacementPickerCaches = useCallback(() => {
+        if (productSearchHasUserInteractedRef.current) return;
+
+        const params = appendCrossSellSourceParams({
+            picker: 1,
+            fast_picker: 1,
+            light_picker: 1,
+            replace_picker: 1,
+            allow_variants: 1,
+            per_page: 20,
+            search: ORDER_FORM_PRODUCT_PICKER_WARMUP_SEARCH_TERM,
+            filter_bundle_options_by_search: 1,
+        });
+        const cacheKey = JSON.stringify(params);
+        const signature = JSON.stringify({ replacement_picker: true, params });
+
+        if (
+            replacementPickerWarmupSignatureRef.current === signature
+            && orderAiReplaceSearchCacheRef.current.has(cacheKey)
+            && actualProductPickerSearchCacheRef.current.has(cacheKey)
+        ) {
+            return;
+        }
+
+        replacementPickerWarmupAbortRef.current?.abort();
+        replacementPickerWarmupSignatureRef.current = signature;
+        const controller = new AbortController();
+        replacementPickerWarmupAbortRef.current = controller;
+
+        const productWarmup = productApi.getAll(params, controller.signal)
+            .then((response) => {
+                if (controller.signal.aborted) return;
+                const entries = buildSourceAwareOrderAiPickerEntries(response.data?.data || []);
+                orderAiReplaceSearchCacheRef.current.set(cacheKey, entries);
+                actualProductPickerSearchCacheRef.current.set(cacheKey, entries);
+            });
+        const replacementGroupWarmup = productReplacementApi.getAll({ per_page: 1 }, controller.signal);
+
+        Promise.allSettled([productWarmup, replacementGroupWarmup])
+            .then((results) => {
+                results.forEach((result) => {
+                    if (result.status !== 'rejected') return;
+                    const error = result.reason;
+                    if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
+                    console.error('Error warming replacement picker cache', error);
+                });
+            })
+            .finally(() => {
+                if (replacementPickerWarmupAbortRef.current === controller) {
+                    replacementPickerWarmupAbortRef.current = null;
+                }
+            });
+    }, [appendCrossSellSourceParams, buildSourceAwareOrderAiPickerEntries]);
 
     useEffect(() => {
-        if (!pendingOrderItemStockRequestKey || typeof window === 'undefined') return undefined;
+        if (typeof window === 'undefined') return undefined;
 
-        const requestItems = pendingOrderItemStockRequestKey.split('|').map((key) => {
-            const [productId, inventoryAccountId] = key.split(':').map((value) => Number(value) || 0);
-            return inventoryAccountId > 0
-                ? { product_id: productId, inventory_source_account_id: inventoryAccountId }
-                : { product_id: productId };
+        const timerIds = [];
+        const scheduleWarmup = (callback, delay) => {
+            const timerId = window.setTimeout(() => {
+                productPickerWarmupTimerIdsRef.current = productPickerWarmupTimerIdsRef.current
+                    .filter((pendingTimerId) => pendingTimerId !== timerId);
+                if (productSearchHasUserInteractedRef.current) return;
+                callback();
+            }, delay);
+            timerIds.push(timerId);
+            productPickerWarmupTimerIdsRef.current.push(timerId);
+        };
+
+        scheduleWarmup(() => {
+            warmProductSearchCache('', { applyQuickFilter: false });
+            if (hasActiveProductQuickFilter) {
+                warmProductSearchCache('', { applyQuickFilter: true });
+            }
+
+            Array.from(new Map(
+                (Array.isArray(searchHistory) ? searchHistory : [])
+                    .map(normalizeCanvasText)
+                    .filter((term) => term.length >= 2)
+                    .map((term) => [normalizeProductSearchText(term), term])
+            ).entries())
+                .filter(([normalizedTerm]) => normalizedTerm !== normalizeProductSearchText(ORDER_FORM_PRODUCT_PICKER_WARMUP_SEARCH_TERM))
+                .slice(0, ORDER_FORM_PRODUCT_PICKER_HISTORY_WARMUP_LIMIT)
+                .forEach(([, term], index) => {
+                    scheduleWarmup(() => {
+                        warmProductSearchCache(term, { applyQuickFilter: false });
+                        if (hasActiveProductQuickFilter) {
+                            warmProductSearchCache(term, { applyQuickFilter: true });
+                        }
+                    }, (index + 1) * ORDER_FORM_PRODUCT_PICKER_HISTORY_WARMUP_GAP_MS);
+                });
+
+            warmReplacementPickerCaches();
+        }, ORDER_FORM_PRODUCT_PICKER_WARMUP_DELAY_MS);
+
+        return () => {
+            timerIds.forEach((timerId) => window.clearTimeout(timerId));
+            productPickerWarmupTimerIdsRef.current = productPickerWarmupTimerIdsRef.current
+                .filter((timerId) => !timerIds.includes(timerId));
+        };
+    }, [hasActiveProductQuickFilter, searchHistory, warmProductSearchCache, warmReplacementPickerCaches]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return undefined;
+
+        const pendingLookups = [];
+        const seenKeys = new Set();
+        (Array.isArray(formData.items) ? formData.items : []).some((item) => {
+            const meta = buildWarehousePickingLookupMeta(item, { scopeKey: activeAccountId });
+            if (!meta.canLookup || seenKeys.has(meta.cacheKey) || warehousePickingLookupCacheRef.current.has(meta.cacheKey)) {
+                return false;
+            }
+
+            seenKeys.add(meta.cacheKey);
+            pendingLookups.push(meta);
+            return pendingLookups.length >= ORDER_FORM_REPLACE_LOOKUP_WARMUP_LIMIT;
         });
+
+        if (pendingLookups.length === 0) return undefined;
+
+        warehouseLookupWarmupAbortRef.current?.abort();
         const controller = new AbortController();
+        warehouseLookupWarmupAbortRef.current = controller;
+
         const timerId = window.setTimeout(async () => {
             try {
-                const response = await productApi.getOrderItemsStock(requestItems, controller.signal);
-                if (controller.signal.aborted) return;
+                for (let index = 0; index < pendingLookups.length; index += ORDER_FORM_REPLACE_LOOKUP_WARMUP_BATCH_SIZE) {
+                    if (controller.signal.aborted) return;
+                    const lookupBatch = pendingLookups.slice(index, index + ORDER_FORM_REPLACE_LOOKUP_WARMUP_BATCH_SIZE);
 
-                const stockByProductId = new Map(
-                    (Array.isArray(response.data?.items) ? response.data.items : [])
-                        .map((row) => [Number(row?.product_id) || 0, row])
-                );
-                setFormData((prev) => {
-                    let changed = false;
-                    const nextItems = (Array.isArray(prev.items) ? prev.items : []).map((item) => {
-                        if (parseQuantityNumber(item?.available_to_sell) !== null) return item;
-                        const stockRow = stockByProductId.get(resolveOrderItemStockProductId(item));
-                        if (!stockRow || parseQuantityNumber(stockRow.available_to_sell) === null) return item;
+                    await Promise.all(lookupBatch.map(async (meta) => {
+                        try {
+                            const response = await productReplacementApi.lookup(meta.params, controller.signal);
+                            if (controller.signal.aborted) return;
 
-                        changed = true;
-                        return {
-                            ...item,
-                            computed_stock: parseQuantityNumber(stockRow.computed_stock),
-                            pending_export_quantity: parseQuantityNumber(stockRow.pending_export_quantity),
-                            available_to_sell: parseQuantityNumber(stockRow.available_to_sell),
-                        };
-                    });
+                            const payload = response.data?.data || {};
+                            const suggestions = Array.isArray(payload.suggestions)
+                                ? payload.suggestions
+                                : (Array.isArray(payload.alternatives) ? payload.alternatives : []);
+                            const groupId = payload.group?.id || null;
+                            const sourceEntry = payload.product
+                                ? {
+                                    ...payload.product,
+                                    is_declared_replacement: Boolean(groupId),
+                                    is_original_order_product: true,
+                                    replacement_group_id: groupId || payload.product?.replacement_group_id || null,
+                                }
+                                : null;
+                            const replacementEntries = suggestions.map((entry) => ({
+                                ...entry,
+                                is_declared_replacement: true,
+                                replacement_group_id: groupId || entry?.replacement_group_id || null,
+                            }));
 
-                    return changed ? { ...prev, items: nextItems } : prev;
-                });
-            } catch (error) {
-                if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
-                console.error('Error loading order item stock', error);
+                            warehousePickingLookupCacheRef.current.set(
+                                meta.cacheKey,
+                                mergeActualProductReplacementEntries(sourceEntry ? [sourceEntry] : [], replacementEntries)
+                            );
+                        } catch (error) {
+                            if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
+                            console.error('Error warming warehouse replacement lookup', error);
+                        }
+                    }));
+                }
+            } finally {
+                if (warehouseLookupWarmupAbortRef.current === controller) {
+                    warehouseLookupWarmupAbortRef.current = null;
+                }
             }
-        }, ORDER_FORM_ITEM_STOCK_LOAD_DELAY_MS);
+        }, ORDER_FORM_REPLACE_LOOKUP_WARMUP_DELAY_MS);
 
         return () => {
             controller.abort();
             window.clearTimeout(timerId);
         };
-    }, [pendingOrderItemStockRequestKey]);
+    }, [activeAccountId, formData.items]);
     const handleSelectReplacementDeclarationSource = useCallback((entry) => {
         const sourceEntry = normalizeProductPickerEntry(entry);
         if (!sourceEntry || !getProductReplacementDeclarationSku(sourceEntry)) {
@@ -12997,6 +13352,7 @@ const navigateBack = useCallback(() => {
                 }
             }
 
+            warehousePickingLookupCacheRef.current.clear();
             showTransientNotification('success', 'Đã lưu khai báo sản phẩm thay thế.');
             setReplacementDeclarationGroupsReloadKey((prev) => prev + 1);
             if (closeAfterSave) {
@@ -13044,6 +13400,7 @@ const navigateBack = useCallback(() => {
     const resetProductSearchForQuickFilterChange = useCallback(() => {
         if (!shouldResetProductSearchOnQuickFilterChange) return;
 
+        clearOrderFormProductSearchCache(productSearchCacheRef.current);
         setProducts([]);
     }, [shouldResetProductSearchOnQuickFilterChange]);
 
@@ -13181,6 +13538,7 @@ const navigateBack = useCallback(() => {
         setShowSearchHistory(false);
         setShowProductQuickSetupPanel(false);
         setShowProductQuickFilterPanel(false);
+        clearOrderFormProductSearchCache(productSearchCacheRef.current);
     }, [productQuickModeDefaultEnabled]);
 
     const saveCurrentProductQuickSetupItems = useCallback((items) => {
@@ -13472,16 +13830,20 @@ const navigateBack = useCallback(() => {
         const activeAccountId = typeof window === 'undefined'
             ? 'default'
             : (window.localStorage.getItem('activeAccountId') || 'default');
-        const requestKey = JSON.stringify({
+        const cacheKey = JSON.stringify({
             quick_filter_scope: true,
             account_id: activeAccountId,
             scope_key: activeProductQuickFilterScopeKey,
             ...params,
         });
-        // Same list already loaded / loading in this form: don't ask again.
-        if (requestKey === productQuickFilterScopeRequestKeyRef.current) return;
         productQuickFilterScopeAbortRef.current?.abort();
-        productQuickFilterScopeRequestKeyRef.current = requestKey;
+
+        const cachedProducts = productQuickFilterScopeCacheRef.current.get(cacheKey);
+        if (cachedProducts) {
+            setProductQuickFilterScopeProducts(cachedProducts);
+            setProductQuickFilterScopeKey(activeProductQuickFilterScopeKey);
+            return;
+        }
 
         const controller = new AbortController();
         productQuickFilterScopeAbortRef.current = controller;
@@ -13493,14 +13855,12 @@ const navigateBack = useCallback(() => {
             const nextProducts = Array.isArray(response.data.data)
                 ? response.data.data.map((product) => normalizeProductPickerEntry(product))
                 : [];
+            productQuickFilterScopeCacheRef.current.set(cacheKey, nextProducts);
             setProductQuickFilterScopeProducts(nextProducts);
             setProductQuickFilterScopeKey(activeProductQuickFilterScopeKey);
         } catch (error) {
             if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
             console.error('Error fetching quick filter scope products', error);
-            if (productQuickFilterScopeRequestKeyRef.current === requestKey) {
-                productQuickFilterScopeRequestKeyRef.current = '';
-            }
             setProductQuickFilterScopeProducts([]);
             setProductQuickFilterScopeKey(activeProductQuickFilterScopeKey);
         } finally {
@@ -13544,7 +13904,23 @@ const navigateBack = useCallback(() => {
             params.filter_bundle_options_by_search = 1;
         }
 
+        const activeAccountId = typeof window === 'undefined'
+            ? 'default'
+            : (window.localStorage.getItem('activeAccountId') || 'default');
+        const cacheKey = JSON.stringify({
+            quick_setup: true,
+            quick_setup_mode: productQuickSetupMode,
+            account_id: activeAccountId,
+            ...params,
+        });
         productQuickSetupAbortRef.current?.abort();
+
+        const cachedProducts = productQuickSetupCacheRef.current.get(cacheKey);
+        if (cachedProducts) {
+            setProductQuickSetupProducts(cachedProducts);
+            setProductQuickSetupLoading(false);
+            return;
+        }
 
         const controller = new AbortController();
         productQuickSetupAbortRef.current = controller;
@@ -13585,6 +13961,8 @@ const navigateBack = useCallback(() => {
                 partialProducts = buildProductQuickSetupEntries(allRows);
                 setProductQuickSetupProducts(partialProducts);
             }
+
+            productQuickSetupCacheRef.current.set(cacheKey, partialProducts);
         } catch (error) {
             if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
             console.error('Error fetching quick setup products', error);
@@ -13805,22 +14183,6 @@ const navigateBack = useCallback(() => {
         && !isManualProductQuickModeActive
         && activeProductQuickFilterRankCriteria.length > 0;
 
-    // Fuse index for the list being searched: quick lists when quick mode is on, otherwise the whole catalog.
-    const shouldSearchManualQuickList = isManualProductQuickModeActive;
-    const shouldSearchQuickList = !shouldSearchManualQuickList && isProductQuickModeActive && !hasEnabledCrossSellSources;
-    const quickListSearchEntries = shouldSearchManualQuickList
-        ? manualQuickModeSearchEntries
-        : (shouldSearchQuickList ? quickModeSearchEntries : null);
-    const quickListProductFuse = useMemo(() => (
-        quickListSearchEntries ? createProductSearchFuse(quickListSearchEntries, productAttributeNameById) : null
-    ), [productAttributeNameById, quickListSearchEntries]);
-    const activeProductFuse = quickListProductFuse || productCatalogFuse;
-    // Runs only when the debounced term (or the list) changes, not on every key press.
-    const productFuseMatches = useMemo(() => (
-        activeProductFuse && debouncedSearchTerm.trim()
-            ? searchProductsWithFuse(activeProductFuse, debouncedSearchTerm)
-            : []
-    ), [activeProductFuse, debouncedSearchTerm]);
     const rankedSearchProducts = useMemo(() => {
         const hasSearchText = searchTerm.trim() !== '';
         const shouldUseManualQuickModeEntries = isManualProductQuickModeActive;
@@ -13833,21 +14195,15 @@ const navigateBack = useCallback(() => {
         const shouldUseQuickModeEntries = !shouldUseManualQuickModeEntries
             && isProductQuickModeActive
             && !hasEnabledCrossSellSources;
-        const shouldUseCatalogFuse = hasSearchText
-            && !shouldUseManualQuickModeEntries
-            && !shouldUseQuickModeEntries
-            && Boolean(productCatalogFuse);
-        const serverSearchEntries = shouldUseCatalogFuse
-            ? []
-            : buildProductSearchEntries(products, {
-                includeNested: hasSearchText,
-            });
+        const serverSearchEntries = buildProductSearchEntries(products, {
+            includeNested: hasSearchText,
+        });
         const searchableEntries = shouldUseManualQuickModeEntries
             ? manualQuickModeSearchEntries
             : shouldUseQuickModeEntries
             ? quickModeSearchEntries
             : serverSearchEntries;
-        const prepareEntries = (entries) => entries
+        const preparedProducts = searchableEntries
             .map((product) => ({
                 ...product,
                 __alreadyInOrder: isSearchEntryAlreadyInOrder(formData.items, product),
@@ -13857,25 +14213,6 @@ const navigateBack = useCallback(() => {
                     ? buildOrderItemsFromSearchEntry(product).length > 0
                     : canAddSearchEntry(formData.items, product)
             ));
-
-        if (hasSearchText && (shouldUseCatalogFuse || shouldUseManualQuickModeEntries || shouldUseQuickModeEntries)) {
-            return prepareEntries(productFuseMatches)
-                .map((product) => ({
-                    ...product,
-                    __searchScore: 1 - product.__fuseScore,
-                    __quickFilterScore: scoreProductQuickFilterPriority(product, quickFilterRankCriteria),
-                }))
-                .sort((left, right) => (
-                    right.__quickFilterScore - left.__quickFilterScore
-                    || right.__nameMatchTier - left.__nameMatchTier
-                    || right.__localSearchScore - left.__localSearchScore
-                    || left.__fuseScore - right.__fuseScore
-                    || String(left.name || '').localeCompare(String(right.name || ''), 'vi')
-                ))
-                .slice(0, 50);
-        }
-
-        const preparedProducts = prepareEntries(searchableEntries);
 
         if (!hasSearchText) {
             if (quickFilterRankCriteria.length === 0) {
@@ -13925,8 +14262,6 @@ const navigateBack = useCallback(() => {
         isManualProductQuickModeActive,
         isProductQuickModeActive,
         manualQuickModeSearchEntries,
-        productCatalogFuse,
-        productFuseMatches,
         products,
         quickModeSearchEntries,
         searchTerm,
@@ -13962,9 +14297,8 @@ const navigateBack = useCallback(() => {
     const normalizedLoadedProductSearchTerm = normalizeProductSearchText(productSearchLoadedTerm);
     const normalizedLoadingProductSearchTerm = normalizeProductSearchText(productSearchLoadingTerm);
     const isServerBackedProductSearch = !isManualProductQuickModeActive
-        && !(isProductQuickModeActive && !hasEnabledCrossSellSources)
-        && !isProductCatalogReady;
-    const isProductSearchAwaitingDebounce = (isServerBackedProductSearch || Boolean(activeProductFuse))
+        && !(isProductQuickModeActive && !hasEnabledCrossSellSources);
+    const isProductSearchAwaitingDebounce = isServerBackedProductSearch
         && normalizedCurrentProductSearchTerm !== ''
         && normalizedDebouncedProductSearchTerm !== normalizedCurrentProductSearchTerm;
     const isProductSearchAwaitingResponse = isServerBackedProductSearch
@@ -13984,6 +14318,24 @@ const navigateBack = useCallback(() => {
 
     useEffect(() => {
         const hasSearchText = searchTerm.trim() !== '';
+        const canUseServerProductSearch = !isManualProductQuickModeActive
+            && !(isProductQuickModeActive && !hasEnabledCrossSellSources);
+
+        if (hasSearchText && canUseServerProductSearch) {
+            const { cacheKey } = buildProductSearchRequest(searchTerm, {
+                applyQuickFilter: false,
+            });
+
+            const cachedProducts = getFreshOrderFormProductSearchCacheEntry(productSearchCacheRef.current, cacheKey);
+            if (cachedProducts !== null) {
+                setProducts(cachedProducts);
+                setProductSearchLoadedTerm(normalizeCanvasText(searchTerm));
+                setProductSearchLoading(false);
+                setProductSearchLoadingTerm('');
+                setDebouncedSearchTerm(searchTerm);
+                return undefined;
+            }
+        }
 
         if (!hasSearchText) {
             setDebouncedSearchTerm(searchTerm);
@@ -13992,12 +14344,18 @@ const navigateBack = useCallback(() => {
 
         const timerId = window.setTimeout(() => {
             setDebouncedSearchTerm(searchTerm);
-        }, isServerBackedProductSearch ? getOrderProductSearchDebounceMs(searchTerm) : PRODUCT_FUSE_SEARCH_DEBOUNCE_MS);
+        }, getOrderProductSearchDebounceMs(searchTerm));
 
         return () => {
             window.clearTimeout(timerId);
         };
-    }, [isServerBackedProductSearch, searchTerm]);
+    }, [
+        buildProductSearchRequest,
+        hasEnabledCrossSellSources,
+        isManualProductQuickModeActive,
+        isProductQuickModeActive,
+        searchTerm,
+    ]);
 
     useEffect(() => {
         const timerId = setTimeout(() => {
@@ -14015,17 +14373,12 @@ const navigateBack = useCallback(() => {
         if (isProductQuickModeActive && !hasEnabledCrossSellSources) return;
 
         if (hasSearchText) {
-            // Catalog loaded: Fuse searches it locally, no request per keystroke.
-            if (isProductCatalogReady) return;
             fetchProducts(debouncedSearchTerm, {
                 applyQuickFilter: false,
             });
             return;
         }
 
-        productSearchAbortRef.current?.abort();
-        productSearchAbortRef.current = null;
-        productSearchRequestKeyRef.current = '';
         setProductSearchLoading(false);
         setProductSearchLoadingTerm('');
         setProductSearchLoadedTerm('');
@@ -14036,8 +14389,8 @@ const navigateBack = useCallback(() => {
         hasActiveProductQuickFilter,
         hasEnabledCrossSellSources,
         isManualProductQuickModeActive,
-        isProductCatalogReady,
         isProductQuickModeActive,
+        showSearchDropdown
     ]);
 
 
@@ -14145,11 +14498,21 @@ const navigateBack = useCallback(() => {
         setProductQuickSetupProducts([]);
         setProductQuickSetupLoading(false);
     }, [currentProductQuickSetupKey, productQuickSetupMode, searchTerm]);
-    useEffect(() => {
-        removeLegacyProductSearchCaches();
-    }, []);
     useEffect(() => () => {
         productSearchAbortRef.current?.abort();
+        productSearchPrefetchAbortRef.current?.abort();
+        if (typeof window !== 'undefined') {
+            productPickerWarmupTimerIdsRef.current.forEach((timerId) => window.clearTimeout(timerId));
+            productPickerWarmupTimerIdsRef.current = [];
+            if (productSearchRetryTimeoutRef.current) {
+                window.clearTimeout(productSearchRetryTimeoutRef.current);
+                productSearchRetryTimeoutRef.current = null;
+            }
+        }
+        productPickerWarmupControllersRef.current.forEach((controller) => controller?.abort?.());
+        productPickerWarmupControllersRef.current.clear();
+        replacementPickerWarmupAbortRef.current?.abort();
+        warehouseLookupWarmupAbortRef.current?.abort();
         productQuickFilterScopeAbortRef.current?.abort();
         productQuickSetupAbortRef.current?.abort();
         productQuickSetupRefreshAbortRef.current?.abort();
@@ -14189,7 +14552,7 @@ const navigateBack = useCallback(() => {
     const fetchInitialData = useCallback(async () => {
         try {
             const [response, aiRulesResponse] = await Promise.all([
-                orderApi.getBootstrap({ mode: 'form' }),
+                orderApi.getBootstrapCached({ mode: 'form' }),
                 orderApi.getAiRules().catch(() => ({ data: { rules: [] } })),
             ]);
             const bootstrap = response.data || {};
@@ -14198,7 +14561,6 @@ const navigateBack = useCallback(() => {
             setAttributes(bootstrap.order_attributes || []);
             setProfitCenters(bootstrap.profit_centers || []);
             setProductQuickFilterAttributes(buildProductQuickFilterAttributes(bootstrap.product_attributes || []));
-            setProductAttributeDefinitions(Array.isArray(bootstrap.product_attributes) ? bootstrap.product_attributes : []);
             setQuoteSettings((prev) => ({ ...prev, ...(bootstrap.quote_settings || {}) }));
             setQuoteTemplates(sortQuoteTemplates(bootstrap.quote_templates || []));
             setOrderAiRules(normalizeOrderAiRules(aiRulesResponse?.data?.rules || []));
@@ -14296,7 +14658,7 @@ const navigateBack = useCallback(() => {
     const fetchOrder = async (targetId, isDuplicating = false) => {
         try {
             setLoading(true);
-            const response = await orderApi.getOne(targetId);
+            const response = await orderApi.getOneCached(targetId);
             const order = response.data;
             const nextOrderKind = getNormalizedOrderKind(order.order_kind);
             const nextOrderType = normalizeOrderType(order.order_type);
@@ -16350,8 +16712,12 @@ const navigateBack = useCallback(() => {
                                         onClick={(event) => {
                                             event.stopPropagation();
                                             setEnabledCrossSellAccountIds([]);
-                                            productQuickFilterScopeRequestKeyRef.current = '';
-                                            productSearchRequestKeyRef.current = '';
+                                            clearOrderFormProductSearchCache(productSearchCacheRef.current);
+                                            productQuickFilterScopeCacheRef.current.clear();
+                                            productQuickSetupCacheRef.current.clear();
+                                            orderAiReplaceSearchCacheRef.current.clear();
+                                            warehousePickingLookupCacheRef.current.clear();
+                                            actualProductPickerSearchCacheRef.current.clear();
                                         }}
                                         className="shrink-0 text-[10px] font-bold uppercase tracking-[0.12em] text-primary/35 transition-colors hover:text-brick"
                                     >
@@ -17197,7 +17563,6 @@ const navigateBack = useCallback(() => {
                                 quickFilterAttribute={isProductQuickModeActive ? activeProductQuickFilterAttribute : null}
                                 isAlreadyInOrder={Boolean(p.__alreadyInOrder)}
                                 activeAccountId={activeAccountId}
-                                highlightQuery={searchTerm}
                             />
                         ))}
                         {shouldShowProductSearchLoadingState && (
@@ -18397,7 +18762,6 @@ const navigateBack = useCallback(() => {
                                                         quickFilterAttribute={isProductQuickModeActive ? activeProductQuickFilterAttribute : null}
                                                         isAlreadyInOrder={Boolean(p.__alreadyInOrder)}
                                                         activeAccountId={activeAccountId}
-                                                        highlightQuery={searchTerm}
                                                     />
                                                 ))}
                                                 {shouldShowProductSearchLoadingState && (

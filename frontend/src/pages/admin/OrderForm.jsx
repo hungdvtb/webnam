@@ -8078,6 +8078,8 @@ const OrderForm = () => {
     const [productQuickSetupLoading, setProductQuickSetupLoading] = useState(false);
     const [productQuickSetupLatestEntries, setProductQuickSetupLatestEntries] = useState([]);
     const [productQuickSetupLatestEntriesScopeKey, setProductQuickSetupLatestEntriesScopeKey] = useState('');
+    // Product ids the server still returns for the refreshed list (null = unknown, keep everything).
+    const [productQuickSetupLatestProductIds, setProductQuickSetupLatestProductIds] = useState(null);
     const [productQuickFilterScopeProducts, setProductQuickFilterScopeProducts] = useState([]);
     const [productQuickFilterScopeKey, setProductQuickFilterScopeKey] = useState('');
     const [showProductQuickFilterPanel, setShowProductQuickFilterPanel] = useState(false);
@@ -8684,14 +8686,18 @@ const OrderForm = () => {
         : activeProductQuickSetupItems;
     const isManualProductQuickModeToggleDisabled = manualProductQuickSetupItems.length === 0;
     const isManualProductQuickModeActive = manualProductQuickModeEnabled && manualProductQuickSetupItems.length > 0;
+    // The list being refreshed from the server: the manual list when it is on, otherwise the attribute list.
+    // Stored lists are snapshots taken when they were declared, so names/prices/deleted products must be re-read.
     const activeProductQuickSetupRefreshKey = useMemo(
-        () => JSON.stringify(buildProductQuickSetupRefreshTargets(activeProductQuickSetupItems)),
-        [activeProductQuickSetupItems]
+        () => JSON.stringify(buildProductQuickSetupRefreshTargets(
+            isManualProductQuickModeActive ? manualProductQuickSetupItems : activeProductQuickSetupItems
+        )),
+        [activeProductQuickSetupItems, isManualProductQuickModeActive, manualProductQuickSetupItems]
     );
     const activeProductQuickSetupRefreshScopeKey = useMemo(() => JSON.stringify({
-        setupKey: activeProductQuickSetupKey,
+        setupKey: isManualProductQuickModeActive ? `manual:${manualProductQuickSetupKey}` : activeProductQuickSetupKey,
         refreshKey: activeProductQuickSetupRefreshKey,
-    }), [activeProductQuickSetupKey, activeProductQuickSetupRefreshKey]);
+    }), [activeProductQuickSetupKey, activeProductQuickSetupRefreshKey, isManualProductQuickModeActive, manualProductQuickSetupKey]);
     useEffect(() => {
         if (!activeProductQuickSetupKey || !productQuickSetupNamespace) return;
         if (!activeProductQuickSetupLookup.sourceNamespace) return;
@@ -13985,11 +13991,14 @@ const navigateBack = useCallback(() => {
     useEffect(() => {
         productQuickSetupRefreshAbortRef.current?.abort();
 
-        if (!isProductQuickModeActive) {
+        if (!isProductQuickModeActive && !isManualProductQuickModeActive) {
             setProductQuickSetupLatestEntries([]);
             setProductQuickSetupLatestEntriesScopeKey('');
+            setProductQuickSetupLatestProductIds(null);
             return undefined;
         }
+        // The manual list is chosen by hand: it is not narrowed by the attribute filter.
+        const shouldApplyQuickFilter = hasActiveProductQuickFilter && !isManualProductQuickModeActive;
 
         let refreshTargets = [];
         try {
@@ -14018,6 +14027,7 @@ const navigateBack = useCallback(() => {
         if (selectedProductIds.length === 0 || activeEntryKeys.size === 0) {
             setProductQuickSetupLatestEntries([]);
             setProductQuickSetupLatestEntriesScopeKey(activeProductQuickSetupRefreshScopeKey);
+            setProductQuickSetupLatestProductIds(null);
             return undefined;
         }
 
@@ -14034,12 +14044,12 @@ const navigateBack = useCallback(() => {
                     picker: 1,
                     fast_picker: 1,
                     light_picker: 1,
-                    quick_filter_enabled: hasActiveProductQuickFilter ? 1 : 0,
+                    quick_filter_enabled: shouldApplyQuickFilter ? 1 : 0,
                     allow_variants: 1,
                     selected_ids: selectedProductIds.join(','),
                     per_page: Math.min(Math.max(selectedProductIds.length, 1), 200),
                 };
-                if (hasActiveProductQuickFilter) {
+                if (shouldApplyQuickFilter) {
                     appendProductQuickFilterParams(params, activeProductQuickFilterAttribute, normalizedProductQuickFilterValues);
                     appendProductQuickFilterParams(params, activeProductQuickFilterAttribute2, normalizedProductQuickFilterValues2);
                 }
@@ -14050,8 +14060,21 @@ const navigateBack = useCallback(() => {
                 const response = await productApi.getAll(params, controller.signal);
                 if (controller.signal.aborted) return;
 
-                const latestEntries = Array.isArray(response.data.data)
-                    ? buildProductQuickSetupEntries(response.data.data)
+                const responseRows = Array.isArray(response.data.data) ? response.data.data : [];
+                const allLatestEntries = buildProductQuickSetupEntries(responseRows);
+                // Every id the server answered with; a stored product missing here was deleted, hidden or
+                // no longer matches the filter. Only trusted when the whole list fit in one page.
+                const returnedProductIds = selectedProductIds.length <= 200
+                    ? new Set([
+                        ...responseRows.flatMap((row) => [
+                            Number(row?.id) || 0,
+                            ...(Array.isArray(row?.variations) ? row.variations.map((variation) => Number(variation?.id) || 0) : []),
+                        ]),
+                        ...allLatestEntries.map((entry) => getProductQuickSetupEntryId(entry)),
+                    ].filter((productId) => productId > 0))
+                    : null;
+                const latestEntries = responseRows.length > 0
+                    ? allLatestEntries
                         .filter((entry) => {
                             const entryKey = getProductQuickSetupEntryKey(entry);
                             if (entryKey && activeEntryKeys.has(entryKey)) return true;
@@ -14066,12 +14089,16 @@ const navigateBack = useCallback(() => {
                     : [];
 
                 setProductQuickSetupLatestEntries(latestEntries);
+                setProductQuickSetupLatestProductIds(returnedProductIds);
                 setProductQuickSetupLatestEntriesScopeKey(activeProductQuickSetupRefreshScopeKey);
-                syncLatestQuickSetupEntriesIntoActiveStore(latestEntries);
+                if (!isManualProductQuickModeActive) {
+                    syncLatestQuickSetupEntriesIntoActiveStore(latestEntries);
+                }
             } catch (error) {
                 if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
                 console.error('Error refreshing quick setup bundle entries', error);
                 setProductQuickSetupLatestEntries([]);
+                setProductQuickSetupLatestProductIds(null);
                 setProductQuickSetupLatestEntriesScopeKey(activeProductQuickSetupRefreshScopeKey);
             } finally {
                 if (productQuickSetupRefreshAbortRef.current === controller) {
@@ -14092,6 +14119,7 @@ const navigateBack = useCallback(() => {
         activeProductQuickSetupRefreshScopeKey,
         enabledCrossSellAccountIds,
         hasActiveProductQuickFilter,
+        isManualProductQuickModeActive,
         isProductQuickModeActive,
         normalizedProductQuickFilterValues,
         normalizedProductQuickFilterValues2,
@@ -14127,6 +14155,13 @@ const navigateBack = useCallback(() => {
         return entryMap;
     }, [productQuickSetupLatestEntries]);
     const isProductQuickSetupLatestScopeReady = productQuickSetupLatestEntriesScopeKey === activeProductQuickSetupRefreshScopeKey;
+    const isQuickSetupEntryStillOnServer = useCallback((entry) => {
+        if (!isProductQuickSetupLatestScopeReady || !productQuickSetupLatestProductIds) return true;
+        if (String(entry?.entry_kind || SEARCH_ENTRY_PRODUCT) === SEARCH_ENTRY_BUNDLE_OPTION) return true;
+
+        const productId = getProductQuickSetupEntryId(entry);
+        return productId <= 0 || productQuickSetupLatestProductIds.has(productId);
+    }, [isProductQuickSetupLatestScopeReady, productQuickSetupLatestProductIds]);
     const quickModeSearchEntries = useMemo(() => {
         const storedEntries = storedQuickModeSearchEntries
             .filter(isProductSearchEntrySourceEnabled)
@@ -14156,6 +14191,7 @@ const navigateBack = useCallback(() => {
             .filter(isQuickSetupEntryAllowedByAvailableFilterPayload);
 
         const entries = storedEntries
+            .filter(isQuickSetupEntryStillOnServer)
             .map((entry) => {
                 const latestEntry = latestQuickModeEntryMap.get(getProductQuickSetupEntryKey(entry));
                 return latestEntry ? mergeQuickSetupEntrySnapshot(entry, latestEntry) : entry;
@@ -14167,6 +14203,7 @@ const navigateBack = useCallback(() => {
     }, [
         hasActiveProductQuickFilter,
         isQuickSetupEntryAllowedByAvailableFilterPayload,
+        isQuickSetupEntryStillOnServer,
         isProductQuickSetupLatestScopeReady,
         isProductSearchEntrySourceEnabled,
         latestQuickModeEntryMap,
@@ -14175,10 +14212,27 @@ const navigateBack = useCallback(() => {
         selectedQuickSetupProductIds,
         storedQuickModeSearchEntries,
     ]);
-    const manualQuickModeSearchEntries = useMemo(() => (
-        buildStoredQuickSetupSearchEntries(manualProductQuickSetupItems)
-            .filter(isProductSearchEntrySourceEnabled)
-    ), [isProductSearchEntrySourceEnabled, manualProductQuickSetupItems]);
+    const manualQuickModeSearchEntries = useMemo(() => {
+        const storedEntries = buildStoredQuickSetupSearchEntries(manualProductQuickSetupItems)
+            .filter(isProductSearchEntrySourceEnabled);
+        if (!isManualProductQuickModeActive || !isProductQuickSetupLatestScopeReady) return storedEntries;
+
+        // Show the product as it is now (name, price, stock), not as it was when the list was saved.
+        return storedEntries
+            .filter(isQuickSetupEntryStillOnServer)
+            .map((entry) => {
+                const latestEntry = latestQuickModeEntryMap.get(getProductQuickSetupEntryKey(entry));
+                return latestEntry ? mergeQuickSetupEntrySnapshot(entry, latestEntry) : entry;
+            })
+            .filter(Boolean);
+    }, [
+        isManualProductQuickModeActive,
+        isProductQuickSetupLatestScopeReady,
+        isProductSearchEntrySourceEnabled,
+        isQuickSetupEntryStillOnServer,
+        latestQuickModeEntryMap,
+        manualProductQuickSetupItems,
+    ]);
     const shouldRankInactiveProductQuickFilters = !isProductQuickModeActive
         && !isManualProductQuickModeActive
         && activeProductQuickFilterRankCriteria.length > 0;

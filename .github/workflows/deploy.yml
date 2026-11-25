@@ -117,26 +117,18 @@ jobs:
 
           cat deploy.out
 
-          grep -iE 'deploying admin|admin frontend built|vite|npm err|error|failed|killed|cannot|not found|building for production|built in' deploy.out deploy.err \
-            | tail -25 >build-check.out || true
-          echo "::notice file=.github/workflows/deploy.yml,line=15::Admin build diagnostic: $(sanitize build-check.out)"
-
-          ssh "${ssh_base[@]}" -p "$selected_port" "$selected_user@$DEPLOY_HOST" 'bash -s' >production-check.out 2>/dev/null <<'REMOTE' || true
-          for checkout in /root/www/webname /www/webname; do
-            if [ -d "$checkout/.git" ]; then
-              revision="$(git -C "$checkout" rev-parse --short HEAD 2>/dev/null || true)"
-              asset="$(grep -oE '/assets/index-[^" ]+\.js' "$checkout/frontend/dist/index.html" 2>/dev/null | head -1 || true)"
-              printf 'checkout=%s revision=%s asset=%s\n' "$checkout" "$revision" "$asset"
-            fi
-          done
-          live_asset="$(curl -fsSL --max-time 12 'https://admin.gomdaithanh.com/admin/orders/new?deploy_asset_check=1' 2>/dev/null | grep -oE '/assets/index-[^" ]+\.js' | head -1 || true)"
-          printf 'live_asset=%s\n' "$live_asset"
-          printf 'node_runtime_candidates=' 
-          find "$HOME/.nvm/versions/node" /root/.nvm/versions/node /usr/local/bin /usr/bin -maxdepth 3 \( -name npm -o -name pm2 \) 2>/dev/null | head -12 | tr '\n' ' '
-          printf '\n'
-          nginx -T 2>/dev/null | grep -E 'server_name admin\.gomdaithanh\.com|root .*(frontend|dist)|proxy_pass' | head -20 || true
-          REMOTE
-          echo "::notice file=.github/workflows/deploy.yml,line=15::Production asset diagnostic: $(sanitize production-check.out)"
+          ssh "${ssh_base[@]}" -p "$selected_port" "$selected_user@$DEPLOY_HOST" \
+            "git -C '$selected_path' merge-base --is-ancestor '$GITHUB_SHA' HEAD"
+          expected_asset="$(ssh "${ssh_base[@]}" -p "$selected_port" "$selected_user@$DEPLOY_HOST" \
+            "grep -oE '/assets/index-[^\" ]+\\.js' '$selected_path/frontend/dist/index.html' | head -1")"
+          live_asset="$(curl -fsSL --max-time 20 \
+            "https://admin.gomdaithanh.com/admin/orders/new?deploy_asset_check=${GITHUB_RUN_ID}" \
+            | grep -oE '/assets/index-[^" ]+\.js' | head -1)"
+          if [ -z "$expected_asset" ] || [ "$live_asset" != "$expected_asset" ]; then
+            echo "::error file=.github/workflows/deploy.yml,line=15::Admin asset mismatch after deploy: built=$expected_asset live=$live_asset"
+            exit 1
+          fi
+          echo "::notice file=.github/workflows/deploy.yml,line=15::Production admin asset verified: $live_asset"
 
           meta_check="$(ssh "${ssh_base[@]}" -p "$selected_port" "$selected_user@$DEPLOY_HOST" \
             "cd '$selected_path/backend' && php -r '\$env=parse_ini_file(\".env\", false, INI_SCANNER_RAW) ?: []; echo \"pixel_id_ok=\".((\$env[\"META_PIXEL_ID\"] ?? \"\") === \"2786270608428787\" ? \"yes\" : \"no\").PHP_EOL; echo \"access_token_set=\".(trim((string) (\$env[\"META_ACCESS_TOKEN\"] ?? \"\")) !== \"\" ? \"yes\" : \"no\").PHP_EOL; echo \"test_event_code_ok=\".((\$env[\"META_TEST_EVENT_CODE\"] ?? \"\") === \"TEST77693\" ? \"yes\" : \"no\").PHP_EOL;'" \

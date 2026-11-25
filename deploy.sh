@@ -1,4 +1,5 @@
 #!/bin/bash
+set -Eeuo pipefail
 
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -8,6 +9,24 @@ ADMIN_DIR="$PROJECT_ROOT/frontend"
 WEBSITE_DIR="$PROJECT_ROOT/webgom"
 WORKER_PM2_NAME="webnam-seo-worker"
 WEB_USER="${WEB_USER:-www-data}"
+
+function load_node_runtime() {
+    if command -v npm >/dev/null 2>&1 && command -v pm2 >/dev/null 2>&1; then
+        return
+    fi
+
+    # Non-interactive SSH does not load nvm from .bashrc. Prefer an installed
+    # Node version that also has PM2, so both builds and process restarts work.
+    local node_bin
+    for node_bin in "$HOME"/.nvm/versions/node/*/bin; do
+        if [ -x "$node_bin/npm" ] && [ -x "$node_bin/pm2" ]; then
+            export PATH="$node_bin:$PATH"
+        fi
+    done
+
+    command -v npm >/dev/null 2>&1 || { echo 'npm is not available for deployment' >&2; return 127; }
+    command -v pm2 >/dev/null 2>&1 || { echo 'pm2 is not available for deployment' >&2; return 127; }
+}
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -20,7 +39,9 @@ function deploy_backend() {
     composer install --no-dev --optimize-autoloader
     php artisan migrate --force
     php artisan orders:repair-placeholder-product-snapshots --no-interaction
-    php artisan storage:link
+    if [ ! -e public/storage ] && [ ! -L public/storage ]; then
+        php artisan storage:link
+    fi
     php artisan optimize:clear
     php artisan config:clear
     php artisan cache:clear
@@ -93,6 +114,7 @@ function restart_php_runtime() {
 }
 
 function deploy_worker() {
+    load_node_runtime
     echo -e "${BLUE}>>> Deploying SEO Bulk Worker...${NC}"
     cd $BACKEND_DIR
 
@@ -107,6 +129,7 @@ function deploy_worker() {
 }
 
 function deploy_admin() {
+    load_node_runtime
     echo -e "${BLUE}>>> Deploying Admin Frontend (admin.gomdaithanh.com)...${NC}"
     cd $ADMIN_DIR
     npm install
@@ -116,6 +139,7 @@ function deploy_admin() {
 }
 
 function deploy_website() {
+    load_node_runtime
     echo -e "${BLUE}>>> Deploying Main Website (gomdaithanh.com)...${NC}"
     cd $WEBSITE_DIR
     npm install

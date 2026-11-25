@@ -8078,8 +8078,9 @@ const OrderForm = () => {
     const [productQuickSetupLoading, setProductQuickSetupLoading] = useState(false);
     const [productQuickSetupLatestEntries, setProductQuickSetupLatestEntries] = useState([]);
     const [productQuickSetupLatestEntriesScopeKey, setProductQuickSetupLatestEntriesScopeKey] = useState('');
-    // Product ids the server still returns for the refreshed list (null = unknown, keep everything).
     const [productQuickSetupLatestProductIds, setProductQuickSetupLatestProductIds] = useState(null);
+    const [productQuickSetupRefreshFailed, setProductQuickSetupRefreshFailed] = useState(false);
+    const [productQuickSetupFocusRefreshVersion, setProductQuickSetupFocusRefreshVersion] = useState(0);
     const [productQuickFilterScopeProducts, setProductQuickFilterScopeProducts] = useState([]);
     const [productQuickFilterScopeKey, setProductQuickFilterScopeKey] = useState('');
     const [showProductQuickFilterPanel, setShowProductQuickFilterPanel] = useState(false);
@@ -8697,7 +8698,25 @@ const OrderForm = () => {
     const activeProductQuickSetupRefreshScopeKey = useMemo(() => JSON.stringify({
         setupKey: isManualProductQuickModeActive ? `manual:${manualProductQuickSetupKey}` : activeProductQuickSetupKey,
         refreshKey: activeProductQuickSetupRefreshKey,
-    }), [activeProductQuickSetupKey, activeProductQuickSetupRefreshKey, isManualProductQuickModeActive, manualProductQuickSetupKey]);
+        searchOpen: showSearchDropdown,
+        focusVersion: productQuickSetupFocusRefreshVersion,
+    }), [
+        activeProductQuickSetupKey,
+        activeProductQuickSetupRefreshKey,
+        isManualProductQuickModeActive,
+        manualProductQuickSetupKey,
+        productQuickSetupFocusRefreshVersion,
+        showSearchDropdown,
+    ]);
+    const isProductQuickSetupLatestScopeReady = productQuickSetupLatestEntriesScopeKey === activeProductQuickSetupRefreshScopeKey;
+    const isQuickSetupEntryStillOnServer = useCallback((entry) => {
+        if (!isProductQuickSetupLatestScopeReady || !productQuickSetupLatestProductIds) return false;
+        const productId = getProductQuickSetupEntryId(entry);
+        if (productId <= 0 || !productQuickSetupLatestProductIds.has(productId)) return false;
+        if (String(entry?.entry_kind || SEARCH_ENTRY_PRODUCT) !== SEARCH_ENTRY_BUNDLE_OPTION) return true;
+        const entryKey = getProductQuickSetupEntryKey(entry);
+        return productQuickSetupLatestEntries.some((latest) => getProductQuickSetupEntryKey(latest) === entryKey);
+    }, [isProductQuickSetupLatestScopeReady, productQuickSetupLatestEntries, productQuickSetupLatestProductIds]);
     useEffect(() => {
         if (!activeProductQuickSetupKey || !productQuickSetupNamespace) return;
         if (!activeProductQuickSetupLookup.sourceNamespace) return;
@@ -11799,6 +11818,7 @@ const navigateBack = useCallback(() => {
         });
 
         const rows = buildStoredQuickSetupSearchEntries(activeProductQuickSetupItems)
+            .filter(isQuickSetupEntryStillOnServer)
             .map((entry) => {
                 const latestEntry = latestEntryMap.get(getProductQuickSetupEntryKey(entry));
                 return latestEntry ? mergeQuickSetupEntrySnapshot(entry, latestEntry) : entry;
@@ -11822,6 +11842,7 @@ const navigateBack = useCallback(() => {
     }, [
         activeProductQuickSetupItems,
         isProductSearchEntrySourceEnabled,
+        isQuickSetupEntryStillOnServer,
         productQuickSetupLatestEntries,
     ]);
 
@@ -13989,14 +14010,36 @@ const navigateBack = useCallback(() => {
     ]);
 
     useEffect(() => {
+        if (!isProductQuickModeActive && !isManualProductQuickModeActive) return undefined;
+
+        let lastRefreshAt = 0;
+        const refreshOnReturn = () => {
+            if (document.hidden || Date.now() - lastRefreshAt < 500) return;
+            lastRefreshAt = Date.now();
+            setProductQuickSetupFocusRefreshVersion((version) => version + 1);
+        };
+        window.addEventListener('focus', refreshOnReturn);
+        document.addEventListener('visibilitychange', refreshOnReturn);
+        return () => {
+            window.removeEventListener('focus', refreshOnReturn);
+            document.removeEventListener('visibilitychange', refreshOnReturn);
+        };
+    }, [isProductQuickModeActive, isManualProductQuickModeActive]);
+
+    useEffect(() => {
         productQuickSetupRefreshAbortRef.current?.abort();
 
         if (!isProductQuickModeActive && !isManualProductQuickModeActive) {
             setProductQuickSetupLatestEntries([]);
             setProductQuickSetupLatestEntriesScopeKey('');
             setProductQuickSetupLatestProductIds(null);
+            setProductQuickSetupRefreshFailed(false);
             return undefined;
         }
+        setProductQuickSetupLatestEntries([]);
+        setProductQuickSetupLatestEntriesScopeKey('');
+        setProductQuickSetupLatestProductIds(null);
+        setProductQuickSetupRefreshFailed(false);
         // The manual list is chosen by hand: it is not narrowed by the attribute filter.
         const shouldApplyQuickFilter = hasActiveProductQuickFilter && !isManualProductQuickModeActive;
 
@@ -14027,7 +14070,7 @@ const navigateBack = useCallback(() => {
         if (selectedProductIds.length === 0 || activeEntryKeys.size === 0) {
             setProductQuickSetupLatestEntries([]);
             setProductQuickSetupLatestEntriesScopeKey(activeProductQuickSetupRefreshScopeKey);
-            setProductQuickSetupLatestProductIds(null);
+            setProductQuickSetupLatestProductIds(new Set());
             return undefined;
         }
 
@@ -14046,8 +14089,6 @@ const navigateBack = useCallback(() => {
                     light_picker: 1,
                     quick_filter_enabled: shouldApplyQuickFilter ? 1 : 0,
                     allow_variants: 1,
-                    selected_ids: selectedProductIds.join(','),
-                    per_page: Math.min(Math.max(selectedProductIds.length, 1), 200),
                 };
                 if (shouldApplyQuickFilter) {
                     appendProductQuickFilterParams(params, activeProductQuickFilterAttribute, normalizedProductQuickFilterValues);
@@ -14057,22 +14098,28 @@ const navigateBack = useCallback(() => {
                     params.source_account_ids = sourceAccountIds.join(',');
                 }
 
-                const response = await productApi.getAll(params, controller.signal);
+                const selectedIdBatches = [];
+                for (let index = 0; index < selectedProductIds.length; index += 200) {
+                    selectedIdBatches.push(selectedProductIds.slice(index, index + 200));
+                }
+                const responses = await Promise.all(selectedIdBatches.map((ids) => productApi.getAll({
+                    ...params,
+                    selected_ids: ids.join(','),
+                    per_page: ids.length,
+                }, controller.signal)));
                 if (controller.signal.aborted) return;
 
-                const responseRows = Array.isArray(response.data.data) ? response.data.data : [];
+                const responseRows = responses.flatMap((response) => (
+                    Array.isArray(response.data?.data) ? response.data.data : []
+                ));
                 const allLatestEntries = buildProductQuickSetupEntries(responseRows);
-                // Every id the server answered with; a stored product missing here was deleted, hidden or
-                // no longer matches the filter. Only trusted when the whole list fit in one page.
-                const returnedProductIds = selectedProductIds.length <= 200
-                    ? new Set([
-                        ...responseRows.flatMap((row) => [
-                            Number(row?.id) || 0,
-                            ...(Array.isArray(row?.variations) ? row.variations.map((variation) => Number(variation?.id) || 0) : []),
-                        ]),
-                        ...allLatestEntries.map((entry) => getProductQuickSetupEntryId(entry)),
-                    ].filter((productId) => productId > 0))
-                    : null;
+                const returnedProductIds = new Set([
+                    ...responseRows.flatMap((row) => [
+                        Number(row?.id) || 0,
+                        ...(Array.isArray(row?.variations) ? row.variations.map((variation) => Number(variation?.id) || 0) : []),
+                    ]),
+                    ...allLatestEntries.map((entry) => getProductQuickSetupEntryId(entry)),
+                ].filter((productId) => productId > 0));
                 const latestEntries = responseRows.length > 0
                     ? allLatestEntries
                         .filter((entry) => {
@@ -14098,7 +14145,8 @@ const navigateBack = useCallback(() => {
                 if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
                 console.error('Error refreshing quick setup bundle entries', error);
                 setProductQuickSetupLatestEntries([]);
-                setProductQuickSetupLatestProductIds(null);
+                setProductQuickSetupLatestProductIds(new Set());
+                setProductQuickSetupRefreshFailed(true);
                 setProductQuickSetupLatestEntriesScopeKey(activeProductQuickSetupRefreshScopeKey);
             } finally {
                 if (productQuickSetupRefreshAbortRef.current === controller) {
@@ -14154,25 +14202,14 @@ const navigateBack = useCallback(() => {
         });
         return entryMap;
     }, [productQuickSetupLatestEntries]);
-    const isProductQuickSetupLatestScopeReady = productQuickSetupLatestEntriesScopeKey === activeProductQuickSetupRefreshScopeKey;
-    const isQuickSetupEntryStillOnServer = useCallback((entry) => {
-        if (!isProductQuickSetupLatestScopeReady || !productQuickSetupLatestProductIds) return true;
-        if (String(entry?.entry_kind || SEARCH_ENTRY_PRODUCT) === SEARCH_ENTRY_BUNDLE_OPTION) return true;
 
-        const productId = getProductQuickSetupEntryId(entry);
-        return productId <= 0 || productQuickSetupLatestProductIds.has(productId);
-    }, [isProductQuickSetupLatestScopeReady, productQuickSetupLatestProductIds]);
     const quickModeSearchEntries = useMemo(() => {
         const storedEntries = storedQuickModeSearchEntries
             .filter(isProductSearchEntrySourceEnabled)
             .filter(isQuickSetupEntryAllowedByAvailableFilterPayload);
 
         if (!isProductQuickSetupLatestScopeReady) {
-            return storedEntries;
-        }
-
-        if (latestQuickModeEntryMap.size === 0 && !hasActiveProductQuickFilter) {
-            return storedEntries;
+            return [];
         }
 
         const latestEntries = (Array.isArray(productQuickSetupLatestEntries) ? productQuickSetupLatestEntries : [])
@@ -14201,7 +14238,6 @@ const navigateBack = useCallback(() => {
         return mergeProductSearchEntryLists(entries, latestEntries)
             .filter(isProductSearchEntrySourceEnabled);
     }, [
-        hasActiveProductQuickFilter,
         isQuickSetupEntryAllowedByAvailableFilterPayload,
         isQuickSetupEntryStillOnServer,
         isProductQuickSetupLatestScopeReady,
@@ -14215,7 +14251,7 @@ const navigateBack = useCallback(() => {
     const manualQuickModeSearchEntries = useMemo(() => {
         const storedEntries = buildStoredQuickSetupSearchEntries(manualProductQuickSetupItems)
             .filter(isProductSearchEntrySourceEnabled);
-        if (!isManualProductQuickModeActive || !isProductQuickSetupLatestScopeReady) return storedEntries;
+        if (!isManualProductQuickModeActive || !isProductQuickSetupLatestScopeReady) return [];
 
         // Show the product as it is now (name, price, stock), not as it was when the list was saved.
         return storedEntries
@@ -14327,6 +14363,10 @@ const navigateBack = useCallback(() => {
     const productSearchEmptyMessage = useMemo(() => {
         const hasSearchText = searchTerm.trim() !== '';
 
+        if (productQuickSetupRefreshFailed && (isManualProductQuickModeActive || isProductQuickModeActive)) {
+            return 'Không tải được DS nhanh. Hãy mở lại ô tìm kiếm để thử lại.';
+        }
+
         if (isManualProductQuickModeActive && hasSearchText) {
             return 'Kh\u00f4ng c\u00f3 s\u1ea3n ph\u1ea9m trong DS nhanh th\u1ee7 c\u00f4ng kh\u1edbp t\u1eeb kh\u00f3a hi\u1ec7n t\u1ea1i.';
         }
@@ -14344,7 +14384,7 @@ const navigateBack = useCallback(() => {
         }
 
         return 'Không có sản phẩm khả dụng để hiển thị.';
-    }, [isManualProductQuickModeActive, isProductQuickModeActive, searchTerm]);
+    }, [isManualProductQuickModeActive, isProductQuickModeActive, productQuickSetupRefreshFailed, searchTerm]);
 
     const normalizedCurrentProductSearchTerm = normalizeProductSearchText(searchTerm);
     const normalizedDebouncedProductSearchTerm = normalizeProductSearchText(debouncedSearchTerm);
@@ -14352,6 +14392,10 @@ const navigateBack = useCallback(() => {
     const normalizedLoadingProductSearchTerm = normalizeProductSearchText(productSearchLoadingTerm);
     const isServerBackedProductSearch = !isManualProductQuickModeActive
         && !(isProductQuickModeActive && !hasEnabledCrossSellSources);
+    const isProductQuickModeAwaitingRefresh = (
+        (isProductQuickModeActive && !hasEnabledCrossSellSources)
+        || isManualProductQuickModeActive
+    ) && !isProductQuickSetupLatestScopeReady;
     const isProductSearchAwaitingDebounce = isServerBackedProductSearch
         && normalizedCurrentProductSearchTerm !== ''
         && normalizedDebouncedProductSearchTerm !== normalizedCurrentProductSearchTerm;
@@ -14363,7 +14407,8 @@ const navigateBack = useCallback(() => {
         && normalizedCurrentProductSearchTerm !== ''
         && rankedSearchProducts.length === 0
         && normalizedLoadedProductSearchTerm !== normalizedCurrentProductSearchTerm;
-    const shouldShowProductSearchLoadingState = isProductSearchAwaitingDebounce
+    const shouldShowProductSearchLoadingState = isProductQuickModeAwaitingRefresh
+        || isProductSearchAwaitingDebounce
         || isProductSearchAwaitingResponse
         || isProductSearchShowingStaleEmpty;
     const shouldShowProductSearchEmptyState = !shouldShowProductSearchLoadingState

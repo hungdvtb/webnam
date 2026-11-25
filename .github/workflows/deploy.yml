@@ -131,6 +131,9 @@ jobs:
           done
           live_asset="$(curl -fsSL --max-time 12 'https://admin.gomdaithanh.com/admin/orders/new?deploy_asset_check=1' 2>/dev/null | grep -oE '/assets/index-[^" ]+\.js' | head -1 || true)"
           printf 'live_asset=%s\n' "$live_asset"
+          printf 'node_runtime_candidates=' 
+          find "$HOME/.nvm/versions/node" /root/.nvm/versions/node /usr/local/bin /usr/bin -maxdepth 3 \( -name npm -o -name pm2 \) 2>/dev/null | head -12 | tr '\n' ' '
+          printf '\n'
           nginx -T 2>/dev/null | grep -E 'server_name admin\.gomdaithanh\.com|root .*(frontend|dist)|proxy_pass' | head -20 || true
           REMOTE
           echo "::notice file=.github/workflows/deploy.yml,line=15::Production asset diagnostic: $(sanitize production-check.out)"

@@ -117,6 +117,10 @@ jobs:
 
           cat deploy.out
 
+          grep -iE 'deploying admin|admin frontend built|vite|npm err|error|failed|killed|cannot|not found|building for production|built in' deploy.out deploy.err \
+            | tail -25 >build-check.out || true
+          echo "::notice file=.github/workflows/deploy.yml,line=15::Admin build diagnostic: $(sanitize build-check.out)"
+
           ssh "${ssh_base[@]}" -p "$selected_port" "$selected_user@$DEPLOY_HOST" 'bash -s' >production-check.out 2>/dev/null <<'REMOTE' || true
           for checkout in /root/www/webname /www/webname; do
             if [ -d "$checkout/.git" ]; then

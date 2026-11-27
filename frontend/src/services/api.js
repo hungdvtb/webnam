@@ -7,6 +7,8 @@ const API_HOST_PATTERN = /(^|\.)api\.gomdaithanh\.com$/i;
 const LOOPBACK_HOST_PATTERN = /^(localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|::1)$/i;
 const ABSOLUTE_HTTP_URL_PATTERN = /^https?:\/\//i;
 const STOREFRONT_API_PATH_PATTERN = /(^|\/)storefront\//i;
+export const ORDER_PRODUCT_SEARCH_CACHE_REVISION_KEY = 'order_product_search_cache_revision_v1';
+export const ORDER_PRODUCT_SEARCH_CACHE_INVALIDATED_EVENT = 'order-product-search-cache-invalidated';
 const trimTrailingSlash = (value) => String(value || '').trim().replace(/\/+$/, '');
 const RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504]);
 const RETRYABLE_NETWORK_ERROR_CODES = new Set([
@@ -453,7 +455,22 @@ const handleUnauthorizedApiResponse = (error) => {
 };
 
 api.interceptors.response.use(
-    (response) => response,
+    (response) => {
+        const method = String(response.config?.method || 'get').toLowerCase();
+        const url = String(response.config?.url || '').split('?')[0];
+        if (method !== 'get' && method !== 'head' && /(^|\/)products(?:\/|$)/.test(url) && typeof window !== 'undefined') {
+            try {
+                window.localStorage.setItem(
+                    ORDER_PRODUCT_SEARCH_CACHE_REVISION_KEY,
+                    `${Date.now()}-${Math.random()}`
+                );
+            } catch (error) {
+                console.error('Unable to update product search cache revision', error);
+            }
+            window.dispatchEvent(new Event(ORDER_PRODUCT_SEARCH_CACHE_INVALIDATED_EVENT));
+        }
+        return response;
+    },
     async (error) => {
         const config = error?.config;
 

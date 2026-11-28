@@ -2508,6 +2508,91 @@ class OrderController extends Controller
             ->all();
     }
 
+    private function syncSubmittedManualItemsFromStoredOrder(Order $order, array $rawItems): ?array
+    {
+        $submittedItems = $this->normalizeOrderedOrderItems($rawItems);
+        $storedItems = $order->items->sortBy([
+            ['sort_order', 'asc'],
+            ['id', 'asc'],
+        ])->values();
+
+        if ($submittedItems->count() !== $storedItems->count()) {
+            return null;
+        }
+
+        foreach ($submittedItems as $index => $submitted) {
+            $stored = $storedItems[$index];
+            if (
+                $this->submittedOrderItemId($submitted) !== (int) $stored->id
+                || (int) ($submitted['product_id'] ?? 0) !== (int) $stored->product_id
+                || (int) ($submitted['actual_product_id'] ?? 0) !== (int) $stored->actual_product_id
+                || (int) ($submitted['product_group_id'] ?? 0) !== (int) $stored->product_group_id
+                || (int) $stored->sort_order !== $index + 1
+                || (int) $stored->actual_product_id > 0
+                || !isset($submitted['price'])
+                || !isset($submitted['cost_price'])
+                || $this->normalizeOrderItemOptionsSignatureValue($submitted['options'] ?? [])
+                    !== $this->normalizeOrderItemOptionsSignatureValue($stored->options ?? [])
+            ) {
+                return null;
+            }
+
+            foreach ([
+                'name' => 'product_name_snapshot',
+                'sku' => 'product_sku_snapshot',
+                'actual_name' => 'actual_product_name_snapshot',
+                'actual_sku' => 'actual_product_sku_snapshot',
+            ] as $submittedKey => $storedKey) {
+                if (array_key_exists($submittedKey, $submitted)
+                    && trim((string) $submitted[$submittedKey]) !== trim((string) $stored->{$storedKey})) {
+                    return null;
+                }
+            }
+
+            foreach (['product_source_account_id', 'inventory_source_account_id'] as $key) {
+                if (array_key_exists($key, $submitted)
+                    && (int) $submitted[$key] !== (int) $stored->{$key}) {
+                    return null;
+                }
+            }
+        }
+
+        $itemRevenue = 0.0;
+        $costTotal = 0.0;
+        foreach ($submittedItems as $index => $submitted) {
+            $stored = $storedItems[$index];
+            $quantity = InventoryQuantity::normalize($submitted['quantity']);
+            $price = round((float) $submitted['price'], 2);
+            $costPrice = ImportCostRounding::roundUnitCost($submitted['cost_price']);
+            $lineCost = ImportCostRounding::lineTotal($costPrice, $quantity);
+            $lineProfit = round($price * $quantity - $lineCost, 2);
+
+            if (
+                round((float) $stored->quantity, 3) !== round((float) $quantity, 3)
+                || round((float) $stored->price, 2) !== $price
+                || round((float) $stored->cost_price, 2) !== $costPrice
+                || round((float) $stored->cost_total, 2) !== $lineCost
+                || round((float) $stored->profit_total, 2) !== $lineProfit
+            ) {
+                $stored->forceFill([
+                    'quantity' => $quantity,
+                    'price' => $price,
+                    'cost_price' => $costPrice,
+                    'cost_total' => $lineCost,
+                    'profit_total' => $lineProfit,
+                ])->save();
+            }
+
+            $itemRevenue += $price * $quantity;
+            $costTotal += $lineCost;
+        }
+
+        return [
+            'total_price' => round($itemRevenue, 2),
+            'cost_total' => round($costTotal, 2),
+        ];
+    }
+
     private function syncManualOrderItems(Order $order, array $rawItems, bool $allowEmptyItems = false): array
     {
         $normalizedItems = $this->normalizeOrderedOrderItems($rawItems);
@@ -6773,22 +6858,29 @@ class OrderController extends Controller
                 $order,
                 (array) $request->input('items', [])
             );
-
-            if ($this->shouldManageInventory($currentKind)) {
-                $this->releaseInventoryIfNeeded($order->forceFill(['order_kind' => $currentKind]));
+            $manualItemSummary = !$this->shouldManageInventory($currentKind) && $currentKind === $requestedKind
+                ? $this->syncSubmittedManualItemsFromStoredOrder($order, $rawItems)
+                : null;
+            if ($manualItemSummary !== null) {
+                $itemRevenue = $manualItemSummary['total_price'];
+                $costTotal = $manualItemSummary['cost_total'];
+            } else {
+                if ($this->shouldManageInventory($currentKind)) {
+                    $this->releaseInventoryIfNeeded($order->forceFill(['order_kind' => $currentKind]));
+                }
+                $order->items()->delete();
+                $itemSyncKind = $this->shouldManageInventory($requestedKind) && !$this->shouldManageInventory($currentKind)
+                    ? $currentKind
+                    : $requestedKind;
+                $inventorySummary = $this->syncOrderItems(
+                    $order,
+                    $rawItems,
+                    $itemSyncKind,
+                    $this->shouldManageInventory($itemSyncKind)
+                );
+                $itemRevenue = $inventorySummary['total_price'];
+                $costTotal = $inventorySummary['cost_total'];
             }
-            $order->items()->delete();
-            $itemSyncKind = $this->shouldManageInventory($requestedKind) && !$this->shouldManageInventory($currentKind)
-                ? $currentKind
-                : $requestedKind;
-            $inventorySummary = $this->syncOrderItems(
-                $order,
-                $rawItems,
-                $itemSyncKind,
-                $this->shouldManageInventory($itemSyncKind)
-            );
-            $itemRevenue = $inventorySummary['total_price'];
-            $costTotal = $inventorySummary['cost_total'];
         } else {
             $itemRevenue = (float) $order->items()->sum(DB::raw('price * quantity'));
             $costTotal = (float) $order->items()->sum('cost_total');

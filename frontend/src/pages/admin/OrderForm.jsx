@@ -8755,15 +8755,11 @@ const OrderForm = () => {
     const activeProductQuickSetupRefreshScopeKey = useMemo(() => JSON.stringify({
         setupKey: isManualProductQuickModeActive ? `manual:${manualProductQuickSetupKey}` : activeProductQuickSetupKey,
         refreshKey: activeProductQuickSetupRefreshKey,
-        searchOpen: showSearchDropdown,
-        focusVersion: productQuickSetupFocusRefreshVersion,
     }), [
         activeProductQuickSetupKey,
         activeProductQuickSetupRefreshKey,
         isManualProductQuickModeActive,
         manualProductQuickSetupKey,
-        productQuickSetupFocusRefreshVersion,
-        showSearchDropdown,
     ]);
     const isProductQuickSetupLatestScopeReady = productQuickSetupLatestEntriesScopeKey === activeProductQuickSetupRefreshScopeKey;
     const isQuickSetupEntryStillOnServer = useCallback((entry) => {
@@ -14098,9 +14094,6 @@ const navigateBack = useCallback(() => {
             setProductQuickSetupRefreshFailed(false);
             return undefined;
         }
-        setProductQuickSetupLatestEntries([]);
-        setProductQuickSetupLatestEntriesScopeKey('');
-        setProductQuickSetupLatestProductIds(null);
         setProductQuickSetupRefreshFailed(false);
         // The manual list is chosen by hand: it is not narrowed by the attribute filter.
         const shouldApplyQuickFilter = hasActiveProductQuickFilter && !isManualProductQuickModeActive;
@@ -14233,6 +14226,8 @@ const navigateBack = useCallback(() => {
         isProductQuickModeActive,
         normalizedProductQuickFilterValues,
         normalizedProductQuickFilterValues2,
+        productQuickSetupFocusRefreshVersion,
+        productSearchRevision,
         syncLatestQuickSetupEntriesIntoActiveStore,
     ]);
 
@@ -14270,9 +14265,8 @@ const navigateBack = useCallback(() => {
             .filter(isProductSearchEntrySourceEnabled)
             .filter(isQuickSetupEntryAllowedByAvailableFilterPayload);
 
-        if (!isProductQuickSetupLatestScopeReady) {
-            return [];
-        }
+        // The saved list is searchable immediately while fresh product details load in the background.
+        if (!isProductQuickSetupLatestScopeReady) return storedEntries;
 
         const latestEntries = (Array.isArray(productQuickSetupLatestEntries) ? productQuickSetupLatestEntries : [])
             .filter((entry) => {
@@ -14313,7 +14307,8 @@ const navigateBack = useCallback(() => {
     const manualQuickModeSearchEntries = useMemo(() => {
         const storedEntries = buildStoredQuickSetupSearchEntries(manualProductQuickSetupItems)
             .filter(isProductSearchEntrySourceEnabled);
-        if (!isManualProductQuickModeActive || !isProductQuickSetupLatestScopeReady) return [];
+        if (!isManualProductQuickModeActive) return [];
+        if (!isProductQuickSetupLatestScopeReady) return storedEntries;
 
         // Show the product as it is now (name, price, stock), not as it was when the list was saved.
         return storedEntries
@@ -14457,7 +14452,7 @@ const navigateBack = useCallback(() => {
     const isProductQuickModeAwaitingRefresh = (
         (isProductQuickModeActive && !hasEnabledCrossSellSources)
         || isManualProductQuickModeActive
-    ) && !isProductQuickSetupLatestScopeReady;
+    ) && !isProductQuickSetupLatestScopeReady && rankedSearchProducts.length === 0;
     const isProductSearchAwaitingDebounce = isServerBackedProductSearch
         && normalizedCurrentProductSearchTerm !== ''
         && normalizedDebouncedProductSearchTerm !== normalizedCurrentProductSearchTerm;
